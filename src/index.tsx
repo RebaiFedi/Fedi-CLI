@@ -10,11 +10,6 @@ export async function main() {
 
   const clis = await detectAll();
 
-  if (!clis.gemini.available) {
-    console.error('Gemini CLI not found. Install with: npm i -g @anthropic-ai/gemini-cli');
-    process.exit(1);
-  }
-
   if (!clis.claude.available) {
     console.error('Claude Code CLI not found. Install with: npm i -g @anthropic-ai/claude-code');
     process.exit(1);
@@ -34,7 +29,6 @@ export async function main() {
     <Dashboard
       orchestrator={orchestrator}
       projectDir={projectDir}
-      geminiPath={clis.gemini.path!}
       claudePath={clis.claude.path!}
       codexPath={clis.codex.path!}
     />,

@@ -2,12 +2,12 @@ import { z } from 'zod';
 
 // ── Agent identifiers ──────────────────────────────────────────────────────
 
-export type AgentId = 'claude' | 'codex' | 'gemini';
+export type AgentId = 'claude' | 'codex' | 'haiku';
 
 export const AGENT_LABELS: Record<AgentId, string> = {
+  haiku: 'Haiku',
   claude: 'Claude Code',
   codex: 'Codex CLI',
-  gemini: 'Gemini CLI',
 };
 
 // ── Agent status ────────────────────────────────────────────────────────────
@@ -18,8 +18,8 @@ export type AgentStatus = 'idle' | 'running' | 'waiting' | 'error' | 'stopped';
 
 export const MessageSchema = z.object({
   id: z.string(),
-  from: z.enum(['claude', 'codex', 'gemini', 'user', 'system']),
-  to: z.enum(['claude', 'codex', 'gemini', 'all']),
+  from: z.enum(['claude', 'codex', 'haiku', 'user', 'system']),
+  to: z.enum(['claude', 'codex', 'haiku', 'all']),
   content: z.string(),
   correlationId: z.string().optional(),
   relayCount: z.number().default(0),
@@ -86,7 +86,6 @@ export interface SessionConfig {
   task: string;
   claudePath: string;
   codexPath: string;
-  geminiPath: string;
 }
 
 // ── Agent process interface ─────────────────────────────────────────────────
@@ -112,7 +111,7 @@ export interface DisplayEntry {
 
 export interface ChatMessage {
   id: string;
-  agent: 'claude' | 'codex' | 'gemini' | 'user' | 'system';
+  agent: 'claude' | 'codex' | 'haiku' | 'user' | 'system';
   lines: DisplayEntry[];
   timestamp: number;
   status: 'streaming' | 'done';
@@ -124,4 +123,4 @@ export interface ChatMessage {
 // from explanatory text that merely mentions "[TO:*]" patterns.
 export const TO_CLAUDE_PATTERN = /^\s*\[TO:CLAUDE\]\s+(\S(?:.*\S)?)\s*$/;
 export const TO_CODEX_PATTERN = /^\s*\[TO:CODEX\]\s+(\S(?:.*\S)?)\s*$/;
-export const TO_GEMINI_PATTERN = /^\s*\[TO:GEMINI\]\s+(\S(?:.*\S)?)\s*$/;
+export const TO_HAIKU_PATTERN = /^\s*\[TO:HAIKU\]\s+(\S(?:.*\S)?)\s*$/;

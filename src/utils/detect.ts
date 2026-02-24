@@ -32,11 +32,7 @@ export async function detectCodex(): Promise<CLIInfo> {
   return detectCLI('codex');
 }
 
-export async function detectGemini(): Promise<CLIInfo> {
-  return detectCLI('gemini');
-}
-
-export async function detectAll(): Promise<{ claude: CLIInfo; codex: CLIInfo; gemini: CLIInfo }> {
-  const [claude, codex, gemini] = await Promise.all([detectClaude(), detectCodex(), detectGemini()]);
-  return { claude, codex, gemini };
+export async function detectAll(): Promise<{ claude: CLIInfo; codex: CLIInfo }> {
+  const [claude, codex] = await Promise.all([detectClaude(), detectCodex()]);
+  return { claude, codex };
 }

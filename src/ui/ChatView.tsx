@@ -64,7 +64,7 @@ interface FL {
   text: string;
   kind: LK;
   bold?: boolean;
-  agentId?: 'claude' | 'codex' | 'gemini' | 'user' | 'system';
+  agentId?: 'claude' | 'codex' | 'haiku' | 'user' | 'system';
 }
 
 function flatten(messages: ChatMessage[]): FL[] {

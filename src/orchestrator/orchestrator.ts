@@ -1,11 +1,11 @@
 import PQueue from 'p-queue';
 import { ClaudeAgent } from '../agents/claude.js';
 import { CodexAgent } from '../agents/codex.js';
-import { GeminiAgent } from '../agents/gemini.js';
+import { HaikuAgent } from '../agents/haiku.js';
 import type { AgentId, AgentStatus, Message, OutputLine, SessionConfig } from '../agents/types.js';
-import { TO_CLAUDE_PATTERN, TO_CODEX_PATTERN, TO_GEMINI_PATTERN } from '../agents/types.js';
+import { TO_CLAUDE_PATTERN, TO_CODEX_PATTERN, TO_HAIKU_PATTERN } from '../agents/types.js';
 import { MessageBus } from './message-bus.js';
-import { getClaudeSystemPrompt, getCodexSystemPrompt, getGeminiSystemPrompt } from './prompts.js';
+import { getClaudeSystemPrompt, getCodexSystemPrompt, getHaikuSystemPrompt } from './prompts.js';
 import { logger } from '../utils/logger.js';
 
 /** Max relays within a time window before blocking */
@@ -20,11 +20,11 @@ export interface OrchestratorCallbacks {
 }
 
 export class Orchestrator {
-  readonly gemini = new GeminiAgent();
+  readonly haiku = new HaikuAgent();
   readonly claude = new ClaudeAgent();
   readonly codex = new CodexAgent();
   readonly bus = new MessageBus();
-  private geminiQueue = new PQueue({ concurrency: 1 });
+  private haikuQueue = new PQueue({ concurrency: 1 });
   private claudeQueue = new PQueue({ concurrency: 1 });
   private codexQueue = new PQueue({ concurrency: 1 });
   private callbacks: OrchestratorCallbacks | null = null;
@@ -41,12 +41,12 @@ export class Orchestrator {
   bind(cb: OrchestratorCallbacks) {
     this.callbacks = cb;
 
-    // Gemini output & status
-    this.gemini.onOutput((line) => {
-      cb.onAgentOutput('gemini', line);
-      this.detectRelayPatterns('gemini', line.text);
+    // Haiku output & status
+    this.haiku.onOutput((line) => {
+      cb.onAgentOutput('haiku', line);
+      this.detectRelayPatterns('haiku', line.text);
     });
-    this.gemini.onStatusChange((s) => cb.onAgentStatus('gemini', s));
+    this.haiku.onStatusChange((s) => cb.onAgentStatus('haiku', s));
 
     // Claude output & status
     this.claude.onOutput((line) => {
@@ -65,12 +65,12 @@ export class Orchestrator {
     this.bus.on('relay', (msg: Message) => cb.onRelay(msg));
     this.bus.on('relay-blocked', (msg: Message) => cb.onRelayBlocked(msg));
 
-    // Route messages to Gemini
-    this.bus.on('message:gemini', (msg: Message) => {
-      if (msg.from === 'gemini') return;
-      this.geminiQueue.add(() => {
+    // Route messages to Haiku
+    this.bus.on('message:haiku', (msg: Message) => {
+      if (msg.from === 'haiku') return;
+      this.haikuQueue.add(() => {
         const prefix = `[FROM:${msg.from.toUpperCase()}]`;
-        this.gemini.send(`${prefix} ${msg.content}`);
+        this.haiku.send(`${prefix} ${msg.content}`);
         return Promise.resolve();
       });
     });
@@ -116,25 +116,25 @@ export class Orchestrator {
     await this.codex.start({ ...config, task: '' }, prompt);
   }
 
-  /** Start with first user message. Only Gemini starts immediately. */
+  /** Start with first user message. Only Haiku starts immediately. */
   async startWithTask(task: string) {
     if (this.started || !this.config) return;
     this.started = true;
 
     const config = this.config;
-    logger.info(`[ORCH] Starting Gemini with task: ${task.slice(0, 80)}`);
+    logger.info(`[ORCH] Starting Haiku with task: ${task.slice(0, 80)}`);
 
-    // Only Gemini starts — Claude & Codex start lazily when Gemini delegates
-    const geminiPrompt = getGeminiSystemPrompt(config.projectDir) + `\n\nMESSAGE DU USER: ${task}`;
-    await this.gemini.start({ ...config, task }, geminiPrompt);
+    // Only Haiku starts — Claude & Codex start lazily when Haiku delegates
+    const haikuPrompt = getHaikuSystemPrompt(config.projectDir) + `\n\nMESSAGE DU USER: ${task}`;
+    await this.haiku.start({ ...config, task }, haikuPrompt);
 
-    logger.info('[ORCH] Gemini started (Claude & Codex on standby)');
+    logger.info('[ORCH] Haiku started (Claude & Codex on standby)');
   }
 
   get isStarted() { return this.started; }
 
   sendUserMessage(text: string) {
-    this.bus.send({ from: 'user', to: 'gemini', content: text });
+    this.bus.send({ from: 'user', to: 'haiku', content: text });
   }
 
   sendToAgent(agent: AgentId, text: string) {
@@ -142,7 +142,7 @@ export class Orchestrator {
   }
 
   sendToAll(text: string) {
-    this.bus.send({ from: 'user', to: 'gemini', content: text });
+    this.bus.send({ from: 'user', to: 'haiku', content: text });
     this.bus.send({ from: 'user', to: 'claude', content: text });
     this.bus.send({ from: 'user', to: 'codex', content: text });
   }
@@ -184,13 +184,13 @@ export class Orchestrator {
         }
       }
 
-      const toGeminiMatch = line.match(TO_GEMINI_PATTERN);
-      if (toGeminiMatch && from !== 'gemini') {
-        const content = toGeminiMatch[1].trim();
+      const toHaikuMatch = line.match(TO_HAIKU_PATTERN);
+      if (toHaikuMatch && from !== 'haiku') {
+        const content = toHaikuMatch[1].trim();
         if (content) {
-          logger.info(`[ORCH] Relay: ${from} → gemini: ${content.slice(0, 80)}`);
+          logger.info(`[ORCH] Relay: ${from} → haiku: ${content.slice(0, 80)}`);
           this.recordRelay();
-          this.bus.relay(from, 'gemini', content);
+          this.bus.relay(from, 'haiku', content);
         }
       }
 
@@ -200,10 +200,10 @@ export class Orchestrator {
 
   async stop() {
     logger.info('[ORCH] Shutting down...');
-    this.geminiQueue.clear();
+    this.haikuQueue.clear();
     this.claudeQueue.clear();
     this.codexQueue.clear();
-    await Promise.allSettled([this.gemini.stop(), this.claude.stop(), this.codex.stop()]);
+    await Promise.allSettled([this.haiku.stop(), this.claude.stop(), this.codex.stop()]);
     logger.info('[ORCH] Shutdown complete');
   }
 }

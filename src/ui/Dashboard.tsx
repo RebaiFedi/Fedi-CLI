@@ -15,8 +15,8 @@ const FLUSH_INTERVAL = 120;
 // ── Filters ─────────────────────────────────────────────────────────────────
 
 const TOOL_RE = /^\s*(EnterPlanMode|AskUserQuestion|ExitPlanMode|TodoWrite|TaskCreate|TaskUpdate|TaskList|TaskGet|NotebookEdit|EnterWorktree|WebSearch|WebFetch)\s*$/;
-const RELAY_PREFIX_RE = /^\s*\[(TO|FROM):(CLAUDE|CODEX|GEMINI)\]\s*/i;
-const RELAY_LINE_RE = /^\s*\[TO:(CLAUDE|CODEX|GEMINI)\]\s/i;
+const RELAY_PREFIX_RE = /^\s*\[(TO|FROM):(CLAUDE|CODEX|HAIKU)\]\s*/i;
+const RELAY_LINE_RE = /^\s*\[TO:(CLAUDE|CODEX|HAIKU)\]\s/i;
 const TASK_ADD_RE = /\[TASK:add\]\s*(.+)/i;
 const TASK_DONE_RE = /\[TASK:done\]\s*(.+)/i;
 
@@ -274,7 +274,6 @@ interface DashboardProps {
   projectDir: string;
   claudePath: string;
   codexPath: string;
-  geminiPath: string;
 }
 
 // ── Todo panel ──────────────────────────────────────────────────────────────
@@ -334,11 +333,11 @@ interface BufferedEntry { agent: AgentId; entries: DisplayEntry[]; }
 // - No spinners in chat — they cause 30fps re-renders that block scroll
 // - Scroll is FREE — scrollback is native terminal, never touched by Ink
 
-export function Dashboard({ orchestrator, projectDir, claudePath, codexPath, geminiPath }: DashboardProps) {
+export function Dashboard({ orchestrator, projectDir, claudePath, codexPath }: DashboardProps) {
   const { exit } = useApp();
   const { stdout } = useStdout();
 
-  const [geminiStatus, setGeminiStatus] = useState<AgentStatus>('idle');
+  const [haikuStatus, setHaikuStatus] = useState<AgentStatus>('idle');
   const [claudeStatus, setClaudeStatus] = useState<AgentStatus>('idle');
   const [codexStatus, setCodexStatus] = useState<AgentStatus>('idle');
   const [stopped, setStopped] = useState(false);
@@ -373,7 +372,7 @@ export function Dashboard({ orchestrator, projectDir, claudePath, codexPath, gem
     console.log(chalk.dim('  ┌' + '─'.repeat(inner) + '┐'));
     console.log(row(`  ${chalk.white.bold('FEDI CLI')}  ${chalk.dim('—  v1.0')}`));
     console.log(chalk.dim('  ├' + '─'.repeat(inner) + '┤'));
-    console.log(row(`  ${chalk.magentaBright('●')} ${chalk.white.bold('Gemini')}  ${chalk.dim('Director · Read-only   gemini-2.5-flash')}`));
+    console.log(row(`  ${chalk.magentaBright('●')} ${chalk.white.bold('Haiku')}   ${chalk.dim('Director · Plan        claude-haiku-4.5')}`));
     console.log(row(`  ${chalk.cyanBright('●')} ${chalk.white.bold('Claude')}  ${chalk.dim('Frontend · Code        claude-opus-4-6')}`));
     console.log(row(`  ${chalk.greenBright('●')} ${chalk.white.bold('Codex')}   ${chalk.dim('Backend · Code         codex-5.3-xhigh')}`));
     console.log(chalk.dim('  ├' + '─'.repeat(inner) + '┤'));
@@ -393,7 +392,7 @@ export function Dashboard({ orchestrator, projectDir, claudePath, codexPath, gem
 
     for (const { agent, entries } of items) {
       if (entries.length === 0) continue;
-      const agentColor: 'green' | 'yellow' | 'magenta' = agent === 'gemini' ? 'magenta' : agent === 'claude' ? 'green' : 'yellow';
+      const agentColor: 'green' | 'yellow' | 'magenta' = agent === 'haiku' ? 'magenta' : agent === 'claude' ? 'green' : 'yellow';
 
       const prevKind = lastEntryKind.current.get(agent);
       const currentId = currentMsgRef.current.get(agent);
@@ -418,8 +417,8 @@ export function Dashboard({ orchestrator, projectDir, claudePath, codexPath, gem
         chatMessagesRef.current = chatMessagesRef.current.slice(-MAX_MESSAGES);
       }
 
-      const dot = agent === 'gemini' ? chalk.magentaBright('●') : agent === 'claude' ? chalk.cyanBright('●') : chalk.greenBright('●');
-      const agentName = agent === 'gemini' ? chalk.magentaBright.bold('Gemini') : agent === 'claude' ? chalk.cyanBright.bold('Claude') : chalk.greenBright.bold('Codex');
+      const dot = agent === 'haiku' ? chalk.magentaBright('●') : agent === 'claude' ? chalk.cyanBright('●') : chalk.greenBright('●');
+      const agentName = agent === 'haiku' ? chalk.magentaBright.bold('Haiku') : agent === 'claude' ? chalk.cyanBright.bold('Claude') : chalk.greenBright.bold('Codex');
       outputLines.push('');
       // First text/heading entry goes on same line as agent header
       const firstIdx = entries.findIndex((e) => e.kind === 'text' || e.kind === 'heading');
@@ -499,7 +498,7 @@ export function Dashboard({ orchestrator, projectDir, claudePath, codexPath, gem
   }, []);
 
   useEffect(() => {
-    orchestrator.setConfig({ projectDir, claudePath, codexPath, geminiPath });
+    orchestrator.setConfig({ projectDir, claudePath, codexPath });
     orchestrator.bind({
       onAgentOutput: (agent: AgentId, line: OutputLine) => {
         setThinking(null);
@@ -509,7 +508,7 @@ export function Dashboard({ orchestrator, projectDir, claudePath, codexPath, gem
         enqueueOutput(agent, entries);
       },
       onAgentStatus: (agent: AgentId, status: AgentStatus) => {
-        if (agent === 'gemini') setGeminiStatus(status);
+        if (agent === 'haiku') setHaikuStatus(status);
         if (agent === 'claude') setClaudeStatus(status);
         if (agent === 'codex') setCodexStatus(status);
         if (status === 'error' || status === 'stopped') {
@@ -537,7 +536,7 @@ export function Dashboard({ orchestrator, projectDir, claudePath, codexPath, gem
       process.off('SIGTERM', handleExit);
       if (flushTimer.current) clearTimeout(flushTimer.current);
     };
-  }, [orchestrator, exit, projectDir, claudePath, codexPath, geminiPath, processTaskTags, enqueueOutput, flushBuffer]);
+  }, [orchestrator, exit, projectDir, claudePath, codexPath, processTaskTags, enqueueOutput, flushBuffer]);
 
   const handleInput = useCallback(
     (text: string) => {
@@ -573,7 +572,7 @@ export function Dashboard({ orchestrator, projectDir, claudePath, codexPath, gem
         orchestrator.startWithTask(text).catch((err) => logger.error(`[DASHBOARD] Start error: ${err}`));
         return;
       }
-      if (text.startsWith('@gemini ')) { orchestrator.sendToAgent('gemini', text.slice(8)); return; }
+      if (text.startsWith('@haiku ')) { orchestrator.sendToAgent('haiku', text.slice(7)); return; }
       if (text.startsWith('@codex ')) { orchestrator.sendToAgent('codex', text.slice(7)); return; }
       if (text.startsWith('@claude ')) { orchestrator.sendToAgent('claude', text.slice(8)); return; }
       orchestrator.sendUserMessage(text);
@@ -581,11 +580,11 @@ export function Dashboard({ orchestrator, projectDir, claudePath, codexPath, gem
     [orchestrator],
   );
 
-  const geminiRunning = geminiStatus === 'running';
+  const haikuRunning = haikuStatus === 'running';
   const claudeRunning = claudeStatus === 'running';
   const codexRunning = codexStatus === 'running';
   const dir = projectDir.replace(/^\/home\/[^/]+\//, '~/');
-  const geminiLabel = geminiRunning ? 'working' : geminiStatus === 'waiting' ? 'idle' : geminiStatus;
+  const haikuLabel = haikuRunning ? 'working' : haikuStatus === 'waiting' ? 'idle' : haikuStatus;
   const claudeLabel = claudeRunning ? 'working' : claudeStatus === 'waiting' ? 'idle' : claudeStatus;
   const codexLabel = codexRunning ? 'working' : codexStatus === 'waiting' ? 'idle' : codexStatus;
 
@@ -603,8 +602,8 @@ export function Dashboard({ orchestrator, projectDir, claudePath, codexPath, gem
       </Box>
       <Box paddingX={1} justifyContent="space-between">
         <Text>
-          <Text color={geminiRunning ? 'magentaBright' : 'gray'}>{'● '}</Text>
-          <Text dimColor>{`Gemini (${geminiLabel})`}</Text>
+          <Text color={haikuRunning ? 'magentaBright' : 'gray'}>{'● '}</Text>
+          <Text dimColor>{`Haiku (${haikuLabel})`}</Text>
           <Text>{'  '}</Text>
           <Text color={claudeRunning ? 'cyanBright' : 'gray'}>{'● '}</Text>
           <Text dimColor>{`Claude (${claudeLabel})`}</Text>
