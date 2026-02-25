@@ -13,7 +13,7 @@ const MAX_MESSAGES = 200;
 const INDENT = '    ';
 const FLUSH_INTERVAL = 250;
 const BUBBLE_SIDE_MARGIN = 1;
-const MAX_READABLE_WIDTH = 96;
+const MAX_READABLE_WIDTH = 200;
 const THEME = {
   text: '#F8FAFC',
   muted: '#94A3B8',
