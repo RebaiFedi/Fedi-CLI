@@ -48,6 +48,7 @@ const RELAY_PREFIX_RE = /^\s*\[(TO|FROM):(CLAUDE|CODEX|OPUS)\]\s*/i;
 const RELAY_LINE_RE = /^\s*\[TO:(CLAUDE|CODEX|OPUS)\]\s/i;
 const TASK_ADD_RE = /\[TASK:add\]\s*(.+)/i;
 const TASK_DONE_RE = /\[TASK:done\]\s*(.+)/i;
+const TASK_TAG_LINE_RE = /^\s*\[TASK:(add|done)\]\s*/i;
 
 // ── Thinking verbs ──────────────────────────────────────────────────────────
 
@@ -103,6 +104,7 @@ function outputToEntries(line: OutputLine): DisplayEntry[] {
   const filteredText = line.text
     .split('\n')
     .filter((l) => !RELAY_LINE_RE.test(l))
+    .filter((l) => !TASK_TAG_LINE_RE.test(l))
     .map((l) => l.replace(RELAY_PREFIX_RE, ''))
     .join('\n');
 
@@ -510,8 +512,34 @@ export function Dashboard({ orchestrator, projectDir, claudePath, codexPath, res
         pendingActions.current.set(agent, [...existing, ...newActions]);
       }
 
-      // If only actions and no content, skip printing (actions are buffered)
-      if (contentEntries.length === 0) continue;
+      // If only actions and no content, show a compact single-line summary
+      if (contentEntries.length === 0) {
+        const allActions = pendingActions.current.get(agent) ?? [];
+        if (allActions.length === 0) continue;
+        // Show last action with total count
+        if (lastPrintedAgent.current && lastPrintedAgent.current !== agent) {
+          if (outputLines.length > 0) {
+            console.log(compactOutputLines(outputLines).join('\n'));
+            outputLines.length = 0;
+          }
+          // Re-show agent label when switching
+          const dot = chalk.hex(agentHex(agent))(DOT_ACTIVE);
+          const agName = chalk.hex(agentHex(agent)).bold(agentName(agent));
+          const currentId = currentMsgRef.current.get(agent);
+          if (currentId) {
+            console.log('');
+            outputLines.push(`  ${dot} ${agName}  ${chalk.dim('(suite)')}`);
+          }
+        }
+        lastPrintedAgent.current = agent;
+        const actionText = allActions.length <= 1
+          ? allActions[allActions.length - 1]
+          : `${allActions[allActions.length - 1]} (+${allActions.length - 1} more)`;
+        outputLines.push(...entriesToAnsiOutputLines([{ text: actionText, kind: 'action' }], agentColor));
+        // Clear pending — they've been shown
+        pendingActions.current.set(agent, []);
+        continue;
+      }
 
       const prevKind = lastEntryKind.current.get(agent);
       const currentId = currentMsgRef.current.get(agent);
@@ -647,7 +675,6 @@ export function Dashboard({ orchestrator, projectDir, claudePath, codexPath, res
     orchestrator.setConfig({ projectDir, claudePath, codexPath });
     orchestrator.bind({
       onAgentOutput: (agent: AgentId, line: OutputLine) => {
-        setThinking(null);
         if (line.type === 'stdout') processTaskTags(agent, line.text);
         const entries = outputToEntries(line);
         if (entries.length === 0) return;
@@ -657,8 +684,20 @@ export function Dashboard({ orchestrator, projectDir, claudePath, codexPath, res
         if (agent === 'opus') setOpusStatus(status);
         if (agent === 'claude') setClaudeStatus(status);
         if (agent === 'codex') setCodexStatus(status);
-        if (status === 'error' || status === 'stopped') {
-          setThinking(null);
+
+        // Show spinner when any agent starts working, hide when ALL done
+        if (status === 'running') {
+          setThinking((prev) => prev ?? randomVerb());
+        } else {
+          const statuses = [
+            agent === 'opus' ? status : orchestrator.opus.status,
+            agent === 'claude' ? status : orchestrator.claude.status,
+            agent === 'codex' ? status : orchestrator.codex.status,
+          ];
+          const anyRunningNow = statuses.some(s => s === 'running');
+          if (!anyRunningNow) {
+            setThinking(null);
+          }
         }
         if (status === 'waiting' || status === 'idle' || status === 'error' || status === 'stopped') {
           if (flushTimer.current) { clearTimeout(flushTimer.current); flushBuffer(); }
