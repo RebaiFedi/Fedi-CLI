@@ -1,0 +1,27 @@
+{
+  "id": "c075990f-3ad8-4f17-b818-f5d9fa07346f",
+  "version": 2,
+  "task": "salut",
+  "projectDir": "/home/fedi/Bureau/Fedi CLI",
+  "startedAt": 1772019918046,
+  "messages": [
+    {
+      "from": "user",
+      "to": "opus",
+      "content": "cava?",
+      "id": "cec976dd-9167-4215-b34f-3b7586e282b8",
+      "timestamp": 1772019923931,
+      "relayCount": 0
+    },
+    {
+      "from": "user",
+      "to": "codex",
+      "content": "salut",
+      "id": "7c50ec71-5b32-4a8c-808c-13c51da1a947",
+      "timestamp": 1772019930987,
+      "relayCount": 0
+    }
+  ],
+  "agentSessions": {},
+  "agentStats": {}
+}

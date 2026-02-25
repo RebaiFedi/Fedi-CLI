@@ -12,6 +12,14 @@
       "id": "e2680dd5-6bfb-44af-9d16-6938fe3018c2",
       "timestamp": 1772019321215,
       "relayCount": 0
+    },
+    {
+      "from": "user",
+      "to": "opus",
+      "content": "analyse le ui de mon app et repond moi je vet jsute une reponse",
+      "id": "89f2c026-94be-475e-9718-24aebac9bafa",
+      "timestamp": 1772019467223,
+      "relayCount": 0
     }
   ],
   "agentSessions": {},

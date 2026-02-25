@@ -286,17 +286,32 @@ function collapseActions(entries: DisplayEntry[]): DisplayEntry[] {
 function compact(entries: DisplayEntry[]): DisplayEntry[] {
   const out: DisplayEntry[] = [];
   for (const e of entries) {
+    // Skip consecutive empty lines (max 1 blank between blocks)
     if (e.kind === 'empty' && out.length > 0 && out[out.length - 1].kind === 'empty') continue;
     out.push(e);
   }
+  // Only strip leading empties, keep trailing ones for spacing after content
   while (out.length > 0 && out[0].kind === 'empty') out.shift();
-  while (out.length > 0 && out[out.length - 1].kind === 'empty') out.pop();
   return out;
 }
 
 function addActionSpacing(raw: DisplayEntry[]): DisplayEntry[] {
-  // Keep action groups compact; avoid injecting extra blank lines.
-  return raw;
+  const out: DisplayEntry[] = [];
+  for (let i = 0; i < raw.length; i++) {
+    out.push(raw[i]);
+    // After an action entry, if next entry is NOT action/empty, insert blank line
+    if (raw[i].kind === 'action' && i + 1 < raw.length) {
+      const next = raw[i + 1];
+      if (next.kind !== 'action' && next.kind !== 'empty') {
+        out.push({ text: '', kind: 'empty' });
+      }
+    }
+    // Before an action entry, if prev entry is NOT action/empty, insert blank line
+    if (i + 1 < raw.length && raw[i + 1].kind === 'action' && raw[i].kind !== 'action' && raw[i].kind !== 'empty') {
+      out.push({ text: '', kind: 'empty' });
+    }
+  }
+  return out;
 }
 
 function compactOutputLines(lines: string[]): string[] {
@@ -304,16 +319,17 @@ function compactOutputLines(lines: string[]): string[] {
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
     const trimmed = stripAnsi(line).trim();
-    const prevTrimmed = out.length > 0 ? stripAnsi(out[out.length - 1]).trim() : '';
-    const nextTrimmed = i + 1 < lines.length ? stripAnsi(lines[i + 1]).trim() : '';
-
     const isEmpty = trimmed === '';
-    const prevIsEmpty = prevTrimmed === '';
-    const prevIsSeparator = /^[-─]{3,}$/.test(prevTrimmed);
-    const nextIsSeparator = /^[-─]{3,}$/.test(nextTrimmed);
 
-    // Avoid double blanks and gaps around separator lines, but allow single blanks
-    if (isEmpty && (prevIsEmpty || prevIsSeparator || nextIsSeparator)) continue;
+    if (isEmpty && out.length > 0) {
+      const prevTrimmed = stripAnsi(out[out.length - 1]).trim();
+      const nextTrimmed = i + 1 < lines.length ? stripAnsi(lines[i + 1]).trim() : '';
+      const prevIsEmpty = prevTrimmed === '';
+      const prevIsSeparator = /^[-─]{3,}$/.test(prevTrimmed);
+      const nextIsSeparator = /^[-─]{3,}$/.test(nextTrimmed);
+      // Skip only double blanks and blanks around separators
+      if (prevIsEmpty || prevIsSeparator || nextIsSeparator) continue;
+    }
     out.push(line);
   }
   return out;
@@ -484,9 +500,6 @@ export function Dashboard({ orchestrator, projectDir, claudePath, codexPath, res
         chatMessagesRef.current = chatMessagesRef.current.slice(-MAX_MESSAGES);
       }
 
-      // Add blank line before new agent message for separation
-      outputLines.push('');
-
       const dot = chalk.hex(agentHex(agent))(DOT_ACTIVE);
       const agentLabel = agentName(agent).padEnd(6);
       const coloredAgentName = chalk.hex(agentHex(agent)).bold(agentLabel);
@@ -593,8 +606,6 @@ export function Dashboard({ orchestrator, projectDir, claudePath, codexPath, res
             if (msg) msg.status = 'done';
             currentMsgRef.current.delete(agent);
             lastEntryKind.current.delete(agent);
-            // Add blank line after agent message finishes for breathing room
-            console.log('');
           }
         }
       },
@@ -704,7 +715,6 @@ export function Dashboard({ orchestrator, projectDir, claudePath, codexPath, res
       };
 
       const userPrefix = chalk.hex(THEME.userPrefix)(' ❯ ');
-      // Vertical padding: blank line above, padding top/bottom inside bubble, blank line below
       console.log('');
       printBg(' ');
       printBg(`${userPrefix}${chalk.hex(THEME.text)(wrapped[0] || '')}`);
@@ -810,9 +820,9 @@ export function Dashboard({ orchestrator, projectDir, claudePath, codexPath, res
 
   return (
     <Box flexDirection="column">
-      {thinking && <ThinkingSpinner />}
+      {thinking ? <ThinkingSpinner /> : <Text>{' '}</Text>}
       {todos.length > 0 && <TodoPanel items={todos} />}
-      <Box width="100%" flexGrow={1} paddingTop={1}>
+      <Box width="100%" flexGrow={1}>
         <Box width="100%" flexGrow={1} paddingX={1} paddingY={0} borderStyle="round" borderColor={anyRunning ? THEME.opus : THEME.panelBorder}>
           <Text color={THEME.text}>{' ❯ '}</Text>
           <Box flexGrow={1}>
