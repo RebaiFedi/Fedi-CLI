@@ -501,26 +501,20 @@ export function Dashboard({ orchestrator, projectDir, claudePath, codexPath, res
       }
 
       const dot = chalk.hex(agentHex(agent))(DOT_ACTIVE);
-      const agentLabel = agentName(agent).padEnd(6);
-      const coloredAgentName = chalk.hex(agentHex(agent)).bold(agentLabel);
-      // First text/heading entry goes on same line as agent header
+      // Put dot + first text on same line
       const firstIdx = entries.findIndex((e) => e.kind === 'text' || e.kind === 'heading');
       if (firstIdx !== -1) {
-        const firstEntry = entries[firstIdx];
         const termW = process.stdout.columns || 80;
-        const firstMaxW = Math.max(20, Math.min(termW - INDENT.length, MAX_READABLE_WIDTH));
-        const firstText = firstEntry.text;
-        const wrapped = wordWrap(firstText, firstMaxW, INDENT);
-        outputLines.push(`  ${dot} ${coloredAgentName}`);
-        outputLines.push(`${INDENT}${wrapped[0]}`);
+        const maxW = Math.max(20, Math.min(termW - 4, MAX_READABLE_WIDTH));
+        const wrapped = wordWrap(entries[firstIdx].text, maxW, INDENT);
+        outputLines.push(`  ${dot} ${wrapped[0]}`);
         for (let w = 1; w < wrapped.length; w++) outputLines.push(wrapped[w]);
-        // Rest of entries (skip the one we already rendered)
         const rest = entries.filter((_, i) => i !== firstIdx);
         if (rest.length > 0) {
           outputLines.push(...entriesToAnsiOutputLines(rest, agentColor));
         }
       } else {
-        outputLines.push(`  ${dot} ${coloredAgentName}`);
+        outputLines.push(`  ${dot}`);
         outputLines.push(...entriesToAnsiOutputLines(entries, agentColor));
       }
       // Track last kind

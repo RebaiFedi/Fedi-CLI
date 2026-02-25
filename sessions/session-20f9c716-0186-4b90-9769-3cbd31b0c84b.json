@@ -1,0 +1,19 @@
+{
+  "id": "20f9c716-0186-4b90-9769-3cbd31b0c84b",
+  "version": 2,
+  "task": "salut",
+  "projectDir": "/home/fedi/Bureau/Fedi CLI",
+  "startedAt": 1772021956002,
+  "messages": [
+    {
+      "from": "user",
+      "to": "opus",
+      "content": "tu peut analyse la page acceuil /dashboard ?",
+      "id": "0672952f-05cb-47d7-ab2e-9609cab9b731",
+      "timestamp": 1772021987905,
+      "relayCount": 0
+    }
+  ],
+  "agentSessions": {},
+  "agentStats": {}
+}
