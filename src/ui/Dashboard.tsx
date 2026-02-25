@@ -823,7 +823,7 @@ export function Dashboard({ orchestrator, projectDir, claudePath, codexPath, res
       {thinking ? <ThinkingSpinner /> : <Text>{' '}</Text>}
       {todos.length > 0 && <TodoPanel items={todos} />}
       <Box width="100%" flexGrow={1}>
-        <Box width="100%" flexGrow={1} paddingX={1} paddingY={0} borderStyle="round" borderColor={anyRunning ? THEME.opus : THEME.panelBorder}>
+        <Box width="100%" flexGrow={1} paddingY={0} borderStyle="round" borderColor={anyRunning ? THEME.opus : THEME.panelBorder}>
           <Text color={THEME.text}>{' ❯ '}</Text>
           <Box flexGrow={1}>
             <InputBar onSubmit={handleInput} placeholder="Improve documentation in @filename" />
