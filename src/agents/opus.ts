@@ -3,9 +3,10 @@ import { createInterface } from 'node:readline';
 import type { AgentProcess, AgentStatus, OutputLine, SessionConfig } from './types.js';
 import { logger } from '../utils/logger.js';
 import { formatAction } from '../utils/format-action.js';
+import { parseMessageWithImages, type ContentBlock } from '../utils/image-utils.js';
 
-export class HaikuAgent implements AgentProcess {
-  readonly id = 'haiku' as const;
+export class OpusAgent implements AgentProcess {
+  readonly id = 'opus' as const;
   status: AgentStatus = 'idle';
   private process: ChildProcess | null = null;
   private sessionId: string | null = null;
@@ -32,7 +33,7 @@ export class HaikuAgent implements AgentProcess {
 
   async start(config: SessionConfig, systemPrompt: string): Promise<void> {
     if (this.process) {
-      logger.warn('[HAIKU] Already running, stopping first');
+      logger.warn('[OPUS] Already running, stopping first');
       await this.stop();
     }
 
@@ -47,7 +48,7 @@ export class HaikuAgent implements AgentProcess {
       '--dangerously-skip-permissions',
     ];
 
-    logger.info(`[HAIKU] Spawning: ${this.cliPath} ${args.join(' ')}`);
+    logger.info(`[OPUS] Spawning: ${this.cliPath} ${args.join(' ')}`);
 
     this.process = spawn(this.cliPath, args, {
       cwd: config.projectDir,
@@ -71,26 +72,30 @@ export class HaikuAgent implements AgentProcess {
     const stderrRl = createInterface({ input: this.process.stderr! });
     stderrRl.on('line', (line) => {
       if (!line.trim()) return;
-      logger.debug(`[HAIKU stderr] ${line}`);
+      logger.debug(`[OPUS stderr] ${line}`);
     });
 
     this.process.on('exit', (code) => {
-      logger.info(`[HAIKU] Process exited with code ${code}`);
+      logger.info(`[OPUS] Process exited with code ${code}`);
       this.setStatus('stopped');
       this.process = null;
     });
 
     this.process.on('error', (err) => {
-      logger.error(`[HAIKU] Process error: ${err.message}`);
+      logger.error(`[OPUS] Process error: ${err.message}`);
       this.emit({ text: `Error: ${err.message}`, timestamp: Date.now(), type: 'system' });
       this.setStatus('error');
     });
+
+    // Check for image paths in the prompt (user may paste image path on first message)
+    const imageBlocks = parseMessageWithImages(systemPrompt);
+    const content: string | ContentBlock[] = imageBlocks ?? systemPrompt;
 
     this.sendRaw({
       type: 'user',
       message: {
         role: 'user',
-        content: systemPrompt,
+        content,
       },
       ...(this.sessionId ? { session_id: this.sessionId } : {}),
     });
@@ -99,23 +104,23 @@ export class HaikuAgent implements AgentProcess {
   private handleStreamMessage(msg: Record<string, unknown>) {
     const type = msg.type as string;
     const subtype = msg.subtype as string | undefined;
-    logger.debug(`[HAIKU event] ${type} ${subtype ?? ''}`);
+    logger.debug(`[OPUS event] ${type} ${subtype ?? ''}`);
 
     if (type === 'system' && msg.session_id) {
       this.sessionId = msg.session_id as string;
-      logger.info(`[HAIKU] Session ID: ${this.sessionId}`);
+      logger.info(`[OPUS] Session ID: ${this.sessionId}`);
     }
 
     // Detect context compaction
     if (type === 'system' && subtype === 'conversation_compacted') {
-      logger.warn('[HAIKU] Context window compacted');
+      logger.warn('[OPUS] Context window compacted');
       this.emit({ text: 'Opus: contexte compacte (auto-compact)', timestamp: Date.now(), type: 'info' });
     }
 
     // Detect errors (context limit, etc.)
     if (type === 'result' && msg.is_error) {
       const errorMsg = (msg.result as string) || 'Unknown error';
-      logger.error(`[HAIKU] Result error: ${errorMsg}`);
+      logger.error(`[OPUS] Result error: ${errorMsg}`);
       this.emit({ text: `Opus error: ${errorMsg}`, timestamp: Date.now(), type: 'info' });
     }
 
@@ -159,15 +164,20 @@ export class HaikuAgent implements AgentProcess {
 
   send(prompt: string) {
     if (!this.process?.stdin?.writable) {
-      logger.error('[HAIKU] Cannot send: process not running');
+      logger.error('[OPUS] Cannot send: process not running');
       return;
     }
     this.setStatus('running');
+
+    // Check for image paths and send multimodal if found
+    const imageBlocks = parseMessageWithImages(prompt);
+    const content: string | ContentBlock[] = imageBlocks ?? prompt;
+
     this.sendRaw({
       type: 'user',
       message: {
         role: 'user',
-        content: prompt,
+        content,
       },
       ...(this.sessionId ? { session_id: this.sessionId } : {}),
     });
@@ -176,7 +186,7 @@ export class HaikuAgent implements AgentProcess {
   private sendRaw(obj: Record<string, unknown>) {
     if (!this.process?.stdin?.writable) return;
     const json = JSON.stringify(obj);
-    logger.debug(`[HAIKU] Sending: ${json.slice(0, 200)}`);
+    logger.debug(`[OPUS] Sending: ${json.slice(0, 200)}`);
     this.process.stdin.write(json + '\n');
   }
 
@@ -187,14 +197,14 @@ export class HaikuAgent implements AgentProcess {
   async stop(): Promise<void> {
     if (!this.process) return;
 
-    logger.info('[HAIKU] Stopping...');
+    logger.info('[OPUS] Stopping...');
     this.process.stdin?.end();
     this.process.kill('SIGTERM');
 
     await new Promise<void>((resolve) => {
       const timeout = setTimeout(() => {
         if (this.process) {
-          logger.warn('[HAIKU] Force killing after 3s');
+          logger.warn('[OPUS] Force killing after 3s');
           this.process.kill('SIGKILL');
         }
         resolve();

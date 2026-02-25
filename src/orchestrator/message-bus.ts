@@ -8,7 +8,7 @@ export interface MessageBusEvents {
   message: [Message];
   'message:claude': [Message];
   'message:codex': [Message];
-  'message:haiku': [Message];
+  'message:opus': [Message];
   relay: [Message];
   'relay-blocked': [Message];
 }
@@ -38,12 +38,12 @@ export class MessageBus extends EventEmitter {
       this.emit('message:claude', full);
     } else if (full.to === 'codex') {
       this.emit('message:codex', full);
-    } else if (full.to === 'haiku') {
-      this.emit('message:haiku', full);
+    } else if (full.to === 'opus') {
+      this.emit('message:opus', full);
     } else if (full.to === 'all') {
       this.emit('message:claude', full);
       this.emit('message:codex', full);
-      this.emit('message:haiku', full);
+      this.emit('message:opus', full);
     }
 
     return full;

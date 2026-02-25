@@ -3,6 +3,7 @@ import { createInterface } from 'node:readline';
 import type { AgentProcess, AgentStatus, OutputLine, SessionConfig } from './types.js';
 import { logger } from '../utils/logger.js';
 import { formatAction } from '../utils/format-action.js';
+import { parseMessageWithImages, type ContentBlock } from '../utils/image-utils.js';
 
 export class ClaudeAgent implements AgentProcess {
   readonly id = 'claude' as const;
@@ -90,11 +91,15 @@ export class ClaudeAgent implements AgentProcess {
     });
 
     // Send initial prompt with system prompt
+    const initPrompt = `${systemPrompt}\n\nNow begin working on the task.`;
+    const imageBlocks = parseMessageWithImages(initPrompt);
+    const content: string | ContentBlock[] = imageBlocks ?? initPrompt;
+
     this.sendRaw({
       type: 'user',
       message: {
         role: 'user',
-        content: `${systemPrompt}\n\nNow begin working on the task.`,
+        content,
       },
       ...(this.sessionId ? { session_id: this.sessionId } : {}),
     });
@@ -174,11 +179,16 @@ export class ClaudeAgent implements AgentProcess {
       return;
     }
     this.setStatus('running');
+
+    // Check for image paths and send multimodal if found
+    const imageBlocks = parseMessageWithImages(prompt);
+    const content: string | ContentBlock[] = imageBlocks ?? prompt;
+
     this.sendRaw({
       type: 'user',
       message: {
         role: 'user',
-        content: prompt,
+        content,
       },
       ...(this.sessionId ? { session_id: this.sessionId } : {}),
     });

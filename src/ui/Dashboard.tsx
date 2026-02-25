@@ -16,8 +16,8 @@ const FLUSH_INTERVAL = 250;
 // ── Filters ─────────────────────────────────────────────────────────────────
 
 const TOOL_RE = /^\s*(EnterPlanMode|AskUserQuestion|ExitPlanMode|TodoWrite|TaskCreate|TaskUpdate|TaskList|TaskGet|NotebookEdit|EnterWorktree|WebSearch|WebFetch)\s*$/;
-const RELAY_PREFIX_RE = /^\s*\[(TO|FROM):(CLAUDE|CODEX|HAIKU)\]\s*/i;
-const RELAY_LINE_RE = /^\s*\[TO:(CLAUDE|CODEX|HAIKU)\]\s/i;
+const RELAY_PREFIX_RE = /^\s*\[(TO|FROM):(CLAUDE|CODEX|OPUS)\]\s*/i;
+const RELAY_LINE_RE = /^\s*\[TO:(CLAUDE|CODEX|OPUS)\]\s/i;
 const TASK_ADD_RE = /\[TASK:add\]\s*(.+)/i;
 const TASK_DONE_RE = /\[TASK:done\]\s*(.+)/i;
 
@@ -345,7 +345,7 @@ export function Dashboard({ orchestrator, projectDir, claudePath, codexPath, res
   const { exit } = useApp();
   const { stdout } = useStdout();
 
-  const [haikuStatus, setHaikuStatus] = useState<AgentStatus>('idle');
+  const [opusStatus, setOpusStatus] = useState<AgentStatus>('idle');
   const [claudeStatus, setClaudeStatus] = useState<AgentStatus>('idle');
   const [codexStatus, setCodexStatus] = useState<AgentStatus>('idle');
   const [stopped, setStopped] = useState(false);
@@ -400,7 +400,7 @@ export function Dashboard({ orchestrator, projectDir, claudePath, codexPath, res
 
     for (const { agent, entries } of items) {
       if (entries.length === 0) continue;
-      const agentColor: 'green' | 'yellow' | 'magenta' = agent === 'haiku' ? 'magenta' : agent === 'claude' ? 'green' : 'yellow';
+      const agentColor: 'green' | 'yellow' | 'magenta' = agent === 'opus' ? 'magenta' : agent === 'claude' ? 'green' : 'yellow';
 
       const prevKind = lastEntryKind.current.get(agent);
       const currentId = currentMsgRef.current.get(agent);
@@ -425,8 +425,8 @@ export function Dashboard({ orchestrator, projectDir, claudePath, codexPath, res
         chatMessagesRef.current = chatMessagesRef.current.slice(-MAX_MESSAGES);
       }
 
-      const dot = agent === 'haiku' ? chalk.magentaBright('●') : agent === 'claude' ? chalk.cyanBright('●') : chalk.greenBright('●');
-      const agentName = agent === 'haiku' ? chalk.magentaBright.bold('Opus') : agent === 'claude' ? chalk.cyanBright.bold('Sonnet') : chalk.greenBright.bold('Codex');
+      const dot = agent === 'opus' ? chalk.magentaBright('●') : agent === 'claude' ? chalk.cyanBright('●') : chalk.greenBright('●');
+      const agentName = agent === 'opus' ? chalk.magentaBright.bold('Opus') : agent === 'claude' ? chalk.cyanBright.bold('Sonnet') : chalk.greenBright.bold('Codex');
       outputLines.push('');
       // First text/heading entry goes on same line as agent header
       const firstIdx = entries.findIndex((e) => e.kind === 'text' || e.kind === 'heading');
@@ -516,7 +516,7 @@ export function Dashboard({ orchestrator, projectDir, claudePath, codexPath, res
         enqueueOutput(agent, entries);
       },
       onAgentStatus: (agent: AgentId, status: AgentStatus) => {
-        if (agent === 'haiku') setHaikuStatus(status);
+        if (agent === 'opus') setOpusStatus(status);
         if (agent === 'claude') setClaudeStatus(status);
         if (agent === 'codex') setCodexStatus(status);
         if (status === 'error' || status === 'stopped') {
@@ -541,7 +541,7 @@ export function Dashboard({ orchestrator, projectDir, claudePath, codexPath, res
         const relayLine = `${fromLabel} -> ${toLabel}: ${preview}`;
         // Show relay as info on the sender's output
         const fromAgent = msg.from as AgentId;
-        if (fromAgent === 'haiku' || fromAgent === 'claude' || fromAgent === 'codex') {
+        if (fromAgent === 'opus' || fromAgent === 'claude' || fromAgent === 'codex') {
           enqueueOutput(fromAgent, [{ text: relayLine, kind: 'info' }]);
         }
       },
@@ -550,7 +550,7 @@ export function Dashboard({ orchestrator, projectDir, claudePath, codexPath, res
         const fromLabel = AGENT_LABELS[msg.from as AgentId] ?? msg.from;
         const toLabel = AGENT_LABELS[msg.to as AgentId] ?? msg.to;
         const fromAgent = msg.from as AgentId;
-        if (fromAgent === 'haiku' || fromAgent === 'claude' || fromAgent === 'codex') {
+        if (fromAgent === 'opus' || fromAgent === 'claude' || fromAgent === 'codex') {
           enqueueOutput(fromAgent, [{ text: `Relay bloque: ${fromLabel} -> ${toLabel} (profondeur max)`, kind: 'info' }]);
         }
       },
@@ -565,7 +565,7 @@ export function Dashboard({ orchestrator, projectDir, claudePath, codexPath, res
           const session = sm.loadSession(match.id);
           if (session) {
             const agentMeta: Record<string, { label: string; color: (s: string) => string; dot: string }> = {
-              haiku: { label: 'Opus', color: chalk.magentaBright, dot: chalk.magentaBright('●') },
+              opus: { label: 'Opus', color: chalk.magentaBright, dot: chalk.magentaBright('●') },
               claude: { label: 'Sonnet', color: chalk.cyanBright, dot: chalk.cyanBright('●') },
               codex: { label: 'Codex', color: chalk.greenBright, dot: chalk.greenBright('●') },
               user: { label: 'User', color: chalk.white, dot: chalk.white('❯') },
@@ -686,7 +686,7 @@ export function Dashboard({ orchestrator, projectDir, claudePath, codexPath, res
         orchestrator.restart(text).catch((err) => logger.error(`[DASHBOARD] Start error: ${err}`));
         return;
       }
-      if (text.startsWith('@haiku ')) { orchestrator.sendToAgent('haiku', text.slice(7)); return; }
+      if (text.startsWith('@opus ')) { orchestrator.sendToAgent('opus', text.slice(6)); return; }
       if (text.startsWith('@codex ')) { orchestrator.sendToAgent('codex', text.slice(7)); return; }
       if (text.startsWith('@claude ')) { orchestrator.sendToAgent('claude', text.slice(8)); return; }
       orchestrator.sendUserMessage(text);
@@ -694,11 +694,11 @@ export function Dashboard({ orchestrator, projectDir, claudePath, codexPath, res
     [orchestrator, stopped],
   );
 
-  const haikuRunning = haikuStatus === 'running';
+  const opusRunning = opusStatus === 'running';
   const claudeRunning = claudeStatus === 'running';
   const codexRunning = codexStatus === 'running';
   const dir = projectDir.replace(/^\/home\/[^/]+\//, '~/');
-  const haikuLabel = haikuRunning ? 'working' : haikuStatus === 'waiting' ? 'idle' : haikuStatus;
+  const opusLabel = opusRunning ? 'working' : opusStatus === 'waiting' ? 'idle' : opusStatus;
   const claudeLabel = claudeRunning ? 'working' : claudeStatus === 'waiting' ? 'idle' : claudeStatus;
   const codexLabel = codexRunning ? 'working' : codexStatus === 'waiting' ? 'idle' : codexStatus;
 
@@ -716,8 +716,8 @@ export function Dashboard({ orchestrator, projectDir, claudePath, codexPath, res
       </Box>
       <Box paddingX={1} justifyContent="space-between">
         <Text>
-          <Text color={haikuRunning ? 'magentaBright' : 'gray'}>{'● '}</Text>
-          <Text dimColor>{`Opus (${haikuLabel})`}</Text>
+          <Text color={opusRunning ? 'magentaBright' : 'gray'}>{'● '}</Text>
+          <Text dimColor>{`Opus (${opusLabel})`}</Text>
           <Text>{'  '}</Text>
           <Text color={claudeRunning ? 'cyanBright' : 'gray'}>{'● '}</Text>
           <Text dimColor>{`Sonnet (${claudeLabel})`}</Text>

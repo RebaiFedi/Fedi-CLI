@@ -63,7 +63,7 @@ function viewSession(projectDir: string, sessionId: string) {
     : 'interrompue';
 
   const agentLabels: Record<string, { label: string; color: (s: string) => string }> = {
-    haiku: { label: 'Opus', color: chalk.magentaBright },
+    opus: { label: 'Opus', color: chalk.magentaBright },
     claude: { label: 'Sonnet', color: chalk.cyanBright },
     codex: { label: 'Codex', color: chalk.greenBright },
     user: { label: 'User', color: chalk.white },

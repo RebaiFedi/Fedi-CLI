@@ -1,11 +1,11 @@
 import PQueue from 'p-queue';
 import { ClaudeAgent } from '../agents/claude.js';
 import { CodexAgent } from '../agents/codex.js';
-import { HaikuAgent } from '../agents/haiku.js';
+import { OpusAgent } from '../agents/opus.js';
 import type { AgentId, AgentStatus, Message, OutputLine, SessionConfig } from '../agents/types.js';
-import { TO_CLAUDE_PATTERN, TO_CODEX_PATTERN, TO_HAIKU_PATTERN } from '../agents/types.js';
+import { TO_CLAUDE_PATTERN, TO_CODEX_PATTERN, TO_OPUS_PATTERN } from '../agents/types.js';
 import { MessageBus } from './message-bus.js';
-import { getClaudeSystemPrompt, getCodexSystemPrompt, getHaikuSystemPrompt, getCodexContextReminder } from './prompts.js';
+import { getClaudeSystemPrompt, getCodexSystemPrompt, getOpusSystemPrompt, getCodexContextReminder } from './prompts.js';
 import { logger } from '../utils/logger.js';
 import { SessionManager } from '../utils/session-manager.js';
 
@@ -21,11 +21,11 @@ export interface OrchestratorCallbacks {
 }
 
 export class Orchestrator {
-  readonly haiku = new HaikuAgent();
+  readonly opus = new OpusAgent();
   readonly claude = new ClaudeAgent();
   readonly codex = new CodexAgent();
   readonly bus = new MessageBus();
-  private haikuQueue = new PQueue({ concurrency: 1 });
+  private opusQueue = new PQueue({ concurrency: 1 });
   private claudeQueue = new PQueue({ concurrency: 1 });
   private codexQueue = new PQueue({ concurrency: 1 });
   private callbacks: OrchestratorCallbacks | null = null;
@@ -35,7 +35,7 @@ export class Orchestrator {
   private config: Omit<SessionConfig, 'task'> | null = null;
   private relayTimestamps: number[] = [];
   private agentLastContextIndex: Map<AgentId, number> = new Map([
-    ['haiku', 0], ['claude', 0], ['codex', 0],
+    ['opus', 0], ['claude', 0], ['codex', 0],
   ]);
   private sessionManager: SessionManager | null = null;
 
@@ -59,12 +59,12 @@ export class Orchestrator {
   bind(cb: OrchestratorCallbacks) {
     this.callbacks = cb;
 
-    // Haiku output & status
-    this.haiku.onOutput((line) => {
-      cb.onAgentOutput('haiku', line);
-      this.detectRelayPatterns('haiku', line.text);
+    // Opus output & status
+    this.opus.onOutput((line) => {
+      cb.onAgentOutput('opus', line);
+      this.detectRelayPatterns('opus', line.text);
     });
-    this.haiku.onStatusChange((s) => cb.onAgentStatus('haiku', s));
+    this.opus.onStatusChange((s) => cb.onAgentStatus('opus', s));
 
     // Claude output & status
     this.claude.onOutput((line) => {
@@ -83,17 +83,17 @@ export class Orchestrator {
     this.bus.on('relay', (msg: Message) => cb.onRelay(msg));
     this.bus.on('relay-blocked', (msg: Message) => cb.onRelayBlocked(msg));
 
-    // Route messages to Haiku — inject cross-agent context
-    this.bus.on('message:haiku', (msg: Message) => {
-      if (msg.from === 'haiku') return;
-      this.haikuQueue.add(() => {
+    // Route messages to Opus — inject cross-agent context
+    this.bus.on('message:opus', (msg: Message) => {
+      if (msg.from === 'opus') return;
+      this.opusQueue.add(() => {
         const prefix = `[FROM:${msg.from.toUpperCase()}]`;
-        const context = this.getNewContext('haiku');
+        const context = this.getNewContext('opus');
         let payload = `${prefix} ${msg.content}`;
         if (context) {
           payload += `\n\n--- CONTEXTE ---\n${context}\n--- FIN ---`;
         }
-        this.haiku.send(payload);
+        this.opus.send(payload);
         return Promise.resolve();
       });
     });
@@ -163,13 +163,13 @@ export class Orchestrator {
     await this.codex.start({ ...config, task: '' }, prompt);
   }
 
-  /** Start with first user message. Only Haiku starts immediately. */
+  /** Start with first user message. Only Opus starts immediately. */
   async startWithTask(task: string) {
     if (this.started || !this.config) return;
     this.started = true;
 
     const config = this.config;
-    logger.info(`[ORCH] Starting Haiku with task: ${task.slice(0, 80)}`);
+    logger.info(`[ORCH] Starting Opus with task: ${task.slice(0, 80)}`);
 
     // Create persistent session
     this.sessionManager?.createSession(task, config.projectDir);
@@ -179,11 +179,11 @@ export class Orchestrator {
       this.sessionManager?.addMessage(msg);
     });
 
-    // Only Haiku starts — Claude & Codex start lazily when Haiku delegates
-    const haikuPrompt = getHaikuSystemPrompt(config.projectDir) + `\n\nMESSAGE DU USER: ${task}`;
-    await this.haiku.start({ ...config, task }, haikuPrompt);
+    // Only Opus starts — Claude & Codex start lazily when Opus delegates
+    const opusPrompt = getOpusSystemPrompt(config.projectDir) + `\n\nMESSAGE DU USER: ${task}`;
+    await this.opus.start({ ...config, task }, opusPrompt);
 
-    logger.info('[ORCH] Haiku started (Claude & Codex on standby)');
+    logger.info('[ORCH] Opus started (Claude & Codex on standby)');
   }
 
   get isStarted() { return this.started; }
@@ -195,7 +195,7 @@ export class Orchestrator {
     this.claudeStarted = false;
     this.codexStarted = false;
     this.agentLastContextIndex = new Map([
-      ['haiku', 0], ['claude', 0], ['codex', 0],
+      ['opus', 0], ['claude', 0], ['codex', 0],
     ]);
 
     // Start fresh
@@ -203,7 +203,7 @@ export class Orchestrator {
   }
 
   sendUserMessage(text: string) {
-    this.bus.send({ from: 'user', to: 'haiku', content: text });
+    this.bus.send({ from: 'user', to: 'opus', content: text });
   }
 
   sendToAgent(agent: AgentId, text: string) {
@@ -211,7 +211,7 @@ export class Orchestrator {
   }
 
   sendToAll(text: string) {
-    this.bus.send({ from: 'user', to: 'haiku', content: text });
+    this.bus.send({ from: 'user', to: 'opus', content: text });
     this.bus.send({ from: 'user', to: 'claude', content: text });
     this.bus.send({ from: 'user', to: 'codex', content: text });
   }
@@ -253,13 +253,13 @@ export class Orchestrator {
         }
       }
 
-      const toHaikuMatch = line.match(TO_HAIKU_PATTERN);
-      if (toHaikuMatch && from !== 'haiku') {
-        const content = toHaikuMatch[1].trim();
+      const toOpusMatch = line.match(TO_OPUS_PATTERN);
+      if (toOpusMatch && from !== 'opus') {
+        const content = toOpusMatch[1].trim();
         if (content) {
-          logger.info(`[ORCH] Relay: ${from} → haiku: ${content.slice(0, 80)}`);
+          logger.info(`[ORCH] Relay: ${from} → opus: ${content.slice(0, 80)}`);
           this.recordRelay();
-          this.bus.relay(from, 'haiku', content);
+          this.bus.relay(from, 'opus', content);
         }
       }
 
@@ -271,20 +271,20 @@ export class Orchestrator {
     logger.info('[ORCH] Shutting down...');
 
     // Capture agent session IDs before stopping
-    const haikuSid = this.haiku.getSessionId();
+    const opusSid = this.opus.getSessionId();
     const claudeSid = this.claude.getSessionId();
     const codexSid = this.codex.getSessionId();
-    if (haikuSid) this.sessionManager?.setAgentSession('haiku', haikuSid);
+    if (opusSid) this.sessionManager?.setAgentSession('opus', opusSid);
     if (claudeSid) this.sessionManager?.setAgentSession('claude', claudeSid);
     if (codexSid) this.sessionManager?.setAgentSession('codex', codexSid);
 
     // Finalize session
     this.sessionManager?.finalize();
 
-    this.haikuQueue.clear();
+    this.opusQueue.clear();
     this.claudeQueue.clear();
     this.codexQueue.clear();
-    await Promise.allSettled([this.haiku.stop(), this.claude.stop(), this.codex.stop()]);
+    await Promise.allSettled([this.opus.stop(), this.claude.stop(), this.codex.stop()]);
     logger.info('[ORCH] Shutdown complete');
   }
 }
