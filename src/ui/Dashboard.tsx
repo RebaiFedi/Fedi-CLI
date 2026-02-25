@@ -10,7 +10,7 @@ import { logger } from '../utils/logger.js';
 
 const MAX_MESSAGES = 200;
 const INDENT = '    ';
-const FLUSH_INTERVAL = 120;
+const FLUSH_INTERVAL = 250;
 
 // ── Filters ─────────────────────────────────────────────────────────────────
 
@@ -540,18 +540,14 @@ export function Dashboard({ orchestrator, projectDir, claudePath, codexPath }: D
 
   const handleInput = useCallback(
     (text: string) => {
-      // Write user message via console.log (Ink intercepts and coordinates)
       console.log('');
       const termW = process.stdout.columns || 80;
-      // User message: full-width bar with background to visually distinguish
       const userPrefix = '  ❯  ';
       const availW = termW - userPrefix.length;
       const wrapped = wordWrap(text, availW, '     ');
-      // First line with background highlight
       const firstLine = `${userPrefix}${wrapped[0] || ''}`;
       const padLen = Math.max(0, termW - stripAnsi(firstLine).length);
       console.log(chalk.bgHex('#2a2a2a').white(`${firstLine}${' '.repeat(padLen)}`));
-      // Continuation lines with same background
       for (let i = 1; i < wrapped.length; i++) {
         const contLine = wrapped[i];
         const contPad = Math.max(0, termW - stripAnsi(contLine).length);
