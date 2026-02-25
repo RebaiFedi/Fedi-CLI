@@ -377,15 +377,22 @@ export function Dashboard({ orchestrator, projectDir, claudePath, codexPath, res
     };
 
     console.log('');
-    console.log(chalk.dim('  ┌' + '─'.repeat(inner) + '┐'));
-    console.log(row(`  ${chalk.white.bold('FEDI CLI')}  ${chalk.dim('—  v1.0')}`));
+    console.log(chalk.dim('  ╭' + '─'.repeat(inner) + '╮'));
+    
+    const titleLeft = `  ${chalk.cyanBright.bold('FEDI')} ${chalk.dim('CLI')}  ${chalk.dim('v1.0')}`;
+    const titleRight = chalk.dim('Multi-Agent Orchestrator  ');
+    const paddingTitle = Math.max(0, inner - stripAnsi(titleLeft).length - stripAnsi(titleRight).length);
+    console.log(chalk.dim('  │') + titleLeft + ' '.repeat(paddingTitle) + titleRight + chalk.dim('│'));
+    
     console.log(chalk.dim('  ├' + '─'.repeat(inner) + '┤'));
-    console.log(row(`  ${chalk.magentaBright('●')} ${chalk.white.bold('Opus')}    ${chalk.dim('Director · Plan        claude-opus-4-6')}`));
-    console.log(row(`  ${chalk.cyanBright('●')} ${chalk.white.bold('Sonnet')}  ${chalk.dim('Frontend · Code        claude-sonnet-4-6')}`));
-    console.log(row(`  ${chalk.greenBright('●')} ${chalk.white.bold('Codex')}   ${chalk.dim('Backend · Code         codex-5.3-xhigh')}`));
+    console.log(row(`  ${chalk.white.bold('AGENTS')}`));
+    console.log(row(`    ${chalk.magentaBright('●')} ${chalk.white.bold('Opus')}    ${chalk.dim('Director · Planner        claude-opus-4-6')}`));
+    console.log(row(`    ${chalk.cyanBright('●')} ${chalk.white.bold('Sonnet')}  ${chalk.dim('Frontend · Developer      claude-sonnet-4-6')}`));
+    console.log(row(`    ${chalk.greenBright('●')} ${chalk.white.bold('Codex')}   ${chalk.dim('Backend  · Scripts        codex-5.3-xhigh')}`));
     console.log(chalk.dim('  ├' + '─'.repeat(inner) + '┤'));
-    console.log(row(`  ${chalk.dim('project')} ${chalk.white(dir)}`));
-    console.log(chalk.dim('  └' + '─'.repeat(inner) + '┘'));
+    console.log(row(`  ${chalk.white.bold('WORKSPACE')}`));
+    console.log(row(`    ${chalk.dim('Path:')} ${chalk.white(dir)}`));
+    console.log(chalk.dim('  ╰' + '─'.repeat(inner) + '╯'));
     console.log('');
   }, [projectDir]);
 
@@ -679,16 +686,32 @@ export function Dashboard({ orchestrator, projectDir, claudePath, codexPath, res
         return;
       }
 
+      // Parse @agent commands first
+      let targetAgent: AgentId | null = null;
+      let agentMessage = text;
+      if (text.startsWith('@opus ')) { targetAgent = 'opus'; agentMessage = text.slice(6); }
+      else if (text.startsWith('@codex ')) { targetAgent = 'codex'; agentMessage = text.slice(7); }
+      else if (text.startsWith('@claude ') || text.startsWith('@sonnet ')) { targetAgent = 'claude'; agentMessage = text.slice(text.indexOf(' ') + 1); }
+
       if (!orchestrator.isStarted || stopped) {
-        // Restart after stop or first message
+        // Restart first, then route to the right agent
         setStopped(false);
         setTodos([]);
-        orchestrator.restart(text).catch((err) => logger.error(`[DASHBOARD] Start error: ${err}`));
+        if (targetAgent && targetAgent !== 'opus') {
+          // Start Opus with minimal init, then send directly to the target agent
+          orchestrator.restart(`Le user veut parler directement a ${targetAgent === 'claude' ? 'Sonnet' : 'Codex'}. Attends.`).then(() => {
+            orchestrator.sendToAgent(targetAgent!, agentMessage);
+          }).catch((err) => logger.error(`[DASHBOARD] Start error: ${err}`));
+        } else {
+          orchestrator.restart(targetAgent === 'opus' ? agentMessage : text).catch((err) => logger.error(`[DASHBOARD] Start error: ${err}`));
+        }
         return;
       }
-      if (text.startsWith('@opus ')) { orchestrator.sendToAgent('opus', text.slice(6)); return; }
-      if (text.startsWith('@codex ')) { orchestrator.sendToAgent('codex', text.slice(7)); return; }
-      if (text.startsWith('@claude ')) { orchestrator.sendToAgent('claude', text.slice(8)); return; }
+
+      if (targetAgent) {
+        orchestrator.sendToAgent(targetAgent, agentMessage);
+        return;
+      }
       orchestrator.sendUserMessage(text);
     },
     [orchestrator, stopped],
@@ -708,7 +731,7 @@ export function Dashboard({ orchestrator, projectDir, claudePath, codexPath, res
     <Box flexDirection="column">
       {thinking && <ThinkingSpinner />}
       {todos.length > 0 && <TodoPanel items={todos} />}
-      <Box borderStyle="single" borderColor="#555555" paddingX={1}>
+      <Box borderStyle="round" borderColor="#555555" paddingX={1}>
         <Text color="cyanBright">{'❯ '}</Text>
         <Box flexGrow={1}>
           <InputBar onSubmit={handleInput} placeholder="Tapez votre message..." />

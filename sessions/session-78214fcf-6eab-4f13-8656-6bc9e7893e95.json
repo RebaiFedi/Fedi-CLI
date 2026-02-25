@@ -1,0 +1,13 @@
+{
+  "id": "78214fcf-6eab-4f13-8656-6bc9e7893e95",
+  "version": 2,
+  "task": "@codex tu voir le ui de fedi cli cmd ? juste analyse le ui de cli cmd",
+  "projectDir": "/home/fedi/Bureau/Fedi CLI",
+  "startedAt": 1772013489214,
+  "messages": [],
+  "agentSessions": {
+    "opus": "e8829c60-7b2f-46f2-903d-02999fc64975"
+  },
+  "agentStats": {},
+  "finishedAt": 1772013496809
+}
