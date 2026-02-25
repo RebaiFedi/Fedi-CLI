@@ -61,6 +61,32 @@
       "id": "4b89eaa3-03df-40a9-8fc9-26254daecc31",
       "timestamp": 1772022718329,
       "relayCount": 0
+    },
+    {
+      "from": "user",
+      "to": "opus",
+      "content": "tu peut me dire 5*5+5 je veut tosu repond :)",
+      "id": "a0fdbcd2-0682-429a-8afd-0a0afe663e9f",
+      "timestamp": 1772022798340,
+      "relayCount": 0
+    },
+    {
+      "from": "opus",
+      "to": "claude",
+      "content": "Le user te pose une question math rapide pour s'amuser. Calcule 5*5+5 et reponds-lui avec le resultat.",
+      "correlationId": "c9b43954-f912-4621-ab69-9425daeb0927",
+      "relayCount": 1,
+      "id": "88f2e70d-1d4c-41e5-83a2-91277f3393fe",
+      "timestamp": 1772022802777
+    },
+    {
+      "from": "opus",
+      "to": "codex",
+      "content": "Le user te pose une question math rapide pour s'amuser. Calcule 5*5+5 et reponds-lui avec le resultat.",
+      "correlationId": "c90e8bea-bcab-468e-b1fa-8c0b4d9f43af",
+      "relayCount": 1,
+      "id": "e0b55e4c-edd7-4a34-870a-dc3f6a451a6c",
+      "timestamp": 1772022802781
     }
   ],
   "agentSessions": {},

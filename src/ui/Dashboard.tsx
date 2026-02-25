@@ -419,6 +419,7 @@ export function Dashboard({ orchestrator, projectDir, claudePath, codexPath, res
   const outputBuffer = useRef<BufferedEntry[]>([]);
   const flushTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const welcomePrinted = useRef(false);
+  const lastPrintedAgent = useRef<AgentId | null>(null);
 
   // Print welcome banner once at mount via stdout (not Ink)
   useEffect(() => {
@@ -482,6 +483,11 @@ export function Dashboard({ orchestrator, projectDir, claudePath, codexPath, res
       if (currentId) {
         const msg = chatMessagesRef.current.find((m) => m.id === currentId);
         if (msg) {
+          // Continuing an existing message — add spacing if agent changed
+          if (lastPrintedAgent.current && lastPrintedAgent.current !== agent) {
+            outputLines.push('');
+          }
+          lastPrintedAgent.current = agent;
           msg.lines.push(...entries);
           // Append only new entries, with context from last entry for correct spacing
           outputLines.push(...entriesToAnsiOutputLines(entries, agentColor, prevKind));
@@ -492,7 +498,17 @@ export function Dashboard({ orchestrator, projectDir, claudePath, codexPath, res
         }
       }
 
-      // New message — add header
+      // New message — add blank line if different agent wrote before
+      if (lastPrintedAgent.current && lastPrintedAgent.current !== agent) {
+        // Flush what we have so far, then print the blank separator
+        if (outputLines.length > 0) {
+          console.log(compactOutputLines(outputLines).join('\n'));
+          outputLines.length = 0;
+        }
+        console.log('');
+      }
+      lastPrintedAgent.current = agent;
+
       const id = randomUUID();
       currentMsgRef.current.set(agent, id);
       chatMessagesRef.current.push({ id, agent, lines: [...entries], timestamp: Date.now(), status: 'streaming' });

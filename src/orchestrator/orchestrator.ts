@@ -146,11 +146,11 @@ export class Orchestrator {
   }
 
   /** Start Codex on first message to it — includes recent bus history */
-  private async ensureCodexStarted() {
+  private async ensureCodexStarted(options?: { muted?: boolean }) {
     if (this.codexStarted || !this.config) return;
     this.codexStarted = true;
     const config = this.config;
-    logger.info('[ORCH] Lazy-starting Codex...');
+    logger.info(`[ORCH] ${options?.muted ? 'Eager' : 'Lazy'}-starting Codex...`);
     let prompt = getCodexSystemPrompt(config.projectDir);
     // Inject recent history so Codex knows why it's being called
     const { summary, newIndex } = this.bus.getContextSummary('codex', 0, 5);
@@ -160,7 +160,7 @@ export class Orchestrator {
     }
     // Set compact reminder for session loss recovery
     this.codex.setContextReminder(getCodexContextReminder(config.projectDir));
-    await this.codex.start({ ...config, task: '' }, prompt);
+    await this.codex.start({ ...config, task: '' }, prompt, { muted: options?.muted });
   }
 
   /** Start with first user message. Only Opus starts immediately. */
@@ -185,8 +185,8 @@ export class Orchestrator {
 
     logger.info('[ORCH] Opus started (Claude on standby)');
 
-    // Start Codex eagerly in background (non-blocking) so sessionId is ready
-    this.ensureCodexStarted().catch(err =>
+    // Start Codex eagerly in background (muted — no output until @codex or relay)
+    this.ensureCodexStarted({ muted: true }).catch(err =>
       logger.error(`[ORCH] Codex eager start failed: ${err}`)
     );
   }

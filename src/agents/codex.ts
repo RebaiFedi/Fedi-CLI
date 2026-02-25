@@ -15,13 +15,16 @@ export class CodexAgent implements AgentProcess {
   private activeProcess: ReturnType<typeof spawn> | null = null;
   private systemPromptSent = false;
   private contextReminder: string = '';
+  private muted = false;
 
   private setStatus(s: AgentStatus) {
     this.status = s;
+    if (this.muted) return;
     this.statusHandlers.forEach(h => h(s));
   }
 
   private emit(line: OutputLine) {
+    if (this.muted) return;
     this.outputHandlers.forEach(h => h(line));
   }
 
@@ -33,15 +36,17 @@ export class CodexAgent implements AgentProcess {
     this.statusHandlers.push(handler);
   }
 
-  async start(config: SessionConfig, systemPrompt: string): Promise<void> {
+  async start(config: SessionConfig, systemPrompt: string, options?: { muted?: boolean }): Promise<void> {
     this.projectDir = config.projectDir;
     this.cliPath = config.codexPath;
 
+    this.muted = options?.muted ?? false;
     this.setStatus('running');
 
     const fullPrompt = `${systemPrompt}\n\nNow begin working on the task.`;
     await this.exec(fullPrompt);
     this.systemPromptSent = true;
+    this.muted = false;
   }
 
   setContextReminder(reminder: string) {

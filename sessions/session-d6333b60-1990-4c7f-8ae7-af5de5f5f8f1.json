@@ -1,0 +1,45 @@
+{
+  "id": "d6333b60-1990-4c7f-8ae7-af5de5f5f8f1",
+  "version": 2,
+  "task": "salut a tous ! je veut tous repond moi svp",
+  "projectDir": "/home/fedi/Bureau/Fedi CLI",
+  "startedAt": 1772023586950,
+  "messages": [
+    {
+      "from": "user",
+      "to": "opus",
+      "content": "ou est les autres ingenieur !",
+      "id": "ea1e0ea2-3c50-4cf1-84a2-30daa894d97c",
+      "timestamp": 1772023605587,
+      "relayCount": 0
+    },
+    {
+      "from": "user",
+      "to": "opus",
+      "content": "je te dit salut a tous !",
+      "id": "08907dc2-d038-4fb6-afbe-ce0b2cb05d94",
+      "timestamp": 1772023620568,
+      "relayCount": 0
+    },
+    {
+      "from": "opus",
+      "to": "claude",
+      "content": "Le user te dit salut ! Reponds-lui avec une courte presentation de toi (Sonnet, ingenieur frontend).",
+      "correlationId": "909c5310-3d86-4a5a-bcde-6f3776dec07e",
+      "relayCount": 1,
+      "id": "2bd7360e-eae6-46dd-bca8-d3507b3ec1f1",
+      "timestamp": 1772023624169
+    },
+    {
+      "from": "opus",
+      "to": "codex",
+      "content": "Le user te dit salut ! Reponds-lui avec une courte presentation de toi (Codex, ingenieur backend).",
+      "correlationId": "8199da10-ba41-4d7f-a4df-417b2280bdfb",
+      "relayCount": 1,
+      "id": "e8a2c40b-d290-49ab-93b5-a2bba35e5331",
+      "timestamp": 1772023624172
+    }
+  ],
+  "agentSessions": {},
+  "agentStats": {}
+}
