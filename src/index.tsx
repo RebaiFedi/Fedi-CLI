@@ -7,6 +7,14 @@ import { Orchestrator } from './orchestrator/orchestrator.js';
 import { Dashboard } from './ui/Dashboard.js';
 import { SessionManager } from './utils/session-manager.js';
 
+const THEME = {
+  text: '#F8FAFC',
+  info: '#FBBF24',
+  opus: '#F59E0B',
+  claude: '#38BDF8',
+  codex: '#22C55E',
+} as const;
+
 function printSessionList(projectDir: string) {
   const sm = new SessionManager(projectDir);
   const sessions = sm.listSessions();
@@ -18,18 +26,18 @@ function printSessionList(projectDir: string) {
   }
 
   console.log('');
-  console.log(chalk.white.bold('  Sessions enregistrees'));
+  console.log(chalk.hex(THEME.text).bold('  Sessions enregistrees'));
   console.log(chalk.dim('  ' + '─'.repeat(60)));
 
   for (const s of sessions) {
     const date = new Date(s.startedAt);
     const dateStr = date.toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit', year: 'numeric' });
     const timeStr = date.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
-    const status = s.finishedAt ? chalk.green('done') : chalk.yellow('interrupted');
+    const status = s.finishedAt ? chalk.hex(THEME.codex)('done') : chalk.hex(THEME.info)('interrupted');
     const task = s.task.length > 50 ? s.task.slice(0, 50) + '...' : s.task;
     const shortId = s.id.slice(0, 8);
 
-    console.log(`  ${chalk.dim(dateStr)} ${chalk.dim(timeStr)}  ${chalk.cyanBright(shortId)}  ${status}  ${chalk.white(task)}`);
+    console.log(`  ${chalk.dim(dateStr)} ${chalk.dim(timeStr)}  ${chalk.hex(THEME.claude)(shortId)}  ${status}  ${chalk.hex(THEME.text)(task)}`);
   }
 
   console.log('');
@@ -63,17 +71,17 @@ function viewSession(projectDir: string, sessionId: string) {
     : 'interrompue';
 
   const agentLabels: Record<string, { label: string; color: (s: string) => string }> = {
-    opus: { label: 'Opus', color: chalk.magentaBright },
-    claude: { label: 'Sonnet', color: chalk.cyanBright },
-    codex: { label: 'Codex', color: chalk.greenBright },
-    user: { label: 'User', color: chalk.white },
+    opus: { label: 'Opus', color: chalk.hex(THEME.opus) },
+    claude: { label: 'Sonnet', color: chalk.hex(THEME.claude) },
+    codex: { label: 'Codex', color: chalk.hex(THEME.codex) },
+    user: { label: 'User', color: chalk.hex(THEME.text) },
     system: { label: 'System', color: chalk.dim },
   };
 
   console.log('');
-  console.log(chalk.white.bold(`  Session ${session.id.slice(0, 8)}`));
+  console.log(chalk.hex(THEME.text).bold(`  Session ${session.id.slice(0, 8)}`));
   console.log(chalk.dim('  ' + '─'.repeat(60)));
-  console.log(`  ${chalk.dim('Tache:')} ${chalk.white(session.task)}`);
+  console.log(`  ${chalk.dim('Tache:')} ${chalk.hex(THEME.text)(session.task)}`);
   console.log(`  ${chalk.dim('Date:')} ${dateStr}  ${chalk.dim('Duree:')} ${duration}`);
   console.log(`  ${chalk.dim('Messages:')} ${session.messages.length}`);
 
@@ -94,7 +102,7 @@ function viewSession(projectDir: string, sessionId: string) {
     const content = msg.content.length > 120 ? msg.content.slice(0, 120) + '...' : msg.content;
 
     console.log(`  ${chalk.dim(time)} ${agent.color(agent.label)} ${chalk.dim('->')} ${target.color(target.label)}`);
-    console.log(`    ${chalk.white(content)}`);
+    console.log(`    ${chalk.hex(THEME.text)(content)}`);
     console.log('');
   }
 }

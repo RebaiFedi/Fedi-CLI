@@ -12,6 +12,32 @@ import { logger } from '../utils/logger.js';
 const MAX_MESSAGES = 200;
 const INDENT = '    ';
 const FLUSH_INTERVAL = 250;
+const THEME = {
+  text: '#F8FAFC',
+  muted: '#94A3B8',
+  border: '#64748B',
+  panelBorder: '#334155',
+  info: '#FBBF24',
+  opus: '#F59E0B',
+  claude: '#38BDF8',
+  codex: '#22C55E',
+  userPrefix: '#CBD5E1',
+  userBubbleBg: '#1F2937',
+} as const;
+const DOT_ACTIVE = '•';
+const DOT_IDLE = '·';
+
+function agentHex(agent: AgentId): string {
+  if (agent === 'opus') return THEME.opus;
+  if (agent === 'claude') return THEME.claude;
+  return THEME.codex;
+}
+
+function agentName(agent: AgentId): string {
+  if (agent === 'claude') return 'Sonnet';
+  if (agent === 'opus') return 'Opus';
+  return 'Codex';
+}
 
 // ── Filters ─────────────────────────────────────────────────────────────────
 
@@ -163,21 +189,29 @@ function wordWrap(text: string, maxWidth: number, contIndent: string): string[] 
 
 // ── ANSI rendering helpers ──────────────────────────────────────────────────
 
-function agentColorDot(agentColor: 'green' | 'yellow' | 'magenta'): string {
-  if (agentColor === 'green') return chalk.green('• ');
-  if (agentColor === 'magenta') return chalk.magenta('• ');
-  return chalk.yellow('• ');
+function isTableLine(text: string): boolean {
+  const t = stripAnsi(text).trim();
+  return t.startsWith('|') && t.endsWith('|');
 }
 
-function entryToAnsiLines(e: DisplayEntry, agentColor: 'green' | 'yellow' | 'magenta'): string[] {
+function entryToAnsiLines(e: DisplayEntry, _agentColor: 'green' | 'yellow' | 'magenta'): string[] {
   const termW = process.stdout.columns || 80;
   const indentW = INDENT.length;
   const maxW = termW - indentW;
 
   if (e.kind === 'empty') return [''];
 
+  if (isTableLine(e.text)) {
+    const clipped = e.text.length > maxW
+      ? `${e.text.slice(0, Math.max(0, maxW - 1))}…`
+      : e.text;
+    if (e.kind === 'separator') return [`${INDENT}${chalk.dim(clipped)}`];
+    if (e.kind === 'heading') return [`${INDENT}${chalk.hex(THEME.text).bold(clipped)}`];
+    return [`${INDENT}${clipped}`];
+  }
+
   if (e.kind === 'info') {
-    const raw = `${INDENT}  ${chalk.yellowBright('!')} ${chalk.yellow(e.text)}`;
+    const raw = `${INDENT}  ${chalk.hex(THEME.info)('!')} ${chalk.hex(THEME.info)(e.text)}`;
     return wordWrap(raw, termW, `${INDENT}    `);
   }
 
@@ -188,7 +222,7 @@ function entryToAnsiLines(e: DisplayEntry, agentColor: 'green' | 'yellow' | 'mag
 
   if (e.kind === 'code') {
     const codeIndent = `${INDENT}  `;
-    const raw = chalk.yellow(e.text);
+    const raw = chalk.hex(THEME.info)(e.text);
     return wordWrap(raw, termW - codeIndent.length, codeIndent).map((l, i) => i === 0 ? `${codeIndent}${l}` : l);
   }
 
@@ -199,7 +233,7 @@ function entryToAnsiLines(e: DisplayEntry, agentColor: 'green' | 'yellow' | 'mag
   }
 
   if (e.kind === 'heading') {
-    const col = e.color === 'cyan' ? chalk.cyanBright : chalk.white;
+    const col = e.color === 'cyan' ? chalk.hex(THEME.claude) : chalk.hex(THEME.text);
     const raw = col.bold(e.text);
     return wordWrap(raw, maxW, INDENT).map((l, i) => i === 0 ? `${INDENT}${l}` : l);
   }
@@ -262,14 +296,19 @@ function addActionSpacing(raw: DisplayEntry[]): DisplayEntry[] {
   for (let i = 0; i < raw.length; i++) {
     const e = raw[i];
     const prev = i > 0 ? raw[i - 1] : null;
-    const next = i < raw.length - 1 ? raw[i + 1] : null;
     if (e.kind === 'action' && (!prev || (prev.kind !== 'action' && prev.kind !== 'empty'))) {
       out.push({ text: '', kind: 'empty' });
     }
     out.push(e);
-    if (e.kind === 'action' && (!next || (next.kind !== 'action' && next.kind !== 'empty'))) {
-      out.push({ text: '', kind: 'empty' });
-    }
+  }
+  return out;
+}
+
+function compactOutputLines(lines: string[]): string[] {
+  const out: string[] = [];
+  for (const line of lines) {
+    if (line.trim() === '' && out.length > 0 && out[out.length - 1].trim() === '') continue;
+    out.push(line);
   }
   return out;
 }
@@ -302,20 +341,20 @@ function TodoPanel({ items }: { items: TodoItem[] }) {
   const hidden = items.length - MAX_VISIBLE_TODOS;
 
   return (
-    <Box flexDirection="column" borderStyle="round" borderColor="#444444" paddingX={1}>
+    <Box flexDirection="column" borderStyle="round" borderColor={THEME.panelBorder} paddingX={1}>
       <Text>
-        <Text bold color="whiteBright">{'  Plan '}</Text>
+        <Text bold color={THEME.text}>{'  Plan '}</Text>
         <Text dimColor>{`${doneCount}/${total} `}</Text>
-        <Text color="cyanBright">{bar}</Text>
+        <Text color={THEME.claude}>{bar}</Text>
         <Text dimColor>{` ${pct}%`}</Text>
       </Text>
       {visible.map((item) => (
         <Text key={item.id}>
           {item.done
-            ? <Text color="green">{'  ✓ '}</Text>
+            ? <Text color={THEME.codex}>{'  ✓ '}</Text>
             : <Text dimColor>{'  ○ '}</Text>
           }
-          <Text color={item.done ? 'gray' : 'whiteBright'} strikethrough={item.done}>
+          <Text color={item.done ? THEME.muted : THEME.text} strikethrough={item.done}>
             {item.text}
           </Text>
         </Text>
@@ -365,10 +404,10 @@ export function Dashboard({ orchestrator, projectDir, claudePath, codexPath, res
     welcomePrinted.current = true;
     const dir = projectDir.replace(/^\/home\/[^/]+\//, '~/');
 
-    const line1 = `  ${chalk.white.bold('>_ Fedi Cli')} ${chalk.dim('(v1.0)')}`;
+    const line1 = `  ${chalk.hex(THEME.text).bold('>_ Fedi Cli')} ${chalk.dim('(v1.0)')}`;
     const line2 = '';
-    const line3 = `  ${chalk.dim('agents:')}     ${chalk.magentaBright('Opus')} ${chalk.dim('(Director)')}, ${chalk.cyanBright('Sonnet')} ${chalk.dim('(Code)')}, ${chalk.greenBright('Codex')} ${chalk.dim('(Script)')}`;
-    const line4 = `  ${chalk.dim('directory:')}  ${chalk.white(dir)}`;
+    const line3 = `  ${chalk.dim('agents:')}     ${chalk.hex(THEME.opus)('Opus')} ${chalk.dim('(Director)')}, ${chalk.hex(THEME.claude)('Sonnet')} ${chalk.dim('(Code)')}, ${chalk.hex(THEME.codex)('Codex')} ${chalk.dim('(Script)')}`;
+    const line4 = `  ${chalk.dim('directory:')}  ${chalk.hex(THEME.text)(dir)}`;
 
     // Strip ANSI codes to get visible length
     const stripAnsi = (s: string) => s.replace(/\x1b\[[0-9;]*m/g, '');
@@ -386,18 +425,18 @@ export function Dashboard({ orchestrator, projectDir, claudePath, codexPath, res
     const row = (content: string) => {
       const visible = stripAnsi(content).length;
       const padding = Math.max(0, inner - visible);
-      return chalk.dim('  │') + content + ' '.repeat(padding) + chalk.dim('│');
+      return chalk.hex(THEME.border)('  │') + content + ' '.repeat(padding) + chalk.hex(THEME.border)('│');
     };
 
     console.log('');
-    console.log(chalk.dim('  ╭' + '─'.repeat(inner) + '╮'));
+    console.log(chalk.hex(THEME.border)('  ╭' + '─'.repeat(inner) + '╮'));
 
     console.log(row(line1));
     console.log(row(line2));
     console.log(row(line3));
     console.log(row(line4));
 
-    console.log(chalk.dim('  ╰' + '─'.repeat(inner) + '╯'));
+    console.log(chalk.hex(THEME.border)('  ╰' + '─'.repeat(inner) + '╯'));
     console.log('');
     console.log(`  ${chalk.white.bold('Tip:')} ${chalk.dim.italic('Type @opus, @claude, or @codex to speak directly to an agent.')}`);
     console.log('');
@@ -439,8 +478,9 @@ export function Dashboard({ orchestrator, projectDir, claudePath, codexPath, res
         chatMessagesRef.current = chatMessagesRef.current.slice(-MAX_MESSAGES);
       }
 
-      const dot = agent === 'opus' ? chalk.magentaBright('●') : agent === 'claude' ? chalk.cyanBright('●') : chalk.greenBright('●');
-      const agentName = agent === 'opus' ? chalk.magentaBright.bold('Opus') : agent === 'claude' ? chalk.cyanBright.bold('Sonnet') : chalk.greenBright.bold('Codex');
+      const dot = chalk.hex(agentHex(agent))(DOT_ACTIVE);
+      const agentLabel = agentName(agent).padEnd(6);
+      const coloredAgentName = chalk.hex(agentHex(agent)).bold(agentLabel);
       outputLines.push('');
       // First text/heading entry goes on same line as agent header
       const firstIdx = entries.findIndex((e) => e.kind === 'text' || e.kind === 'heading');
@@ -449,7 +489,7 @@ export function Dashboard({ orchestrator, projectDir, claudePath, codexPath, res
         const termW = process.stdout.columns || 80;
         const firstText = firstEntry.text;
         const wrapped = wordWrap(firstText, termW - INDENT.length, INDENT);
-        outputLines.push(`  ${dot} ${agentName}`);
+        outputLines.push(`  ${dot} ${coloredAgentName}`);
         outputLines.push(`${INDENT}${wrapped[0]}`);
         for (let w = 1; w < wrapped.length; w++) outputLines.push(wrapped[w]);
         // Rest of entries (skip the one we already rendered)
@@ -458,7 +498,7 @@ export function Dashboard({ orchestrator, projectDir, claudePath, codexPath, res
           outputLines.push(...entriesToAnsiOutputLines(rest, agentColor));
         }
       } else {
-        outputLines.push(`  ${dot} ${agentName}`);
+        outputLines.push(`  ${dot} ${coloredAgentName}`);
         outputLines.push(...entriesToAnsiOutputLines(entries, agentColor));
       }
       // Track last kind
@@ -467,7 +507,7 @@ export function Dashboard({ orchestrator, projectDir, claudePath, codexPath, res
     }
 
     if (outputLines.length > 0) {
-      console.log(outputLines.join('\n'));
+      console.log(compactOutputLines(outputLines).join('\n'));
     }
   }, []);
 
@@ -579,13 +619,13 @@ export function Dashboard({ orchestrator, projectDir, claudePath, codexPath, res
           const session = sm.loadSession(match.id);
           if (session) {
             const agentMeta: Record<string, { label: string; color: (s: string) => string; dot: string }> = {
-              opus: { label: 'Opus', color: chalk.magentaBright, dot: chalk.magentaBright('●') },
-              claude: { label: 'Sonnet', color: chalk.cyanBright, dot: chalk.cyanBright('●') },
-              codex: { label: 'Codex', color: chalk.greenBright, dot: chalk.greenBright('●') },
-              user: { label: 'User', color: chalk.white, dot: chalk.white('❯') },
+              opus: { label: 'Opus', color: chalk.hex(THEME.opus), dot: chalk.hex(THEME.opus)(DOT_ACTIVE) },
+              claude: { label: 'Sonnet', color: chalk.hex(THEME.claude), dot: chalk.hex(THEME.claude)(DOT_ACTIVE) },
+              codex: { label: 'Codex', color: chalk.hex(THEME.codex), dot: chalk.hex(THEME.codex)(DOT_ACTIVE) },
+              user: { label: 'User', color: chalk.hex(THEME.text), dot: chalk.hex(THEME.text)('❯') },
             };
 
-            console.log(chalk.dim('  ─── Session reprise: ') + chalk.cyanBright(match.id.slice(0, 8)) + chalk.dim(' ───'));
+            console.log(chalk.dim('  ─── Session reprise: ') + chalk.hex(THEME.claude)(match.id.slice(0, 8)) + chalk.dim(' ───'));
             console.log(chalk.dim(`  Tache: ${session.task}`));
             console.log('');
 
@@ -640,7 +680,6 @@ export function Dashboard({ orchestrator, projectDir, claudePath, codexPath, res
 
   const handleInput = useCallback(
     (text: string) => {
-      console.log('');
       const termW = process.stdout.columns || 80;
       const availW = termW - 3;
       const wrapped = wordWrap(text, availW, '   ');
@@ -648,15 +687,15 @@ export function Dashboard({ orchestrator, projectDir, claudePath, codexPath, res
       const printBg = (line: string) => {
         const visible = stripAnsi(line).length;
         const pad = Math.max(0, termW - visible);
-        console.log(chalk.bgHex('#2b2b2b')(line + ' '.repeat(pad)));
+        console.log(chalk.bgHex(THEME.userBubbleBg)(line + ' '.repeat(pad)));
       };
 
-      const userPrefix = chalk.cyanBright(' ❯ ');
-      // Slight vertical padding to make user message bubbles taller and easier to read.
+      const userPrefix = chalk.hex(THEME.userPrefix)(' ❯ ');
+      // Balanced top/bottom padding keeps the text visually centered in the bubble.
       printBg(' ');
-      printBg(`${userPrefix}${chalk.white(wrapped[0] || '')}`);
+      printBg(`${userPrefix}${chalk.hex(THEME.text)(wrapped[0] || '')}`);
       for (let i = 1; i < wrapped.length; i++) {
-        printBg(`   ${chalk.white(wrapped[i])}`);
+        printBg(`   ${chalk.hex(THEME.text)(wrapped[i])}`);
       }
       printBg(' ');
       console.log('');
@@ -687,10 +726,10 @@ export function Dashboard({ orchestrator, projectDir, claudePath, codexPath, res
             const date = new Date(s.startedAt);
             const dateStr = date.toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit' });
             const timeStr = date.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
-            const status = s.finishedAt ? chalk.green('done') : chalk.yellow('run');
+            const status = s.finishedAt ? chalk.hex(THEME.codex)('done') : chalk.hex(THEME.info)('run');
             const task = s.task.length > 40 ? s.task.slice(0, 40) + '...' : s.task;
             const shortId = s.id.slice(0, 8);
-            console.log(`    ${chalk.dim(dateStr)} ${chalk.dim(timeStr)}  ${chalk.cyanBright(shortId)}  ${status}  ${chalk.white(task)}`);
+            console.log(`    ${chalk.dim(dateStr)} ${chalk.dim(timeStr)}  ${chalk.hex(THEME.claude)(shortId)}  ${status}  ${chalk.hex(THEME.text)(task)}`);
           }
           console.log('');
           console.log(chalk.dim('    Voir en detail: fedi --view <id>'));
@@ -737,6 +776,9 @@ export function Dashboard({ orchestrator, projectDir, claudePath, codexPath, res
   const opusLabel = opusRunning ? 'working' : opusStatus === 'waiting' ? 'idle' : opusStatus;
   const claudeLabel = claudeRunning ? 'working' : claudeStatus === 'waiting' ? 'idle' : claudeStatus;
   const codexLabel = codexRunning ? 'working' : codexStatus === 'waiting' ? 'idle' : codexStatus;
+  const opusCell = { name: 'Opus'.padEnd(6), status: opusLabel.padEnd(7) };
+  const claudeCell = { name: 'Sonnet'.padEnd(6), status: claudeLabel.padEnd(7) };
+  const codexCell = { name: 'Codex'.padEnd(6), status: codexLabel.padEnd(7) };
 
   // Ink ALWAYS renders the same small structure — no conditional branches
   // that change the tree shape. This prevents ghost frames in scrollback.
@@ -745,8 +787,8 @@ export function Dashboard({ orchestrator, projectDir, claudePath, codexPath, res
       {thinking && <ThinkingSpinner />}
       {todos.length > 0 && <TodoPanel items={todos} />}
       <Box width="100%" flexGrow={1}>
-        <Box width="100%" flexGrow={1} paddingX={1} paddingY={0} borderStyle="round" borderColor="gray">
-          <Text color="white">{' ❯ '}</Text>
+        <Box width="100%" flexGrow={1} paddingX={1} paddingY={0} borderStyle="round" borderColor={THEME.panelBorder}>
+          <Text color={THEME.text}>{' ❯ '}</Text>
           <Box flexGrow={1}>
             <InputBar onSubmit={handleInput} placeholder="Improve documentation in @filename" />
           </Box>
@@ -755,14 +797,17 @@ export function Dashboard({ orchestrator, projectDir, claudePath, codexPath, res
       <Box paddingX={1} paddingTop={1} justifyContent="space-between">
         <Text dimColor>{'Esc stop · ^C quit · @sessions'}</Text>
         <Text>
-          <Text color={opusRunning ? 'magentaBright' : 'gray'}>{opusRunning ? '● ' : '○ '}</Text>
-          <Text dimColor>{opusLabel.padEnd(7)}</Text>
-          <Text>{'  '}</Text>
-          <Text color={claudeRunning ? 'cyanBright' : 'gray'}>{claudeRunning ? '● ' : '○ '}</Text>
-          <Text dimColor>{claudeLabel.padEnd(7)}</Text>
-          <Text>{'  '}</Text>
-          <Text color={codexRunning ? 'blueBright' : 'gray'}>{codexRunning ? '● ' : '○ '}</Text>
-          <Text dimColor>{codexLabel.padEnd(7)}</Text>
+          <Text color={opusRunning ? THEME.opus : THEME.muted}>{opusRunning ? DOT_ACTIVE : DOT_IDLE}</Text>
+          <Text color={THEME.muted}>{` ${opusCell.name} `}</Text>
+          <Text color={opusRunning ? THEME.opus : THEME.muted}>{opusCell.status}</Text>
+          <Text dimColor>{'  |  '}</Text>
+          <Text color={claudeRunning ? THEME.claude : THEME.muted}>{claudeRunning ? DOT_ACTIVE : DOT_IDLE}</Text>
+          <Text color={THEME.muted}>{` ${claudeCell.name} `}</Text>
+          <Text color={claudeRunning ? THEME.claude : THEME.muted}>{claudeCell.status}</Text>
+          <Text dimColor>{'  |  '}</Text>
+          <Text color={codexRunning ? THEME.codex : THEME.muted}>{codexRunning ? DOT_ACTIVE : DOT_IDLE}</Text>
+          <Text color={THEME.muted}>{` ${codexCell.name} `}</Text>
+          <Text color={codexRunning ? THEME.codex : THEME.muted}>{codexCell.status}</Text>
         </Text>
       </Box>
     </Box>

@@ -7,6 +7,53 @@ export interface StyledLine {
   code?: boolean;
 }
 
+function isTableRow(line: string): boolean {
+  const t = line.trim();
+  return t.startsWith('|') && t.endsWith('|');
+}
+
+function splitTableRow(line: string): string[] {
+  const t = line.trim();
+  const inner = t.slice(1, -1);
+  return inner.split('|').map((cell) => clean(cell.trim()));
+}
+
+function isTableSeparatorRow(line: string): boolean {
+  if (!isTableRow(line)) return false;
+  const t = line.trim().slice(1, -1);
+  const cells = t.split('|').map((c) => c.trim());
+  return cells.length > 0 && cells.every((cell) => /^:?-{3,}:?$/.test(cell));
+}
+
+function formatTableBlock(block: string[]): StyledLine[] {
+  if (block.length < 2 || !isTableSeparatorRow(block[1])) {
+    return block.map((r) => ({ text: clean(r.trim()) }));
+  }
+
+  const header = splitTableRow(block[0]);
+  const bodyRows = block.slice(2).map(splitTableRow);
+  const rowData = [header, ...bodyRows];
+  const colCount = Math.max(...rowData.map((row) => row.length));
+
+  const normalize = (row: string[]) =>
+    Array.from({ length: colCount }, (_, i) => (row[i] ?? '').trim());
+  const rows = rowData.map(normalize);
+
+  const widths = Array.from({ length: colCount }, (_, i) =>
+    Math.max(3, ...rows.map((row) => row[i].length)),
+  );
+
+  const formatRow = (row: string[]) =>
+    `| ${row.map((cell, i) => cell.padEnd(widths[i])).join(' | ')} |`;
+  const separator = `|-${widths.map((w) => '-'.repeat(w)).join('-|-')}-|`;
+
+  return [
+    { text: formatRow(rows[0]), bold: true },
+    { text: separator, dim: true },
+    ...rows.slice(1).map((row) => ({ text: formatRow(row) })),
+  ];
+}
+
 export function renderMarkdown(raw: string): StyledLine[] {
   const lines: StyledLine[] = [];
   const rawLines = raw.split('\n');
@@ -75,6 +122,19 @@ export function renderMarkdown(raw: string): StyledLine[] {
     if (h3) {
       lines.push({ text: '' });
       lines.push({ text: clean(h3[1]), bold: true, color: 'gray' });
+      continue;
+    }
+
+    // Markdown table block
+    if (isTableRow(trimmed) && idx + 1 < rawLines.length && isTableSeparatorRow(rawLines[idx + 1].trim())) {
+      const block: string[] = [trimmed];
+      let j = idx + 1;
+      while (j < rawLines.length && isTableRow(rawLines[j].trim())) {
+        block.push(rawLines[j].trim());
+        j++;
+      }
+      lines.push(...formatTableBlock(block));
+      idx = j - 1;
       continue;
     }
 
