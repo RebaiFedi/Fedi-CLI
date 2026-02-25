@@ -1,0 +1,19 @@
+{
+  "id": "f3c52a85-0456-454e-83fd-69977dc720c9",
+  "version": 2,
+  "task": "salut",
+  "projectDir": "/home/fedi/Bureau/Fedi CLI",
+  "startedAt": 1772014094981,
+  "messages": [
+    {
+      "from": "user",
+      "to": "codex",
+      "content": "salut",
+      "id": "484962ca-ca82-46e8-9414-f1e21feb0df7",
+      "timestamp": 1772014100816,
+      "relayCount": 0
+    }
+  ],
+  "agentSessions": {},
+  "agentStats": {}
+}

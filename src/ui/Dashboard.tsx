@@ -364,11 +364,24 @@ export function Dashboard({ orchestrator, projectDir, claudePath, codexPath, res
     if (welcomePrinted.current) return;
     welcomePrinted.current = true;
     const dir = projectDir.replace(/^\/home\/[^/]+\//, '~/');
-    const w = process.stdout.columns || 80;
-    const inner = w - 6; // width between │...│ (minus "  │" left + "│" right + 2 spaces)
+
+    const line1 = `  ${chalk.white.bold('>_ FEDI CLI')} ${chalk.dim('(v1.0)')}`;
+    const line2 = '';
+    const line3 = `  ${chalk.dim('agents:')}     ${chalk.magentaBright('Opus')} ${chalk.dim('(Director)')}, ${chalk.cyanBright('Sonnet')} ${chalk.dim('(Code)')}, ${chalk.greenBright('Codex')} ${chalk.dim('(Script)')}`;
+    const line4 = `  ${chalk.dim('directory:')}  ${chalk.white(dir)}`;
 
     // Strip ANSI codes to get visible length
     const stripAnsi = (s: string) => s.replace(/\x1b\[[0-9;]*m/g, '');
+
+    const contentWidth = Math.max(
+      stripAnsi(line1).length,
+      stripAnsi(line3).length,
+      stripAnsi(line4).length
+    );
+
+    const termW = process.stdout.columns || 80;
+    const inner = Math.min(contentWidth + 4, termW - 6);
+
     // Build a row: "  │" + content padded to inner width + "│"
     const row = (content: string) => {
       const visible = stripAnsi(content).length;
@@ -378,21 +391,15 @@ export function Dashboard({ orchestrator, projectDir, claudePath, codexPath, res
 
     console.log('');
     console.log(chalk.dim('  ╭' + '─'.repeat(inner) + '╮'));
-    
-    const titleLeft = `  ${chalk.cyanBright.bold('FEDI')} ${chalk.dim('CLI')}  ${chalk.dim('v1.0')}`;
-    const titleRight = chalk.dim('Multi-Agent Orchestrator  ');
-    const paddingTitle = Math.max(0, inner - stripAnsi(titleLeft).length - stripAnsi(titleRight).length);
-    console.log(chalk.dim('  │') + titleLeft + ' '.repeat(paddingTitle) + titleRight + chalk.dim('│'));
-    
-    console.log(chalk.dim('  ├' + '─'.repeat(inner) + '┤'));
-    console.log(row(`  ${chalk.white.bold('AGENTS')}`));
-    console.log(row(`    ${chalk.magentaBright('●')} ${chalk.white.bold('Opus')}    ${chalk.dim('Director · Planner        claude-opus-4-6')}`));
-    console.log(row(`    ${chalk.cyanBright('●')} ${chalk.white.bold('Sonnet')}  ${chalk.dim('Frontend · Developer      claude-sonnet-4-6')}`));
-    console.log(row(`    ${chalk.greenBright('●')} ${chalk.white.bold('Codex')}   ${chalk.dim('Backend  · Scripts        codex-5.3-xhigh')}`));
-    console.log(chalk.dim('  ├' + '─'.repeat(inner) + '┤'));
-    console.log(row(`  ${chalk.white.bold('WORKSPACE')}`));
-    console.log(row(`    ${chalk.dim('Path:')} ${chalk.white(dir)}`));
+
+    console.log(row(line1));
+    console.log(row(line2));
+    console.log(row(line3));
+    console.log(row(line4));
+
     console.log(chalk.dim('  ╰' + '─'.repeat(inner) + '╯'));
+    console.log('');
+    console.log(`  ${chalk.white.bold('Tip:')} ${chalk.dim.italic('Type @opus, @claude, or @codex to speak directly to an agent.')}`);
     console.log('');
   }, [projectDir]);
 
@@ -635,16 +642,19 @@ export function Dashboard({ orchestrator, projectDir, claudePath, codexPath, res
     (text: string) => {
       console.log('');
       const termW = process.stdout.columns || 80;
-      const userPrefix = '  ❯  ';
-      const availW = termW - userPrefix.length;
-      const wrapped = wordWrap(text, availW, '     ');
-      const firstLine = `${userPrefix}${wrapped[0] || ''}`;
-      const padLen = Math.max(0, termW - stripAnsi(firstLine).length);
-      console.log(chalk.bgHex('#2a2a2a').white(`${firstLine}${' '.repeat(padLen)}`));
+      const availW = termW - 3;
+      const wrapped = wordWrap(text, availW, '   ');
+
+      const printBg = (line: string) => {
+        const visible = stripAnsi(line).length;
+        const pad = Math.max(0, termW - visible);
+        console.log(chalk.bgHex('#2b2b2b')(line + ' '.repeat(pad)));
+      };
+
+      const userPrefix = chalk.cyanBright(' ❯ ');
+      printBg(`${userPrefix}${chalk.white(wrapped[0] || '')}`);
       for (let i = 1; i < wrapped.length; i++) {
-        const contLine = wrapped[i];
-        const contPad = Math.max(0, termW - stripAnsi(contLine).length);
-        console.log(chalk.bgHex('#2a2a2a').white(`${contLine}${' '.repeat(contPad)}`));
+        printBg(`   ${chalk.white(wrapped[i])}`);
       }
       console.log('');
 
@@ -731,26 +741,26 @@ export function Dashboard({ orchestrator, projectDir, claudePath, codexPath, res
     <Box flexDirection="column">
       {thinking && <ThinkingSpinner />}
       {todos.length > 0 && <TodoPanel items={todos} />}
-      <Box borderStyle="round" borderColor="#555555" paddingX={1}>
-        <Text color="cyanBright">{'❯ '}</Text>
-        <Box flexGrow={1}>
-          <InputBar onSubmit={handleInput} placeholder="Tapez votre message..." />
+      <Box width="100%" flexGrow={1}>
+        <Box width="100%" flexGrow={1} paddingX={1} paddingY={0} borderStyle="round" borderColor="gray">
+          <Text color="white">{' ❯ '}</Text>
+          <Box flexGrow={1}>
+            <InputBar onSubmit={handleInput} placeholder="Improve documentation in @filename" />
+          </Box>
         </Box>
       </Box>
-      <Box paddingX={1} justifyContent="space-between">
+      <Box paddingX={1} paddingTop={1} justifyContent="space-between">
+        <Text dimColor>{'Esc stop · ^C quit · @sessions'}</Text>
         <Text>
-          <Text color={opusRunning ? 'magentaBright' : 'gray'}>{'● '}</Text>
-          <Text dimColor>{`Opus (${opusLabel})`}</Text>
+          <Text color={opusRunning ? 'magentaBright' : 'gray'}>{opusRunning ? '● ' : '○ '}</Text>
+          <Text dimColor>{opusLabel.padEnd(7)}</Text>
           <Text>{'  '}</Text>
-          <Text color={claudeRunning ? 'cyanBright' : 'gray'}>{'● '}</Text>
-          <Text dimColor>{`Sonnet (${claudeLabel})`}</Text>
+          <Text color={claudeRunning ? 'cyanBright' : 'gray'}>{claudeRunning ? '● ' : '○ '}</Text>
+          <Text dimColor>{claudeLabel.padEnd(7)}</Text>
           <Text>{'  '}</Text>
-          <Text color={codexRunning ? 'greenBright' : 'gray'}>{'● '}</Text>
-          <Text dimColor>{`Codex (${codexLabel})`}</Text>
-          <Text>{'  '}</Text>
-          <Text dimColor>{dir}</Text>
+          <Text color={codexRunning ? 'blueBright' : 'gray'}>{codexRunning ? '● ' : '○ '}</Text>
+          <Text dimColor>{codexLabel.padEnd(7)}</Text>
         </Text>
-        <Text dimColor>{'Esc stop · ^C quit'}</Text>
       </Box>
     </Box>
   );
