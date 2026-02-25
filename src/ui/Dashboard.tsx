@@ -365,7 +365,7 @@ export function Dashboard({ orchestrator, projectDir, claudePath, codexPath, res
     welcomePrinted.current = true;
     const dir = projectDir.replace(/^\/home\/[^/]+\//, '~/');
 
-    const line1 = `  ${chalk.white.bold('>_ FEDI CLI')} ${chalk.dim('(v1.0)')}`;
+    const line1 = `  ${chalk.white.bold('>_ Fedi Cli')} ${chalk.dim('(v1.0)')}`;
     const line2 = '';
     const line3 = `  ${chalk.dim('agents:')}     ${chalk.magentaBright('Opus')} ${chalk.dim('(Director)')}, ${chalk.cyanBright('Sonnet')} ${chalk.dim('(Code)')}, ${chalk.greenBright('Codex')} ${chalk.dim('(Script)')}`;
     const line4 = `  ${chalk.dim('directory:')}  ${chalk.white(dir)}`;
@@ -652,10 +652,13 @@ export function Dashboard({ orchestrator, projectDir, claudePath, codexPath, res
       };
 
       const userPrefix = chalk.cyanBright(' ❯ ');
+      // Slight vertical padding to make user message bubbles taller and easier to read.
+      printBg(' ');
       printBg(`${userPrefix}${chalk.white(wrapped[0] || '')}`);
       for (let i = 1; i < wrapped.length; i++) {
         printBg(`   ${chalk.white(wrapped[i])}`);
       }
+      printBg(' ');
       console.log('');
 
       chatMessagesRef.current.push({
