@@ -12,6 +12,8 @@ import { logger } from '../utils/logger.js';
 const MAX_MESSAGES = 200;
 const INDENT = '    ';
 const FLUSH_INTERVAL = 250;
+const BUBBLE_SIDE_MARGIN = 1;
+const MAX_READABLE_WIDTH = 96;
 const THEME = {
   text: '#F8FAFC',
   muted: '#94A3B8',
@@ -196,8 +198,8 @@ function isTableLine(text: string): boolean {
 
 function entryToAnsiLines(e: DisplayEntry, _agentColor: 'green' | 'yellow' | 'magenta'): string[] {
   const termW = process.stdout.columns || 80;
-  const indentW = INDENT.length;
-  const maxW = termW - indentW;
+  const maxW = Math.max(20, Math.min(termW - INDENT.length, MAX_READABLE_WIDTH));
+  const wrapW = INDENT.length + maxW;
 
   if (e.kind === 'empty') return [''];
 
@@ -212,18 +214,19 @@ function entryToAnsiLines(e: DisplayEntry, _agentColor: 'green' | 'yellow' | 'ma
 
   if (e.kind === 'info') {
     const raw = `${INDENT}  ${chalk.hex(THEME.info)('!')} ${chalk.hex(THEME.info)(e.text)}`;
-    return wordWrap(raw, termW, `${INDENT}    `);
+    return wordWrap(raw, wrapW, `${INDENT}    `);
   }
 
   if (e.kind === 'action') {
     const raw = `${INDENT}    ${chalk.dim(e.text)}`;
-    return wordWrap(raw, termW, `${INDENT}      `);
+    return wordWrap(raw, wrapW, `${INDENT}      `);
   }
 
   if (e.kind === 'code') {
     const codeIndent = `${INDENT}  `;
     const raw = chalk.hex(THEME.info)(e.text);
-    return wordWrap(raw, termW - codeIndent.length, codeIndent).map((l, i) => i === 0 ? `${codeIndent}${l}` : l);
+    const codeMaxW = Math.max(20, Math.min(termW - codeIndent.length, MAX_READABLE_WIDTH));
+    return wordWrap(raw, codeMaxW, codeIndent).map((l, i) => i === 0 ? `${codeIndent}${l}` : l);
   }
 
   if (e.kind === 'separator') {
@@ -292,24 +295,29 @@ function compact(entries: DisplayEntry[]): DisplayEntry[] {
 }
 
 function addActionSpacing(raw: DisplayEntry[]): DisplayEntry[] {
-  const out: DisplayEntry[] = [];
-  for (let i = 0; i < raw.length; i++) {
-    const e = raw[i];
-    const prev = i > 0 ? raw[i - 1] : null;
-    if (e.kind === 'action' && (!prev || (prev.kind !== 'action' && prev.kind !== 'empty'))) {
-      out.push({ text: '', kind: 'empty' });
-    }
-    out.push(e);
-  }
-  return out;
+  // Keep action groups compact; avoid injecting extra blank lines.
+  return raw;
 }
 
 function compactOutputLines(lines: string[]): string[] {
   const out: string[] = [];
-  for (const line of lines) {
-    if (line.trim() === '' && out.length > 0 && out[out.length - 1].trim() === '') continue;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const trimmed = stripAnsi(line).trim();
+    const prevTrimmed = out.length > 0 ? stripAnsi(out[out.length - 1]).trim() : '';
+    const nextTrimmed = i + 1 < lines.length ? stripAnsi(lines[i + 1]).trim() : '';
+
+    const isEmpty = trimmed === '';
+    const prevIsEmpty = prevTrimmed === '';
+    const prevIsSeparator = /^[-─]{3,}$/.test(prevTrimmed);
+    const nextIsSeparator = /^[-─]{3,}$/.test(nextTrimmed);
+
+    // Avoid double blanks and gaps around separator lines.
+    if (isEmpty && (prevIsEmpty || prevIsSeparator || nextIsSeparator)) continue;
     out.push(line);
   }
+  while (out.length > 0 && stripAnsi(out[0]).trim() === '') out.shift();
+  while (out.length > 0 && stripAnsi(out[out.length - 1]).trim() === '') out.pop();
   return out;
 }
 
@@ -481,14 +489,14 @@ export function Dashboard({ orchestrator, projectDir, claudePath, codexPath, res
       const dot = chalk.hex(agentHex(agent))(DOT_ACTIVE);
       const agentLabel = agentName(agent).padEnd(6);
       const coloredAgentName = chalk.hex(agentHex(agent)).bold(agentLabel);
-      outputLines.push('');
       // First text/heading entry goes on same line as agent header
       const firstIdx = entries.findIndex((e) => e.kind === 'text' || e.kind === 'heading');
       if (firstIdx !== -1) {
         const firstEntry = entries[firstIdx];
         const termW = process.stdout.columns || 80;
+        const firstMaxW = Math.max(20, Math.min(termW - INDENT.length, MAX_READABLE_WIDTH));
         const firstText = firstEntry.text;
-        const wrapped = wordWrap(firstText, termW - INDENT.length, INDENT);
+        const wrapped = wordWrap(firstText, firstMaxW, INDENT);
         outputLines.push(`  ${dot} ${coloredAgentName}`);
         outputLines.push(`${INDENT}${wrapped[0]}`);
         for (let w = 1; w < wrapped.length; w++) outputLines.push(wrapped[w]);
@@ -681,25 +689,26 @@ export function Dashboard({ orchestrator, projectDir, claudePath, codexPath, res
   const handleInput = useCallback(
     (text: string) => {
       const termW = process.stdout.columns || 80;
-      const availW = termW - 3;
-      const wrapped = wordWrap(text, availW, '   ');
+      const bubbleWidth = Math.max(20, termW - (BUBBLE_SIDE_MARGIN * 2));
+      const wrapWidth = Math.max(10, Math.min(bubbleWidth - 3, MAX_READABLE_WIDTH)); // reserve " ❯ " prefix
+      const wrapped = wordWrap(text, wrapWidth, '');
 
       const printBg = (line: string) => {
         const visible = stripAnsi(line).length;
-        const pad = Math.max(0, termW - visible);
-        console.log(chalk.bgHex(THEME.userBubbleBg)(line + ' '.repeat(pad)));
+        const pad = Math.max(0, bubbleWidth - visible);
+        const margin = ' '.repeat(BUBBLE_SIDE_MARGIN);
+        console.log(`${margin}${chalk.bgHex(THEME.userBubbleBg)(line + ' '.repeat(pad))}${margin}`);
       };
 
       const userPrefix = chalk.hex(THEME.userPrefix)(' ❯ ');
-      // Balanced top/bottom padding keeps the text visually centered in the bubble.
+      // Vertical padding top + bottom for proper centering
+      console.log('');
       printBg(' ');
       printBg(`${userPrefix}${chalk.hex(THEME.text)(wrapped[0] || '')}`);
       for (let i = 1; i < wrapped.length; i++) {
-        printBg(`   ${chalk.hex(THEME.text)(wrapped[i])}`);
+        printBg(`   ${chalk.hex(THEME.text)(wrapped[i] ?? '')}`);
       }
       printBg(' ');
-      console.log('');
-
       chatMessagesRef.current.push({
         id: randomUUID(), agent: 'user',
         lines: [{ text, kind: 'text' }],
@@ -786,7 +795,7 @@ export function Dashboard({ orchestrator, projectDir, claudePath, codexPath, res
     <Box flexDirection="column">
       {thinking && <ThinkingSpinner />}
       {todos.length > 0 && <TodoPanel items={todos} />}
-      <Box width="100%" flexGrow={1}>
+      <Box width="100%" flexGrow={1} paddingTop={1}>
         <Box width="100%" flexGrow={1} paddingX={1} paddingY={0} borderStyle="round" borderColor={THEME.panelBorder}>
           <Text color={THEME.text}>{' ❯ '}</Text>
           <Box flexGrow={1}>

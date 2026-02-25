@@ -75,12 +75,10 @@ export function renderMarkdown(raw: string): StyledLine[] {
       if (inCodeBlock) {
         // Opening — show language tag if present
         const lang = trimmed.slice(3).trim();
-        lines.push({ text: '' });
         lines.push({ text: lang ? `── ${lang} ──────────────────────────` : '──────────────────────────────────', dim: true });
       } else {
         // Closing
         lines.push({ text: '──────────────────────────────────', dim: true });
-        lines.push({ text: '' });
       }
       continue;
     }
@@ -93,34 +91,27 @@ export function renderMarkdown(raw: string): StyledLine[] {
 
     // Horizontal rule ---
     if (/^[-]{3,}$/.test(trimmed) || /^[*]{3,}$/.test(trimmed)) {
-      lines.push({ text: '' });
       lines.push({ text: '─────────────────────────────────────', dim: true });
-      lines.push({ text: '' });
       continue;
     }
 
     // # H1
     const h1 = trimmed.match(/^#\s+(.+)/);
     if (h1) {
-      lines.push({ text: '' });
       lines.push({ text: clean(h1[1]).toUpperCase(), bold: true, color: 'cyan' });
-      lines.push({ text: '' });
       continue;
     }
 
     // ## H2
     const h2 = trimmed.match(/^##\s+(.+)/);
     if (h2) {
-      lines.push({ text: '' });
       lines.push({ text: clean(h2[1]), bold: true, color: 'white' });
-      lines.push({ text: '' });
       continue;
     }
 
     // ### H3
     const h3 = trimmed.match(/^###\s+(.+)/);
     if (h3) {
-      lines.push({ text: '' });
       lines.push({ text: clean(h3[1]), bold: true, color: 'gray' });
       continue;
     }
@@ -169,9 +160,8 @@ export function renderMarkdown(raw: string): StyledLine[] {
       continue;
     }
 
-    // Bold line (like "**Section title:**") — add space before it
+    // Bold line (like "**Section title:**")
     if (/^\*\*.+\*\*/.test(trimmed) && !trimmed.startsWith('-')) {
-      lines.push({ text: '' });
       lines.push({ text: clean(trimmed), bold: true, color: 'white' });
       continue;
     }
