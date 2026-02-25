@@ -44,11 +44,12 @@ function agentName(agent: AgentId): string {
 // ── Filters ─────────────────────────────────────────────────────────────────
 
 const TOOL_RE = /^\s*(EnterPlanMode|AskUserQuestion|ExitPlanMode|TodoWrite|TaskCreate|TaskUpdate|TaskList|TaskGet|NotebookEdit|EnterWorktree|WebSearch|WebFetch)\s*$/;
-const RELAY_PREFIX_RE = /^\s*\[(TO|FROM):(CLAUDE|CODEX|OPUS)\]\s*/i;
+const RELAY_PREFIX_RE = /\[(TO|FROM):(CLAUDE|CODEX|OPUS)\]\s*/gi;
 const RELAY_LINE_RE = /^\s*\[TO:(CLAUDE|CODEX|OPUS)\]\s/i;
 const TASK_ADD_RE = /\[TASK:add\]\s*(.+)/i;
 const TASK_DONE_RE = /\[TASK:done\]\s*(.+)/i;
 const TASK_TAG_LINE_RE = /^\s*\[TASK:(add|done)\]\s*/i;
+const CMD_OUTPUT_HEADER_RE = /^={3,}\s*.+\s*={3,}$/;  // ===== filename ===== lines from codex printf
 
 // ── Thinking verbs ──────────────────────────────────────────────────────────
 
@@ -105,6 +106,7 @@ function outputToEntries(line: OutputLine): DisplayEntry[] {
     .split('\n')
     .filter((l) => !RELAY_LINE_RE.test(l))
     .filter((l) => !TASK_TAG_LINE_RE.test(l))
+    .filter((l) => !CMD_OUTPUT_HEADER_RE.test(l.trim()))
     .map((l) => l.replace(RELAY_PREFIX_RE, ''))
     .join('\n');
 
@@ -522,14 +524,11 @@ export function Dashboard({ orchestrator, projectDir, claudePath, codexPath, res
             console.log(compactOutputLines(outputLines).join('\n'));
             outputLines.length = 0;
           }
+          console.log('');
           // Re-show agent label when switching
           const dot = chalk.hex(agentHex(agent))(DOT_ACTIVE);
           const agName = chalk.hex(agentHex(agent)).bold(agentName(agent));
-          const currentId = currentMsgRef.current.get(agent);
-          if (currentId) {
-            console.log('');
-            outputLines.push(`  ${dot} ${agName}  ${chalk.dim('(suite)')}`);
-          }
+          outputLines.push(`  ${dot} ${agName}`);
         }
         lastPrintedAgent.current = agent;
         const actionText = allActions.length <= 1
@@ -557,7 +556,7 @@ export function Dashboard({ orchestrator, projectDir, claudePath, codexPath, res
             // Re-show agent label so user knows who's speaking
             const dot = chalk.hex(agentHex(agent))(DOT_ACTIVE);
             const agName = chalk.hex(agentHex(agent)).bold(agentName(agent));
-            outputLines.push(`  ${dot} ${agName}  ${chalk.dim('(suite)')}`);
+            outputLines.push(`  ${dot} ${agName}`);
           }
           lastPrintedAgent.current = agent;
           msg.lines.push(...entries);
@@ -930,6 +929,7 @@ export function Dashboard({ orchestrator, projectDir, claudePath, codexPath, res
 
   return (
     <Box flexDirection="column">
+      <Text>{' '}</Text>
       {thinking ? <ThinkingSpinner /> : <Text>{' '}</Text>}
       {todos.length > 0 && <TodoPanel items={todos} />}
       <Box width="100%" flexGrow={1}>

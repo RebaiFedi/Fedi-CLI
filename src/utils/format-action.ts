@@ -51,6 +51,7 @@ function cleanCommand(cmd: string): string {
   if (/^(curl|wget)\b/.test(c)) return 'fetching url';
   if (/^pwd/.test(c)) return 'checking dir';
   if (/^wc\b/.test(c)) return 'counting';
+  if (/^printf\b/.test(c)) return 'reading files';
 
   return c.length > 40 ? c.slice(0, 37) + '...' : c;
 }

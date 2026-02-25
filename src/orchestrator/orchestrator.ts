@@ -38,6 +38,8 @@ export class Orchestrator {
     ['opus', 0], ['claude', 0], ['codex', 0],
   ]);
   private sessionManager: SessionManager | null = null;
+  /** Agents currently working on a relay from Opus — text output muted, actions only */
+  private agentsOnRelay: Set<AgentId> = new Set();
 
   setConfig(config: Omit<SessionConfig, 'task'>) {
     this.config = config;
@@ -66,19 +68,38 @@ export class Orchestrator {
     });
     this.opus.onStatusChange((s) => cb.onAgentStatus('opus', s));
 
-    // Claude output & status
+    // Claude output & status — mute text when working on relay (actions still visible)
     this.claude.onOutput((line) => {
+      if (this.agentsOnRelay.has('claude') && line.type === 'stdout') {
+        // Text muted during relay — only relay detection still runs
+        this.detectRelayPatterns('claude', line.text);
+        return;
+      }
       cb.onAgentOutput('claude', line);
       this.detectRelayPatterns('claude', line.text);
     });
-    this.claude.onStatusChange((s) => cb.onAgentStatus('claude', s));
+    this.claude.onStatusChange((s) => {
+      if (s === 'waiting' || s === 'idle' || s === 'stopped' || s === 'error') {
+        this.agentsOnRelay.delete('claude');
+      }
+      cb.onAgentStatus('claude', s);
+    });
 
-    // Codex output & status
+    // Codex output & status — mute text when working on relay (actions still visible)
     this.codex.onOutput((line) => {
+      if (this.agentsOnRelay.has('codex') && line.type === 'stdout') {
+        this.detectRelayPatterns('codex', line.text);
+        return;
+      }
       cb.onAgentOutput('codex', line);
       this.detectRelayPatterns('codex', line.text);
     });
-    this.codex.onStatusChange((s) => cb.onAgentStatus('codex', s));
+    this.codex.onStatusChange((s) => {
+      if (s === 'waiting' || s === 'idle' || s === 'stopped' || s === 'error') {
+        this.agentsOnRelay.delete('codex');
+      }
+      cb.onAgentStatus('codex', s);
+    });
 
     this.bus.on('relay', (msg: Message) => cb.onRelay(msg));
     this.bus.on('relay-blocked', (msg: Message) => cb.onRelayBlocked(msg));
@@ -212,6 +233,8 @@ export class Orchestrator {
   }
 
   sendToAgent(agent: AgentId, text: string) {
+    // User speaking directly to agent — clear relay mute so output is visible
+    this.agentsOnRelay.delete(agent);
     this.bus.send({ from: 'user', to: agent, content: text });
   }
 
@@ -243,6 +266,7 @@ export class Orchestrator {
         const content = toClaudeMatch[1].trim();
         if (content) {
           logger.info(`[ORCH] Relay: ${from} → claude: ${content.slice(0, 80)}`);
+          if (from === 'opus') this.agentsOnRelay.add('claude');
           this.recordRelay();
           this.bus.relay(from, 'claude', content);
         }
@@ -253,6 +277,7 @@ export class Orchestrator {
         const content = toCodexMatch[1].trim();
         if (content) {
           logger.info(`[ORCH] Relay: ${from} → codex: ${content.slice(0, 80)}`);
+          if (from === 'opus') this.agentsOnRelay.add('codex');
           this.recordRelay();
           this.bus.relay(from, 'codex', content);
         }
