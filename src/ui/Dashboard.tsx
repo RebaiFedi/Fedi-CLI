@@ -281,6 +281,7 @@ interface DashboardProps {
   projectDir: string;
   claudePath: string;
   codexPath: string;
+  resumeSessionId?: string;
 }
 
 // ── Todo panel ──────────────────────────────────────────────────────────────
@@ -340,7 +341,7 @@ interface BufferedEntry { agent: AgentId; entries: DisplayEntry[]; }
 // - No spinners in chat — they cause 30fps re-renders that block scroll
 // - Scroll is FREE — scrollback is native terminal, never touched by Ink
 
-export function Dashboard({ orchestrator, projectDir, claudePath, codexPath }: DashboardProps) {
+export function Dashboard({ orchestrator, projectDir, claudePath, codexPath, resumeSessionId }: DashboardProps) {
   const { exit } = useApp();
   const { stdout } = useStdout();
 
@@ -469,7 +470,7 @@ export function Dashboard({ orchestrator, projectDir, claudePath, codexPath }: D
       setThinking(null);
       orchestrator.stop();
       console.log('');
-      console.log(chalk.dim('Agents stopped. Ctrl+C to quit.'));
+      console.log(chalk.dim('  Agents stoppes. Tapez un message pour relancer, ou Ctrl+C pour quitter.'));
     }
   });
 
@@ -554,6 +555,65 @@ export function Dashboard({ orchestrator, projectDir, claudePath, codexPath }: D
         }
       },
     });
+    // Resume session if --resume flag was passed
+    if (resumeSessionId) {
+      const sm = orchestrator.getSessionManager();
+      if (sm) {
+        const sessions = sm.listSessions();
+        const match = sessions.find(s => s.id.startsWith(resumeSessionId));
+        if (match) {
+          const session = sm.loadSession(match.id);
+          if (session) {
+            const agentMeta: Record<string, { label: string; color: (s: string) => string; dot: string }> = {
+              haiku: { label: 'Opus', color: chalk.magentaBright, dot: chalk.magentaBright('●') },
+              claude: { label: 'Sonnet', color: chalk.cyanBright, dot: chalk.cyanBright('●') },
+              codex: { label: 'Codex', color: chalk.greenBright, dot: chalk.greenBright('●') },
+              user: { label: 'User', color: chalk.white, dot: chalk.white('❯') },
+            };
+
+            console.log(chalk.dim('  ─── Session reprise: ') + chalk.cyanBright(match.id.slice(0, 8)) + chalk.dim(' ───'));
+            console.log(chalk.dim(`  Tache: ${session.task}`));
+            console.log('');
+
+            // Show last messages from the session (max 10)
+            const recentMsgs = session.messages.slice(-10);
+            for (const msg of recentMsgs) {
+              const meta = agentMeta[msg.from] ?? { label: msg.from, color: chalk.white, dot: chalk.dim('·') };
+              const content = msg.content.length > 100 ? msg.content.slice(0, 100) + '...' : msg.content;
+              if (msg.from === 'user') {
+                console.log(`  ${chalk.dim('❯')}  ${chalk.white(content)}`);
+              } else {
+                console.log(`  ${meta.dot} ${chalk.bold(meta.color(meta.label))}`);
+                console.log(`${INDENT}${chalk.dim(content)}`);
+              }
+            }
+
+            console.log('');
+            console.log(chalk.dim('  ─── Fin historique ───'));
+            console.log('');
+
+            // Build resume context from last 5 messages
+            const contextLines = session.messages.slice(-5).map(m => {
+              const label = agentMeta[m.from]?.label ?? m.from;
+              const target = agentMeta[m.to]?.label ?? m.to;
+              const short = m.content.length > 150 ? m.content.slice(0, 150) + '...' : m.content;
+              return `[${label}->${target}] ${short}`;
+            });
+
+            const resumePrompt = `SESSION REPRISE — Voici le contexte de la session precedente:\n\nTACHE ORIGINALE: ${session.task}\n\n--- HISTORIQUE ---\n${contextLines.join('\n')}\n--- FIN ---\n\nLa session reprend. Attends le prochain message du user.`;
+
+            setThinking(randomVerb());
+            orchestrator.startWithTask(resumePrompt).catch((err) => logger.error(`[DASHBOARD] Resume error: ${err}`));
+          } else {
+            console.log(chalk.red(`  Session ${resumeSessionId} non trouvee ou corrompue.`));
+          }
+        } else {
+          console.log(chalk.red(`  Session ${resumeSessionId} non trouvee.`));
+          console.log(chalk.dim('  Utilisez: fedi --sessions pour voir la liste.'));
+        }
+      }
+    }
+
     const handleExit = () => { orchestrator.stop().finally(() => exit()); };
     process.on('SIGINT', handleExit);
     process.on('SIGTERM', handleExit);
@@ -562,7 +622,7 @@ export function Dashboard({ orchestrator, projectDir, claudePath, codexPath }: D
       process.off('SIGTERM', handleExit);
       if (flushTimer.current) clearTimeout(flushTimer.current);
     };
-  }, [orchestrator, exit, projectDir, claudePath, codexPath, processTaskTags, enqueueOutput, flushBuffer]);
+  }, [orchestrator, exit, projectDir, claudePath, codexPath, resumeSessionId, processTaskTags, enqueueOutput, flushBuffer]);
 
   const handleInput = useCallback(
     (text: string) => {
@@ -619,9 +679,11 @@ export function Dashboard({ orchestrator, projectDir, claudePath, codexPath }: D
         return;
       }
 
-      if (!orchestrator.isStarted) {
+      if (!orchestrator.isStarted || stopped) {
+        // Restart after stop or first message
+        setStopped(false);
         setTodos([]);
-        orchestrator.startWithTask(text).catch((err) => logger.error(`[DASHBOARD] Start error: ${err}`));
+        orchestrator.restart(text).catch((err) => logger.error(`[DASHBOARD] Start error: ${err}`));
         return;
       }
       if (text.startsWith('@haiku ')) { orchestrator.sendToAgent('haiku', text.slice(7)); return; }
@@ -629,7 +691,7 @@ export function Dashboard({ orchestrator, projectDir, claudePath, codexPath }: D
       if (text.startsWith('@claude ')) { orchestrator.sendToAgent('claude', text.slice(8)); return; }
       orchestrator.sendUserMessage(text);
     },
-    [orchestrator],
+    [orchestrator, stopped],
   );
 
   const haikuRunning = haikuStatus === 'running';

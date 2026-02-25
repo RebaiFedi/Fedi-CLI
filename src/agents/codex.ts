@@ -104,6 +104,11 @@ export class CodexAgent implements AgentProcess {
           const event = JSON.parse(line);
           this.handleStreamEvent(event);
         } catch {
+          // Filter out Codex CLI banner/noise lines
+          if (this.isNoiseLine(line)) {
+            logger.debug(`[CODEX] Filtered noise: ${line.slice(0, 80)}`);
+            return;
+          }
           // Non-JSON output, show as-is
           this.emit({ text: line, timestamp: Date.now(), type: 'stdout' });
         }
@@ -248,6 +253,24 @@ export class CodexAgent implements AgentProcess {
       }
       this.setStatus('waiting');
     }
+  }
+
+  /** Filter Codex CLI banner and noise lines that aren't actual agent output */
+  private isNoiseLine(line: string): boolean {
+    const trimmed = line.trim();
+    // Codex CLI banner: ">_ OpenAI Codex (v0.104.0)"
+    if (/^>_\s*OpenAI\s+Codex/i.test(trimmed)) return true;
+    // Directory line: "directory: /path/..."
+    if (/^directory:\s+/i.test(trimmed)) return true;
+    // Model info lines
+    if (/^model:\s+/i.test(trimmed)) return true;
+    // Provider lines
+    if (/^provider:\s+/i.test(trimmed)) return true;
+    // Separator lines (only dashes/boxes)
+    if (/^[─━┌┐└┘├┤┬┴┼│\-=+]+$/.test(trimmed)) return true;
+    // Approval mode lines
+    if (/^approval mode:/i.test(trimmed)) return true;
+    return false;
   }
 
   getSessionId(): string | null {

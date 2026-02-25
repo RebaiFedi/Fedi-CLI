@@ -33,7 +33,8 @@ function printSessionList(projectDir: string) {
   }
 
   console.log('');
-  console.log(chalk.dim('  Pour voir une session: fedi --view <id>'));
+  console.log(chalk.dim('  Voir:     fedi --view <id>'));
+  console.log(chalk.dim('  Reprendre: fedi --resume <id>'));
   console.log('');
 }
 
@@ -121,6 +122,17 @@ export async function main() {
     process.exit(0);
   }
 
+  // Handle --resume <id> flag
+  const resumeIdx = args.indexOf('--resume');
+  let resumeSessionId: string | undefined;
+  if (resumeIdx !== -1) {
+    resumeSessionId = args[resumeIdx + 1];
+    if (!resumeSessionId) {
+      console.error(chalk.red('  Usage: fedi --resume <session-id>'));
+      process.exit(1);
+    }
+  }
+
   const clis = await detectAll();
 
   if (!clis.claude.available) {
@@ -144,6 +156,7 @@ export async function main() {
       projectDir={projectDir}
       claudePath={clis.claude.path!}
       codexPath={clis.codex.path!}
+      resumeSessionId={resumeSessionId}
     />,
   );
 

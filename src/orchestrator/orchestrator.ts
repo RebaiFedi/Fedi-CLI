@@ -188,6 +188,20 @@ export class Orchestrator {
 
   get isStarted() { return this.started; }
 
+  /** Restart after stop — reset state and start fresh with new task */
+  async restart(task: string) {
+    // Reset internal state
+    this.started = false;
+    this.claudeStarted = false;
+    this.codexStarted = false;
+    this.agentLastContextIndex = new Map([
+      ['haiku', 0], ['claude', 0], ['codex', 0],
+    ]);
+
+    // Start fresh
+    await this.startWithTask(task);
+  }
+
   sendUserMessage(text: string) {
     this.bus.send({ from: 'user', to: 'haiku', content: text });
   }

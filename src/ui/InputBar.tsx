@@ -8,6 +8,7 @@ interface InputBarProps {
 }
 
 const PASTE_MIN_LINES = 3; // Only treat as paste if 3+ newlines
+const MAX_HISTORY = 50;
 
 export function InputBar({ onSubmit, placeholder }: InputBarProps) {
   const [value, setValue] = useState('');
@@ -17,6 +18,11 @@ export function InputBar({ onSubmit, placeholder }: InputBarProps) {
   const { stdin } = useStdin();
   const skipNextChange = useRef(false);
   const prevValue = useRef('');
+
+  // ── Input history (arrow up/down) ──────────────────────────────────────
+  const history = useRef<string[]>([]);
+  const historyIndex = useRef(-1);      // -1 = not browsing history
+  const savedDraft = useRef('');         // saves current input when browsing
 
   // Detect paste via raw stdin
   useEffect(() => {
@@ -58,16 +64,47 @@ export function InputBar({ onSubmit, placeholder }: InputBarProps) {
 
     prevValue.current = text;
     setValue(text);
+    // Reset history browsing when user types
+    historyIndex.current = -1;
   };
 
-  // Also catch backspace/escape via useInput for reliability
-  useInput((input, key) => {
+  // Catch arrow up/down + backspace/escape via useInput
+  useInput((_input, key) => {
     if (pastedLabel && value === '' && (key.backspace || key.delete)) {
       clearPaste();
     }
     if (pastedLabel && key.escape) {
       clearPaste();
       setValue('');
+    }
+
+    // Arrow UP — go back in history
+    if (key.upArrow && history.current.length > 0) {
+      if (historyIndex.current === -1) {
+        // Save current draft before browsing
+        savedDraft.current = value;
+        historyIndex.current = history.current.length - 1;
+      } else if (historyIndex.current > 0) {
+        historyIndex.current--;
+      }
+      const histVal = history.current[historyIndex.current];
+      setValue(histVal);
+      prevValue.current = histVal;
+    }
+
+    // Arrow DOWN — go forward in history / back to draft
+    if (key.downArrow && historyIndex.current !== -1) {
+      if (historyIndex.current < history.current.length - 1) {
+        historyIndex.current++;
+        const histVal = history.current[historyIndex.current];
+        setValue(histVal);
+        prevValue.current = histVal;
+      } else {
+        // Back to saved draft
+        historyIndex.current = -1;
+        setValue(savedDraft.current);
+        prevValue.current = savedDraft.current;
+      }
     }
   });
 
@@ -83,7 +120,19 @@ export function InputBar({ onSubmit, placeholder }: InputBarProps) {
     const pasted = fullText.current.trim();
     const toSend = pasted ? (extra ? `${pasted}\n\n${extra}` : pasted) : text;
     if (!toSend.trim()) return;
-    onSubmit(toSend.trim());
+
+    // Add to history
+    const msg = toSend.trim();
+    if (msg && (history.current.length === 0 || history.current[history.current.length - 1] !== msg)) {
+      history.current.push(msg);
+      if (history.current.length > MAX_HISTORY) {
+        history.current.shift();
+      }
+    }
+    historyIndex.current = -1;
+    savedDraft.current = '';
+
+    onSubmit(msg);
     clearPaste();
   };
 

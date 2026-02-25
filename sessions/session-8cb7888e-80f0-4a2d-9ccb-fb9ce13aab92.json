@@ -4,7 +4,32 @@
   "task": "salut bro",
   "projectDir": "/home/fedi/Bureau/Fedi CLI",
   "startedAt": 1772007307588,
-  "messages": [],
+  "messages": [
+    {
+      "from": "user",
+      "to": "haiku",
+      "content": "cava @codex?",
+      "id": "f7e786c9-e64f-4ae0-a2fb-7c9c710209ee",
+      "timestamp": 1772007872760,
+      "relayCount": 0
+    },
+    {
+      "from": "user",
+      "to": "codex",
+      "content": "bonjour",
+      "id": "00a4ecce-9651-4b57-ba7e-751dba474297",
+      "timestamp": 1772007881319,
+      "relayCount": 0
+    },
+    {
+      "from": "user",
+      "to": "codex",
+      "content": "quesque tu ma dit ?",
+      "id": "6a6226d0-1794-437d-ba90-4b76f8fdcee9",
+      "timestamp": 1772007934710,
+      "relayCount": 0
+    }
+  ],
   "agentSessions": {},
   "agentStats": {}
 }
