@@ -372,8 +372,8 @@ export function Dashboard({ orchestrator, projectDir, claudePath, codexPath }: D
     console.log(chalk.dim('  ┌' + '─'.repeat(inner) + '┐'));
     console.log(row(`  ${chalk.white.bold('FEDI CLI')}  ${chalk.dim('—  v1.0')}`));
     console.log(chalk.dim('  ├' + '─'.repeat(inner) + '┤'));
-    console.log(row(`  ${chalk.magentaBright('●')} ${chalk.white.bold('Haiku')}   ${chalk.dim('Director · Plan        claude-haiku-4.5')}`));
-    console.log(row(`  ${chalk.cyanBright('●')} ${chalk.white.bold('Claude')}  ${chalk.dim('Frontend · Code        claude-opus-4-6')}`));
+    console.log(row(`  ${chalk.magentaBright('●')} ${chalk.white.bold('Opus')}    ${chalk.dim('Director · Plan        claude-opus-4-6')}`));
+    console.log(row(`  ${chalk.cyanBright('●')} ${chalk.white.bold('Sonnet')}  ${chalk.dim('Frontend · Code        claude-sonnet-4-6')}`));
     console.log(row(`  ${chalk.greenBright('●')} ${chalk.white.bold('Codex')}   ${chalk.dim('Backend · Code         codex-5.3-xhigh')}`));
     console.log(chalk.dim('  ├' + '─'.repeat(inner) + '┤'));
     console.log(row(`  ${chalk.dim('project')} ${chalk.white(dir)}`));
@@ -418,7 +418,7 @@ export function Dashboard({ orchestrator, projectDir, claudePath, codexPath }: D
       }
 
       const dot = agent === 'haiku' ? chalk.magentaBright('●') : agent === 'claude' ? chalk.cyanBright('●') : chalk.greenBright('●');
-      const agentName = agent === 'haiku' ? chalk.magentaBright.bold('Haiku') : agent === 'claude' ? chalk.cyanBright.bold('Claude') : chalk.greenBright.bold('Codex');
+      const agentName = agent === 'haiku' ? chalk.magentaBright.bold('Opus') : agent === 'claude' ? chalk.cyanBright.bold('Sonnet') : chalk.greenBright.bold('Codex');
       outputLines.push('');
       // First text/heading entry goes on same line as agent header
       const firstIdx = entries.findIndex((e) => e.kind === 'text' || e.kind === 'heading');
@@ -599,10 +599,10 @@ export function Dashboard({ orchestrator, projectDir, claudePath, codexPath }: D
       <Box paddingX={1} justifyContent="space-between">
         <Text>
           <Text color={haikuRunning ? 'magentaBright' : 'gray'}>{'● '}</Text>
-          <Text dimColor>{`Haiku (${haikuLabel})`}</Text>
+          <Text dimColor>{`Opus (${haikuLabel})`}</Text>
           <Text>{'  '}</Text>
           <Text color={claudeRunning ? 'cyanBright' : 'gray'}>{'● '}</Text>
-          <Text dimColor>{`Claude (${claudeLabel})`}</Text>
+          <Text dimColor>{`Sonnet (${claudeLabel})`}</Text>
           <Text>{'  '}</Text>
           <Text color={codexRunning ? 'greenBright' : 'gray'}>{'● '}</Text>
           <Text dimColor>{`Codex (${codexLabel})`}</Text>

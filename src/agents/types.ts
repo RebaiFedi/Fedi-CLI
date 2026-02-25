@@ -5,8 +5,8 @@ import { z } from 'zod';
 export type AgentId = 'claude' | 'codex' | 'haiku';
 
 export const AGENT_LABELS: Record<AgentId, string> = {
-  haiku: 'Haiku',
-  claude: 'Claude Code',
+  haiku: 'Opus',
+  claude: 'Sonnet',
   codex: 'Codex CLI',
 };
 
@@ -98,6 +98,25 @@ export interface AgentProcess {
   stop(): Promise<void>;
   onOutput(handler: (line: OutputLine) => void): void;
   onStatusChange(handler: (status: AgentStatus) => void): void;
+  getSessionId(): string | null;
+}
+
+// ── Session persistence (v2) ────────────────────────────────────────────────
+
+export interface SessionData {
+  id: string;
+  version: 2;
+  task: string;
+  projectDir: string;
+  startedAt: number;
+  finishedAt?: number;
+  messages: Message[];
+  agentSessions: {
+    haiku?: string;
+    claude?: string;
+    codex?: string;
+  };
+  agentStats: Record<string, { linesOutput: number; duration: number }>;
 }
 
 // ── Chat message (unified view) ─────────────────────────────────────────────

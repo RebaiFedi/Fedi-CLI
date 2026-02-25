@@ -13,6 +13,8 @@ export class CodexAgent implements AgentProcess {
   private outputHandlers: Array<(line: OutputLine) => void> = [];
   private statusHandlers: Array<(status: AgentStatus) => void> = [];
   private activeProcess: ReturnType<typeof spawn> | null = null;
+  private systemPromptSent = false;
+  private contextReminder: string = '';
 
   private setStatus(s: AgentStatus) {
     this.status = s;
@@ -39,11 +41,23 @@ export class CodexAgent implements AgentProcess {
 
     const fullPrompt = `${systemPrompt}\n\nNow begin working on the task.`;
     await this.exec(fullPrompt);
+    this.systemPromptSent = true;
+  }
+
+  setContextReminder(reminder: string) {
+    this.contextReminder = reminder;
   }
 
   send(prompt: string) {
     this.setStatus('running');
-    this.exec(prompt).catch((err) => {
+    // If session was lost (no threadId) but system prompt was already sent,
+    // prepend a compact reminder instead of the full 600-token prompt
+    let finalPrompt = prompt;
+    if (!this.sessionId && this.systemPromptSent && this.contextReminder) {
+      finalPrompt = `${this.contextReminder}\n\n${prompt}`;
+      logger.info('[CODEX] Session lost — prepending compact context reminder');
+    }
+    this.exec(finalPrompt).catch((err) => {
       logger.error(`[CODEX] exec error: ${err}`);
       this.setStatus('error');
     });
@@ -184,6 +198,10 @@ export class CodexAgent implements AgentProcess {
     if (eventType === 'turn.completed') {
       this.setStatus('waiting');
     }
+  }
+
+  getSessionId(): string | null {
+    return this.sessionId;
   }
 
   async stop(): Promise<void> {

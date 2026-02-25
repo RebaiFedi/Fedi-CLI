@@ -89,4 +89,27 @@ export class MessageBus extends EventEmitter {
   getRelayHistory(): readonly Message[] {
     return this.history.filter(m => m.correlationId != null);
   }
+
+  /**
+   * Get a compact summary of recent messages that `forAgent` hasn't seen yet.
+   * Used to inject cross-agent context when relaying messages.
+   */
+  getContextSummary(forAgent: AgentId, sinceIndex: number, maxMessages = 5): { summary: string; newIndex: number } {
+    const relevant = this.history
+      .slice(sinceIndex)
+      .filter(m => m.to !== forAgent && m.from !== forAgent);
+
+    if (relevant.length === 0) return { summary: '', newIndex: this.history.length };
+
+    const recent = relevant.slice(-maxMessages);
+    const lines = recent.map(m => {
+      const content = m.content.length > 150 ? m.content.slice(0, 150) + '...' : m.content;
+      return `[${m.from.toUpperCase()}→${m.to.toUpperCase()}] ${content}`;
+    });
+
+    return {
+      summary: lines.join('\n'),
+      newIndex: this.history.length,
+    };
+  }
 }

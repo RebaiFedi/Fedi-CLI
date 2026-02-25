@@ -40,7 +40,7 @@ export class ClaudeAgent implements AgentProcess {
 
     const args = [
       '-p',
-      '--model', 'claude-opus-4-6',
+      '--model', 'claude-sonnet-4-6',
       '--input-format', 'stream-json',
       '--output-format', 'stream-json',
       '--verbose',
@@ -175,6 +175,10 @@ export class ClaudeAgent implements AgentProcess {
     const json = JSON.stringify(obj);
     logger.debug(`[CLAUDE] Sending: ${json.slice(0, 200)}`);
     this.process.stdin.write(json + '\n');
+  }
+
+  getSessionId(): string | null {
+    return this.sessionId;
   }
 
   async stop(): Promise<void> {

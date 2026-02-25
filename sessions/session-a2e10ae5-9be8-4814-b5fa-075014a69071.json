@@ -1,0 +1,27 @@
+{
+  "id": "a2e10ae5-9be8-4814-b5fa-075014a69071",
+  "version": 2,
+  "task": "bonjour",
+  "projectDir": "/home/fedi/Bureau/Fedi CLI",
+  "startedAt": 1772005166131,
+  "messages": [
+    {
+      "from": "user",
+      "to": "haiku",
+      "content": "est ce que codex et sonnet avec nous ? il voir ce que jai dit ?",
+      "id": "30944db9-4638-43d3-b71e-e4338eb44ce2",
+      "timestamp": 1772005341284,
+      "relayCount": 0
+    },
+    {
+      "from": "user",
+      "to": "haiku",
+      "content": "quel sont les models que on a ? sonnet 3.5 ? et tois opus 3.5 ? et codex 5.2 ?",
+      "id": "8e7d4d20-0349-4d56-ad48-37f2460182d4",
+      "timestamp": 1772005411111,
+      "relayCount": 0
+    }
+  ],
+  "agentSessions": {},
+  "agentStats": {}
+}

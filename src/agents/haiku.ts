@@ -40,7 +40,7 @@ export class HaikuAgent implements AgentProcess {
 
     const args = [
       '-p',
-      '--model', 'claude-haiku-4-5-20251001',
+      '--model', 'claude-opus-4-6',
       '--input-format', 'stream-json',
       '--output-format', 'stream-json',
       '--verbose',
@@ -164,6 +164,10 @@ export class HaikuAgent implements AgentProcess {
     const json = JSON.stringify(obj);
     logger.debug(`[HAIKU] Sending: ${json.slice(0, 200)}`);
     this.process.stdin.write(json + '\n');
+  }
+
+  getSessionId(): string | null {
+    return this.sessionId;
   }
 
   async stop(): Promise<void> {

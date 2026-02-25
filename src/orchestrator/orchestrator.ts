@@ -5,8 +5,9 @@ import { HaikuAgent } from '../agents/haiku.js';
 import type { AgentId, AgentStatus, Message, OutputLine, SessionConfig } from '../agents/types.js';
 import { TO_CLAUDE_PATTERN, TO_CODEX_PATTERN, TO_HAIKU_PATTERN } from '../agents/types.js';
 import { MessageBus } from './message-bus.js';
-import { getClaudeSystemPrompt, getCodexSystemPrompt, getHaikuSystemPrompt } from './prompts.js';
+import { getClaudeSystemPrompt, getCodexSystemPrompt, getHaikuSystemPrompt, getCodexContextReminder } from './prompts.js';
 import { logger } from '../utils/logger.js';
+import { SessionManager } from '../utils/session-manager.js';
 
 /** Max relays within a time window before blocking */
 const RELAY_WINDOW_MS = 60_000;
@@ -33,9 +34,26 @@ export class Orchestrator {
   private codexStarted = false;
   private config: Omit<SessionConfig, 'task'> | null = null;
   private relayTimestamps: number[] = [];
+  private agentLastContextIndex: Map<AgentId, number> = new Map([
+    ['haiku', 0], ['claude', 0], ['codex', 0],
+  ]);
+  private sessionManager: SessionManager | null = null;
 
   setConfig(config: Omit<SessionConfig, 'task'>) {
     this.config = config;
+    this.sessionManager = new SessionManager(config.projectDir);
+  }
+
+  getSessionManager(): SessionManager | null {
+    return this.sessionManager;
+  }
+
+  /** Get new context that `agent` hasn't seen yet from the message bus */
+  private getNewContext(agent: AgentId): string {
+    const sinceIndex = this.agentLastContextIndex.get(agent) ?? 0;
+    const { summary, newIndex } = this.bus.getContextSummary(agent, sinceIndex);
+    this.agentLastContextIndex.set(agent, newIndex);
+    return summary;
   }
 
   bind(cb: OrchestratorCallbacks) {
@@ -75,44 +93,68 @@ export class Orchestrator {
       });
     });
 
-    // Route messages to Claude (lazy start)
+    // Route messages to Claude (lazy start) — inject cross-agent context
     this.bus.on('message:claude', (msg: Message) => {
       if (msg.from === 'claude') return;
       this.claudeQueue.add(async () => {
         await this.ensureClaudeStarted();
         const prefix = `[FROM:${msg.from.toUpperCase()}]`;
-        this.claude.send(`${prefix} ${msg.content}`);
+        const context = this.getNewContext('claude');
+        let payload = `${prefix} ${msg.content}`;
+        if (context) {
+          payload += `\n\n--- CONTEXTE ---\n${context}\n--- FIN ---`;
+        }
+        this.claude.send(payload);
       });
     });
 
-    // Route messages to Codex (lazy start)
+    // Route messages to Codex (lazy start) — inject cross-agent context
     this.bus.on('message:codex', (msg: Message) => {
       if (msg.from === 'codex') return;
       this.codexQueue.add(async () => {
         await this.ensureCodexStarted();
         const prefix = `[FROM:${msg.from.toUpperCase()}]`;
-        this.codex.send(`${prefix} ${msg.content}`);
+        const context = this.getNewContext('codex');
+        let payload = `${prefix} ${msg.content}`;
+        if (context) {
+          payload += `\n\n--- CONTEXTE ---\n${context}\n--- FIN ---`;
+        }
+        this.codex.send(payload);
       });
     });
   }
 
-  /** Start Claude on first message to it */
+  /** Start Claude on first message to it — includes recent bus history */
   private async ensureClaudeStarted() {
     if (this.claudeStarted || !this.config) return;
     this.claudeStarted = true;
     const config = this.config;
     logger.info('[ORCH] Lazy-starting Claude...');
-    const prompt = getClaudeSystemPrompt(config.projectDir);
+    let prompt = getClaudeSystemPrompt(config.projectDir);
+    // Inject recent history so Sonnet knows why it's being called
+    const { summary, newIndex } = this.bus.getContextSummary('claude', 0, 5);
+    this.agentLastContextIndex.set('claude', newIndex);
+    if (summary) {
+      prompt += `\n\n--- HISTORIQUE ---\n${summary}\n--- FIN ---`;
+    }
     await this.claude.start({ ...config, task: '' }, prompt);
   }
 
-  /** Start Codex on first message to it */
+  /** Start Codex on first message to it — includes recent bus history */
   private async ensureCodexStarted() {
     if (this.codexStarted || !this.config) return;
     this.codexStarted = true;
     const config = this.config;
     logger.info('[ORCH] Lazy-starting Codex...');
-    const prompt = getCodexSystemPrompt(config.projectDir);
+    let prompt = getCodexSystemPrompt(config.projectDir);
+    // Inject recent history so Codex knows why it's being called
+    const { summary, newIndex } = this.bus.getContextSummary('codex', 0, 5);
+    this.agentLastContextIndex.set('codex', newIndex);
+    if (summary) {
+      prompt += `\n\n--- HISTORIQUE ---\n${summary}\n--- FIN ---`;
+    }
+    // Set compact reminder for session loss recovery
+    this.codex.setContextReminder(getCodexContextReminder(config.projectDir));
     await this.codex.start({ ...config, task: '' }, prompt);
   }
 
@@ -123,6 +165,14 @@ export class Orchestrator {
 
     const config = this.config;
     logger.info(`[ORCH] Starting Haiku with task: ${task.slice(0, 80)}`);
+
+    // Create persistent session
+    this.sessionManager?.createSession(task, config.projectDir);
+
+    // Listen for all bus messages → persist them
+    this.bus.on('message', (msg: Message) => {
+      this.sessionManager?.addMessage(msg);
+    });
 
     // Only Haiku starts — Claude & Codex start lazily when Haiku delegates
     const haikuPrompt = getHaikuSystemPrompt(config.projectDir) + `\n\nMESSAGE DU USER: ${task}`;
@@ -200,6 +250,18 @@ export class Orchestrator {
 
   async stop() {
     logger.info('[ORCH] Shutting down...');
+
+    // Capture agent session IDs before stopping
+    const haikuSid = this.haiku.getSessionId();
+    const claudeSid = this.claude.getSessionId();
+    const codexSid = this.codex.getSessionId();
+    if (haikuSid) this.sessionManager?.setAgentSession('haiku', haikuSid);
+    if (claudeSid) this.sessionManager?.setAgentSession('claude', claudeSid);
+    if (codexSid) this.sessionManager?.setAgentSession('codex', codexSid);
+
+    // Finalize session
+    this.sessionManager?.finalize();
+
     this.haikuQueue.clear();
     this.claudeQueue.clear();
     this.codexQueue.clear();
