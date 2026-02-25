@@ -13,13 +13,16 @@ export class ClaudeAgent implements AgentProcess {
   private cliPath: string = 'claude';
   private outputHandlers: Array<(line: OutputLine) => void> = [];
   private statusHandlers: Array<(status: AgentStatus) => void> = [];
+  private muteFirstResponse = false;
 
   private setStatus(s: AgentStatus) {
     this.status = s;
+    if (this.muteFirstResponse) return;
     this.statusHandlers.forEach(h => h(s));
   }
 
   private emit(line: OutputLine) {
+    if (this.muteFirstResponse) return;
     this.outputHandlers.forEach(h => h(line));
   }
 
@@ -92,6 +95,8 @@ export class ClaudeAgent implements AgentProcess {
     });
 
     // Send initial user message (system prompt is passed via --system-prompt flag)
+    // Mute the response — it's just an init ack, not real content
+    this.muteFirstResponse = true;
     this.sendRaw({
       type: 'user',
       message: {
@@ -126,6 +131,8 @@ export class ClaudeAgent implements AgentProcess {
     }
 
     if (type === 'assistant' && msg.message) {
+      // Agent is actively working — set running (tool calls don't go through send())
+      if (this.status !== 'running') this.setStatus('running');
       const message = msg.message as { content: Array<Record<string, unknown>> };
       if (Array.isArray(message.content)) {
         for (const block of message.content) {
@@ -149,6 +156,10 @@ export class ClaudeAgent implements AgentProcess {
     }
 
     if (type === 'result') {
+      if (this.muteFirstResponse) {
+        this.muteFirstResponse = false;
+        logger.debug('[CLAUDE] First response muted, now unmuted');
+      }
       this.setStatus('waiting');
     }
   }

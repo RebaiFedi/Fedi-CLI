@@ -266,12 +266,11 @@ function collapseActions(entries: DisplayEntry[]): DisplayEntry[] {
   let buf: string[] = [];
   const flush = () => {
     if (!buf.length) return;
-    if (buf.length <= 6) {
+    if (buf.length <= 2) {
       for (const a of buf) out.push({ text: a.trim(), kind: 'action' });
     } else {
-      for (const a of buf.slice(0, 2)) out.push({ text: a.trim(), kind: 'action' });
-      out.push({ text: `… ${buf.length - 4} more`, kind: 'action' });
-      for (const a of buf.slice(-2)) out.push({ text: a.trim(), kind: 'action' });
+      // Show last action + count
+      out.push({ text: `${buf[buf.length - 1].trim()} (+${buf.length - 1} more)`, kind: 'action' });
     }
     buf = [];
   };
@@ -420,6 +419,8 @@ export function Dashboard({ orchestrator, projectDir, claudePath, codexPath, res
   const flushTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const welcomePrinted = useRef(false);
   const lastPrintedAgent = useRef<AgentId | null>(null);
+  /** Pending actions per agent — accumulated, printed as compact summary */
+  const pendingActions = useRef<Map<AgentId, string[]>>(new Map());
 
   // Print welcome banner once at mount via stdout (not Ink)
   useEffect(() => {
@@ -474,25 +475,70 @@ export function Dashboard({ orchestrator, projectDir, claudePath, codexPath, res
     // This minimizes Ink's clear/redraw cycles (1 instead of N).
     const outputLines: string[] = [];
 
+    // Helper: flush pending actions for an agent as a compact summary line
+    const flushPendingActions = (agent: AgentId, agentColor: 'green' | 'yellow' | 'magenta') => {
+      const actions = pendingActions.current.get(agent);
+      if (!actions || actions.length === 0) return;
+      const summary: DisplayEntry[] = [];
+      if (actions.length <= 2) {
+        for (const a of actions) summary.push({ text: a, kind: 'action' });
+      } else {
+        summary.push({ text: `${actions[actions.length - 1]} (+${actions.length - 1} more)`, kind: 'action' });
+      }
+      outputLines.push(...entriesToAnsiOutputLines(summary, agentColor));
+      pendingActions.current.set(agent, []);
+    };
+
     for (const { agent, entries } of items) {
       if (entries.length === 0) continue;
       const agentColor: 'green' | 'yellow' | 'magenta' = agent === 'opus' ? 'magenta' : agent === 'claude' ? 'green' : 'yellow';
+
+      // Separate actions from content entries
+      const contentEntries: DisplayEntry[] = [];
+      const newActions: string[] = [];
+      for (const e of entries) {
+        if (e.kind === 'action') {
+          newActions.push(e.text);
+        } else {
+          contentEntries.push(e);
+        }
+      }
+
+      // Accumulate actions
+      if (newActions.length > 0) {
+        const existing = pendingActions.current.get(agent) ?? [];
+        pendingActions.current.set(agent, [...existing, ...newActions]);
+      }
+
+      // If only actions and no content, skip printing (actions are buffered)
+      if (contentEntries.length === 0) continue;
 
       const prevKind = lastEntryKind.current.get(agent);
       const currentId = currentMsgRef.current.get(agent);
       if (currentId) {
         const msg = chatMessagesRef.current.find((m) => m.id === currentId);
         if (msg) {
-          // Continuing an existing message — add spacing if agent changed
-          if (lastPrintedAgent.current && lastPrintedAgent.current !== agent) {
-            outputLines.push('');
+          const agentSwitched = lastPrintedAgent.current && lastPrintedAgent.current !== agent;
+          if (agentSwitched) {
+            // Flush previous output, then separator
+            if (outputLines.length > 0) {
+              console.log(compactOutputLines(outputLines).join('\n'));
+              outputLines.length = 0;
+            }
+            console.log('');
+            // Re-show agent label so user knows who's speaking
+            const dot = chalk.hex(agentHex(agent))(DOT_ACTIVE);
+            const agName = chalk.hex(agentHex(agent)).bold(agentName(agent));
+            outputLines.push(`  ${dot} ${agName}  ${chalk.dim('(suite)')}`);
           }
           lastPrintedAgent.current = agent;
           msg.lines.push(...entries);
-          // Append only new entries, with context from last entry for correct spacing
-          outputLines.push(...entriesToAnsiOutputLines(entries, agentColor, prevKind));
+          // Flush any pending actions as compact summary before content
+          flushPendingActions(agent, agentColor);
+          // Append content entries
+          outputLines.push(...entriesToAnsiOutputLines(contentEntries, agentColor, prevKind));
           // Update last kind
-          const last = entries[entries.length - 1];
+          const last = contentEntries[contentEntries.length - 1];
           if (last) lastEntryKind.current.set(agent, last.kind);
           continue;
         }
@@ -517,24 +563,30 @@ export function Dashboard({ orchestrator, projectDir, claudePath, codexPath, res
       }
 
       const dot = chalk.hex(agentHex(agent))(DOT_ACTIVE);
-      // Put dot + first text on same line
-      const firstIdx = entries.findIndex((e) => e.kind === 'text' || e.kind === 'heading');
+      const name = chalk.hex(agentHex(agent)).bold(agentName(agent));
+      // Put dot + agent name + first text on same line
+      const firstIdx = contentEntries.findIndex((e) => e.kind === 'text' || e.kind === 'heading');
       if (firstIdx !== -1) {
         const termW = process.stdout.columns || 80;
-        const maxW = Math.max(20, Math.min(termW - 4, MAX_READABLE_WIDTH));
-        const wrapped = wordWrap(entries[firstIdx].text, maxW, INDENT);
-        outputLines.push(`  ${dot} ${wrapped[0]}`);
+        const nameLen = agentName(agent).length;
+        const maxW = Math.max(20, Math.min(termW - 4 - nameLen - 3, MAX_READABLE_WIDTH));
+        const wrapped = wordWrap(contentEntries[firstIdx].text, maxW, INDENT);
+        outputLines.push(`  ${dot} ${name}  ${wrapped[0]}`);
         for (let w = 1; w < wrapped.length; w++) outputLines.push(wrapped[w]);
-        const rest = entries.filter((_, i) => i !== firstIdx);
+        // Flush pending actions after header
+        flushPendingActions(agent, agentColor);
+        const rest = contentEntries.filter((_, i) => i !== firstIdx);
         if (rest.length > 0) {
           outputLines.push(...entriesToAnsiOutputLines(rest, agentColor));
         }
       } else {
-        outputLines.push(`  ${dot}`);
-        outputLines.push(...entriesToAnsiOutputLines(entries, agentColor));
+        outputLines.push(`  ${dot} ${name}`);
+        // Flush pending actions
+        flushPendingActions(agent, agentColor);
+        outputLines.push(...entriesToAnsiOutputLines(contentEntries, agentColor));
       }
       // Track last kind
-      const last = entries[entries.length - 1];
+      const last = contentEntries[contentEntries.length - 1];
       if (last) lastEntryKind.current.set(agent, last.kind);
     }
 
@@ -610,6 +662,17 @@ export function Dashboard({ orchestrator, projectDir, claudePath, codexPath, res
         }
         if (status === 'waiting' || status === 'idle' || status === 'error' || status === 'stopped') {
           if (flushTimer.current) { clearTimeout(flushTimer.current); flushBuffer(); }
+          // Flush any remaining pending actions for this agent
+          const remaining = pendingActions.current.get(agent);
+          if (remaining && remaining.length > 0) {
+            const ac: 'green' | 'yellow' | 'magenta' = agent === 'opus' ? 'magenta' : agent === 'claude' ? 'green' : 'yellow';
+            const summary: DisplayEntry[] = remaining.length <= 2
+              ? remaining.map(a => ({ text: a, kind: 'action' as const }))
+              : [{ text: `${remaining[remaining.length - 1]} (+${remaining.length - 1} more)`, kind: 'action' as const }];
+            const lines = entriesToAnsiOutputLines(summary, ac);
+            if (lines.length > 0) console.log(compactOutputLines(lines).join('\n'));
+            pendingActions.current.set(agent, []);
+          }
           const currentId = currentMsgRef.current.get(agent);
           if (currentId) {
             const msg = chatMessagesRef.current.find((m) => m.id === currentId);
