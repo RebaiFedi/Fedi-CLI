@@ -54,6 +54,7 @@ export class CodexAgent implements AgentProcess {
   }
 
   send(prompt: string) {
+    this.muted = false;
     this.setStatus('running');
     // If session was lost (no threadId) but system prompt was already sent,
     // prepend a compact reminder instead of the full 600-token prompt
@@ -171,8 +172,15 @@ export class CodexAgent implements AgentProcess {
       const itemType = item.type as string | undefined;
       const itemStatus = item.status as string | undefined;
 
-      // Agent message text (reasoning or final text)
-      if (itemType === 'agent_message' || itemType === 'reasoning') {
+      // Reasoning summary — log only, don't display
+      if (itemType === 'reasoning') {
+        const text = item.text as string | undefined;
+        if (text) logger.debug(`[CODEX reasoning] ${text.slice(0, 120)}`);
+        return;
+      }
+
+      // Agent message text (final response)
+      if (itemType === 'agent_message') {
         const text = item.text as string | undefined;
         if (text) {
           this.emit({ text, timestamp: Date.now(), type: 'stdout' });

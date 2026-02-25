@@ -46,6 +46,7 @@ export class ClaudeAgent implements AgentProcess {
       '--output-format', 'stream-json',
       '--verbose',
       '--dangerously-skip-permissions',
+      '--system-prompt', systemPrompt,
     ];
 
     logger.info(`[CLAUDE] Spawning: ${this.cliPath} ${args.join(' ')}`);
@@ -90,16 +91,12 @@ export class ClaudeAgent implements AgentProcess {
       this.setStatus('error');
     });
 
-    // Send initial prompt with system prompt
-    const initPrompt = `${systemPrompt}\n\nNow begin working on the task.`;
-    const imageBlocks = parseMessageWithImages(initPrompt);
-    const content: string | ContentBlock[] = imageBlocks ?? initPrompt;
-
+    // Send initial user message (system prompt is passed via --system-prompt flag)
     this.sendRaw({
       type: 'user',
       message: {
         role: 'user',
-        content,
+        content: 'Ready. Waiting for tasks.',
       },
       ...(this.sessionId ? { session_id: this.sessionId } : {}),
     });
