@@ -312,12 +312,10 @@ function compactOutputLines(lines: string[]): string[] {
     const prevIsSeparator = /^[-─]{3,}$/.test(prevTrimmed);
     const nextIsSeparator = /^[-─]{3,}$/.test(nextTrimmed);
 
-    // Avoid double blanks and gaps around separator lines.
+    // Avoid double blanks and gaps around separator lines, but allow single blanks
     if (isEmpty && (prevIsEmpty || prevIsSeparator || nextIsSeparator)) continue;
     out.push(line);
   }
-  while (out.length > 0 && stripAnsi(out[0]).trim() === '') out.shift();
-  while (out.length > 0 && stripAnsi(out[out.length - 1]).trim() === '') out.pop();
   return out;
 }
 
@@ -486,6 +484,9 @@ export function Dashboard({ orchestrator, projectDir, claudePath, codexPath, res
         chatMessagesRef.current = chatMessagesRef.current.slice(-MAX_MESSAGES);
       }
 
+      // Add blank line before new agent message for separation
+      outputLines.push('');
+
       const dot = chalk.hex(agentHex(agent))(DOT_ACTIVE);
       const agentLabel = agentName(agent).padEnd(6);
       const coloredAgentName = chalk.hex(agentHex(agent)).bold(agentLabel);
@@ -592,6 +593,8 @@ export function Dashboard({ orchestrator, projectDir, claudePath, codexPath, res
             if (msg) msg.status = 'done';
             currentMsgRef.current.delete(agent);
             lastEntryKind.current.delete(agent);
+            // Add blank line after agent message finishes for breathing room
+            console.log('');
           }
         }
       },
@@ -701,7 +704,7 @@ export function Dashboard({ orchestrator, projectDir, claudePath, codexPath, res
       };
 
       const userPrefix = chalk.hex(THEME.userPrefix)(' ❯ ');
-      // Vertical padding top + bottom for proper centering
+      // Vertical padding: blank line above, padding top/bottom inside bubble, blank line below
       console.log('');
       printBg(' ');
       printBg(`${userPrefix}${chalk.hex(THEME.text)(wrapped[0] || '')}`);
@@ -709,6 +712,7 @@ export function Dashboard({ orchestrator, projectDir, claudePath, codexPath, res
         printBg(`   ${chalk.hex(THEME.text)(wrapped[i] ?? '')}`);
       }
       printBg(' ');
+      console.log('');
       chatMessagesRef.current.push({
         id: randomUUID(), agent: 'user',
         lines: [{ text, kind: 'text' }],
@@ -781,43 +785,56 @@ export function Dashboard({ orchestrator, projectDir, claudePath, codexPath, res
   const opusRunning = opusStatus === 'running';
   const claudeRunning = claudeStatus === 'running';
   const codexRunning = codexStatus === 'running';
-  const dir = projectDir.replace(/^\/home\/[^/]+\//, '~/');
-  const opusLabel = opusRunning ? 'working' : opusStatus === 'waiting' ? 'idle' : opusStatus;
-  const claudeLabel = claudeRunning ? 'working' : claudeStatus === 'waiting' ? 'idle' : claudeStatus;
-  const codexLabel = codexRunning ? 'working' : codexStatus === 'waiting' ? 'idle' : codexStatus;
-  const opusCell = { name: 'Opus'.padEnd(6), status: opusLabel.padEnd(7) };
-  const claudeCell = { name: 'Sonnet'.padEnd(6), status: claudeLabel.padEnd(7) };
-  const codexCell = { name: 'Codex'.padEnd(6), status: codexLabel.padEnd(7) };
 
   // Ink ALWAYS renders the same small structure — no conditional branches
   // that change the tree shape. This prevents ghost frames in scrollback.
+
+  const anyRunning = opusRunning || claudeRunning || codexRunning;
+
+  const agentPill = (name: string, running: boolean, color: string) => {
+    if (running) {
+      return (
+        <Text>
+          <Text color={color}>{DOT_ACTIVE}</Text>
+          <Text color={color} bold>{` ${name} `}</Text>
+        </Text>
+      );
+    }
+    return (
+      <Text>
+        <Text color={THEME.muted}>{DOT_IDLE}</Text>
+        <Text color={THEME.muted} dimColor>{` ${name} `}</Text>
+      </Text>
+    );
+  };
+
   return (
     <Box flexDirection="column">
       {thinking && <ThinkingSpinner />}
       {todos.length > 0 && <TodoPanel items={todos} />}
       <Box width="100%" flexGrow={1} paddingTop={1}>
-        <Box width="100%" flexGrow={1} paddingX={1} paddingY={0} borderStyle="round" borderColor={THEME.panelBorder}>
+        <Box width="100%" flexGrow={1} paddingX={1} paddingY={0} borderStyle="round" borderColor={anyRunning ? THEME.opus : THEME.panelBorder}>
           <Text color={THEME.text}>{' ❯ '}</Text>
           <Box flexGrow={1}>
             <InputBar onSubmit={handleInput} placeholder="Improve documentation in @filename" />
           </Box>
         </Box>
       </Box>
-      <Box paddingX={1} paddingTop={1} justifyContent="space-between">
-        <Text dimColor>{'Esc stop · ^C quit · @sessions'}</Text>
+      <Box paddingX={2} paddingTop={0} justifyContent="space-between">
         <Text>
-          <Text color={opusRunning ? THEME.opus : THEME.muted}>{opusRunning ? DOT_ACTIVE : DOT_IDLE}</Text>
-          <Text color={THEME.muted}>{` ${opusCell.name} `}</Text>
-          <Text color={opusRunning ? THEME.opus : THEME.muted}>{opusCell.status}</Text>
-          <Text dimColor>{'  |  '}</Text>
-          <Text color={claudeRunning ? THEME.claude : THEME.muted}>{claudeRunning ? DOT_ACTIVE : DOT_IDLE}</Text>
-          <Text color={THEME.muted}>{` ${claudeCell.name} `}</Text>
-          <Text color={claudeRunning ? THEME.claude : THEME.muted}>{claudeCell.status}</Text>
-          <Text dimColor>{'  |  '}</Text>
-          <Text color={codexRunning ? THEME.codex : THEME.muted}>{codexRunning ? DOT_ACTIVE : DOT_IDLE}</Text>
-          <Text color={THEME.muted}>{` ${codexCell.name} `}</Text>
-          <Text color={codexRunning ? THEME.codex : THEME.muted}>{codexCell.status}</Text>
+          <Text dimColor>{'esc '}</Text>
+          <Text color={THEME.muted}>{'stop'}</Text>
+          <Text dimColor>{'  ·  '}</Text>
+          <Text dimColor>{'^C '}</Text>
+          <Text color={THEME.muted}>{'quit'}</Text>
         </Text>
+        <Box>
+          {agentPill('Opus', opusRunning, THEME.opus)}
+          <Text dimColor>{'  '}</Text>
+          {agentPill('Sonnet', claudeRunning, THEME.claude)}
+          <Text dimColor>{'  '}</Text>
+          {agentPill('Codex', codexRunning, THEME.codex)}
+        </Box>
       </Box>
     </Box>
   );

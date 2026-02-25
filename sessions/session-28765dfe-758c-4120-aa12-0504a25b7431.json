@@ -1,0 +1,19 @@
+{
+  "id": "28765dfe-758c-4120-aa12-0504a25b7431",
+  "version": 2,
+  "task": "salut",
+  "projectDir": "/home/fedi/Bureau/Fedi CLI",
+  "startedAt": 1772019186328,
+  "messages": [
+    {
+      "from": "user",
+      "to": "opus",
+      "content": "cava?",
+      "id": "e735259e-9476-408b-9154-43dce07e618a",
+      "timestamp": 1772019203535,
+      "relayCount": 0
+    }
+  ],
+  "agentSessions": {},
+  "agentStats": {}
+}
