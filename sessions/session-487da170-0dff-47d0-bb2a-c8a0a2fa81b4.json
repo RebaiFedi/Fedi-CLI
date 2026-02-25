@@ -4,7 +4,16 @@
   "task": "salut",
   "projectDir": "/home/fedi/Bureau/Fedi CLI",
   "startedAt": 1772022104783,
-  "messages": [],
+  "messages": [
+    {
+      "from": "user",
+      "to": "codex",
+      "content": "salut",
+      "id": "7418c021-a68b-4727-8b7f-ae480a5bab6f",
+      "timestamp": 1772022315843,
+      "relayCount": 0
+    }
+  ],
   "agentSessions": {},
   "agentStats": {}
 }

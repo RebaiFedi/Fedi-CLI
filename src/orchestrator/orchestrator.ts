@@ -179,11 +179,16 @@ export class Orchestrator {
       this.sessionManager?.addMessage(msg);
     });
 
-    // Only Opus starts — Claude & Codex start lazily when Opus delegates
+    // Only Opus starts immediately — Claude starts lazily when Opus delegates
     const opusPrompt = getOpusSystemPrompt(config.projectDir) + `\n\nMESSAGE DU USER: ${task}`;
     await this.opus.start({ ...config, task }, opusPrompt);
 
-    logger.info('[ORCH] Opus started (Claude & Codex on standby)');
+    logger.info('[ORCH] Opus started (Claude on standby)');
+
+    // Start Codex eagerly in background (non-blocking) so sessionId is ready
+    this.ensureCodexStarted().catch(err =>
+      logger.error(`[ORCH] Codex eager start failed: ${err}`)
+    );
   }
 
   get isStarted() { return this.started; }
