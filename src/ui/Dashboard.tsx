@@ -710,12 +710,10 @@ export function Dashboard({ orchestrator, projectDir, claudePath, codexPath, res
 
       const userPrefix = chalk.hex(THEME.userPrefix)(' ❯ ');
       console.log('');
-      printBg(' ');
       printBg(`${userPrefix}${chalk.hex(THEME.text)(wrapped[0] || '')}`);
       for (let i = 1; i < wrapped.length; i++) {
         printBg(`   ${chalk.hex(THEME.text)(wrapped[i] ?? '')}`);
       }
-      printBg(' ');
       console.log('');
       chatMessagesRef.current.push({
         id: randomUUID(), agent: 'user',
