@@ -43,8 +43,10 @@ export class CodexAgent implements AgentProcess {
     this.muted = options?.muted ?? false;
     this.setStatus('running');
 
-    const fullPrompt = `${systemPrompt}\n\nNow begin working on the task.`;
-    await this.exec(fullPrompt);
+    const suffix = options?.muted
+      ? '\n\nTu es en standby. Reponds UNIQUEMENT: "Pret." — rien d\'autre. N\'execute AUCUNE commande, ne lis AUCUN fichier. Attends qu\'on te donne une tache.'
+      : '\n\nNow begin working on the task.';
+    await this.exec(`${systemPrompt}${suffix}`);
     this.systemPromptSent = true;
     this.muted = false;
   }
