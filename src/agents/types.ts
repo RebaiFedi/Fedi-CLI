@@ -35,7 +35,7 @@ export const MAX_RELAY_DEPTH = 5;
 export interface OutputLine {
   text: string;
   timestamp: number;
-  type: 'stdout' | 'stderr' | 'system' | 'relay';
+  type: 'stdout' | 'stderr' | 'system' | 'relay' | 'info';
 }
 
 // ── Claude stream-json types ────────────────────────────────────────────────
@@ -123,7 +123,7 @@ export interface SessionData {
 
 export interface DisplayEntry {
   text: string;
-  kind: 'text' | 'action' | 'heading' | 'separator' | 'empty' | 'code';
+  kind: 'text' | 'action' | 'heading' | 'separator' | 'empty' | 'code' | 'info';
   bold?: boolean;
   color?: string;
 }

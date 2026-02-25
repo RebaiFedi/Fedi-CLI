@@ -3,6 +3,7 @@ import { Box, Text, useApp, useInput, useStdout } from 'ink';
 import chalk from 'chalk';
 import { randomUUID } from 'node:crypto';
 import type { AgentId, AgentStatus, ChatMessage, DisplayEntry, Message, OutputLine } from '../agents/types.js';
+import { AGENT_LABELS } from '../agents/types.js';
 import type { Orchestrator } from '../orchestrator/orchestrator.js';
 import { renderMarkdown } from '../utils/render-markdown.js';
 import { InputBar } from './InputBar.js';
@@ -68,6 +69,7 @@ interface TodoItem {
 
 function outputToEntries(line: OutputLine): DisplayEntry[] {
   if (line.type === 'system') return [{ text: line.text, kind: 'action' }];
+  if (line.type === 'info') return [{ text: line.text, kind: 'info' }];
   if (line.type === 'relay') return [];
 
   const filteredText = line.text
@@ -173,6 +175,11 @@ function entryToAnsiLines(e: DisplayEntry, agentColor: 'green' | 'yellow' | 'mag
   const maxW = termW - indentW;
 
   if (e.kind === 'empty') return [''];
+
+  if (e.kind === 'info') {
+    const raw = `${INDENT}  ${chalk.yellowBright('!')} ${chalk.yellow(e.text)}`;
+    return wordWrap(raw, termW, `${INDENT}    `);
+  }
 
   if (e.kind === 'action') {
     const raw = `${INDENT}    ${chalk.dim(e.text)}`;
@@ -525,8 +532,27 @@ export function Dashboard({ orchestrator, projectDir, claudePath, codexPath }: D
           }
         }
       },
-      onRelay: (msg: Message) => { logger.info(`[DASHBOARD] Relay: ${msg.from} → ${msg.to}`); },
-      onRelayBlocked: (msg: Message) => { logger.info(`[DASHBOARD] Relay blocked: ${msg.from} → ${msg.to}`); },
+      onRelay: (msg: Message) => {
+        logger.info(`[DASHBOARD] Relay: ${msg.from} → ${msg.to}`);
+        const fromLabel = AGENT_LABELS[msg.from as AgentId] ?? msg.from;
+        const toLabel = AGENT_LABELS[msg.to as AgentId] ?? msg.to;
+        const preview = msg.content.length > 60 ? msg.content.slice(0, 60) + '...' : msg.content;
+        const relayLine = `${fromLabel} -> ${toLabel}: ${preview}`;
+        // Show relay as info on the sender's output
+        const fromAgent = msg.from as AgentId;
+        if (fromAgent === 'haiku' || fromAgent === 'claude' || fromAgent === 'codex') {
+          enqueueOutput(fromAgent, [{ text: relayLine, kind: 'info' }]);
+        }
+      },
+      onRelayBlocked: (msg: Message) => {
+        logger.info(`[DASHBOARD] Relay blocked: ${msg.from} → ${msg.to}`);
+        const fromLabel = AGENT_LABELS[msg.from as AgentId] ?? msg.from;
+        const toLabel = AGENT_LABELS[msg.to as AgentId] ?? msg.to;
+        const fromAgent = msg.from as AgentId;
+        if (fromAgent === 'haiku' || fromAgent === 'claude' || fromAgent === 'codex') {
+          enqueueOutput(fromAgent, [{ text: `Relay bloque: ${fromLabel} -> ${toLabel} (profondeur max)`, kind: 'info' }]);
+        }
+      },
     });
     const handleExit = () => { orchestrator.stop().finally(() => exit()); };
     process.on('SIGINT', handleExit);
@@ -562,6 +588,36 @@ export function Dashboard({ orchestrator, projectDir, claudePath, codexPath }: D
       });
 
       setThinking(randomVerb());
+
+      // @sessions command — list saved sessions in chat
+      if (text.trim() === '@sessions') {
+        const sm = orchestrator.getSessionManager();
+        if (!sm) {
+          console.log(chalk.dim('    Session manager not initialized yet.'));
+          return;
+        }
+        const sessions = sm.listSessions();
+        if (sessions.length === 0) {
+          console.log(chalk.dim('    Aucune session enregistree.'));
+        } else {
+          console.log('');
+          console.log(chalk.white.bold('    Sessions enregistrees'));
+          console.log(chalk.dim('    ' + '─'.repeat(50)));
+          for (const s of sessions.slice(0, 10)) {
+            const date = new Date(s.startedAt);
+            const dateStr = date.toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit' });
+            const timeStr = date.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
+            const status = s.finishedAt ? chalk.green('done') : chalk.yellow('run');
+            const task = s.task.length > 40 ? s.task.slice(0, 40) + '...' : s.task;
+            const shortId = s.id.slice(0, 8);
+            console.log(`    ${chalk.dim(dateStr)} ${chalk.dim(timeStr)}  ${chalk.cyanBright(shortId)}  ${status}  ${chalk.white(task)}`);
+          }
+          console.log('');
+          console.log(chalk.dim('    Voir en detail: fedi --view <id>'));
+          console.log('');
+        }
+        return;
+      }
 
       if (!orchestrator.isStarted) {
         setTodos([]);

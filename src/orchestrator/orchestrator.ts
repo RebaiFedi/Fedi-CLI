@@ -83,12 +83,17 @@ export class Orchestrator {
     this.bus.on('relay', (msg: Message) => cb.onRelay(msg));
     this.bus.on('relay-blocked', (msg: Message) => cb.onRelayBlocked(msg));
 
-    // Route messages to Haiku
+    // Route messages to Haiku — inject cross-agent context
     this.bus.on('message:haiku', (msg: Message) => {
       if (msg.from === 'haiku') return;
       this.haikuQueue.add(() => {
         const prefix = `[FROM:${msg.from.toUpperCase()}]`;
-        this.haiku.send(`${prefix} ${msg.content}`);
+        const context = this.getNewContext('haiku');
+        let payload = `${prefix} ${msg.content}`;
+        if (context) {
+          payload += `\n\n--- CONTEXTE ---\n${context}\n--- FIN ---`;
+        }
+        this.haiku.send(payload);
         return Promise.resolve();
       });
     });

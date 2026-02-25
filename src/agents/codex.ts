@@ -142,10 +142,24 @@ export class CodexAgent implements AgentProcess {
       logger.info(`[CODEX] Thread ID: ${this.sessionId}`);
     }
 
+    // Detect context/thread errors
+    if (eventType === 'error') {
+      const errorMsg = (event.message as string) || (event.error as string) || 'Unknown error';
+      logger.error(`[CODEX] Error event: ${errorMsg}`);
+      this.emit({ text: `Codex error: ${errorMsg}`, timestamp: Date.now(), type: 'info' });
+    }
+
+    // Detect thread truncation / context limit
+    if (eventType === 'thread.truncated' || eventType === 'context_limit_exceeded') {
+      logger.warn(`[CODEX] Context limit: ${eventType}`);
+      this.emit({ text: 'Codex: contexte tronque (limite atteinte)', timestamp: Date.now(), type: 'info' });
+    }
+
     // item.completed — the main payload with text content
     if (eventType === 'item.completed' && event.item) {
       const item = event.item as Record<string, unknown>;
       const itemType = item.type as string | undefined;
+      const itemStatus = item.status as string | undefined;
 
       // Agent message text (reasoning or final text)
       if (itemType === 'agent_message' || itemType === 'reasoning') {
@@ -156,21 +170,48 @@ export class CodexAgent implements AgentProcess {
         }
       }
 
-      // File change events
+      // File change events — show action + status
       if (itemType === 'file_change') {
         const filename = item.filename as string | undefined;
+        const action = item.action as string | undefined;
         if (filename) {
-          const formatted = formatAction('file_change', filename);
-          if (formatted) this.emit({ text: formatted, timestamp: Date.now(), type: 'system' });
+          const label = action === 'create' ? 'create' : action === 'delete' ? 'delete' : 'write';
+          const formatted = formatAction(label, filename);
+          if (formatted) {
+            const suffix = itemStatus && itemStatus !== 'completed' ? ` (${itemStatus})` : '';
+            this.emit({ text: `${formatted}${suffix}`, timestamp: Date.now(), type: 'system' });
+          }
           return;
         }
       }
 
-      // Command execution
+      // Command execution — show command + exit code
       if (itemType === 'command_execution') {
         const command = item.command as string | undefined;
+        const exitCode = item.exit_code as number | undefined;
         if (command) {
           const formatted = formatAction('bash', command);
+          if (formatted) {
+            const suffix = exitCode !== undefined && exitCode !== 0 ? ` (exit ${exitCode})` : '';
+            this.emit({ text: `${formatted}${suffix}`, timestamp: Date.now(), type: 'system' });
+          }
+          // Show stderr output if command failed
+          if (exitCode !== undefined && exitCode !== 0) {
+            const stderr = item.stderr as string | undefined;
+            if (stderr) {
+              const short = stderr.length > 200 ? stderr.slice(0, 200) + '...' : stderr;
+              this.emit({ text: short, timestamp: Date.now(), type: 'info' });
+            }
+          }
+          return;
+        }
+      }
+
+      // File read events
+      if (itemType === 'file_read' || itemType === 'read_file') {
+        const filename = (item.filename || item.path) as string | undefined;
+        if (filename) {
+          const formatted = formatAction('read', filename);
           if (formatted) this.emit({ text: formatted, timestamp: Date.now(), type: 'system' });
           return;
         }
@@ -194,8 +235,17 @@ export class CodexAgent implements AgentProcess {
       return;
     }
 
-    // turn.completed — usage info, mark waiting
+    // turn.completed — extract usage info, mark waiting
     if (eventType === 'turn.completed') {
+      // Extract token usage if available
+      const usage = event.usage as Record<string, unknown> | undefined;
+      if (usage) {
+        const input = usage.input_tokens as number | undefined;
+        const output = usage.output_tokens as number | undefined;
+        if (input || output) {
+          logger.info(`[CODEX] Usage: ${input ?? '?'} in / ${output ?? '?'} out tokens`);
+        }
+      }
       this.setStatus('waiting');
     }
   }

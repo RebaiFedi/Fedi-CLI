@@ -102,11 +102,25 @@ export class ClaudeAgent implements AgentProcess {
 
   private handleStreamMessage(msg: Record<string, unknown>) {
     const type = msg.type as string;
-    logger.debug(`[CLAUDE event] ${type} ${msg.subtype ?? ''}`);
+    const subtype = msg.subtype as string | undefined;
+    logger.debug(`[CLAUDE event] ${type} ${subtype ?? ''}`);
 
     if (type === 'system' && msg.session_id) {
       this.sessionId = msg.session_id as string;
       logger.info(`[CLAUDE] Session ID: ${this.sessionId}`);
+    }
+
+    // Detect context compaction
+    if (type === 'system' && subtype === 'conversation_compacted') {
+      logger.warn('[CLAUDE] Context window compacted');
+      this.emit({ text: 'Sonnet: contexte compacte (auto-compact)', timestamp: Date.now(), type: 'info' });
+    }
+
+    // Detect errors (context limit, etc.)
+    if (type === 'result' && msg.is_error) {
+      const errorMsg = (msg.result as string) || 'Unknown error';
+      logger.error(`[CLAUDE] Result error: ${errorMsg}`);
+      this.emit({ text: `Sonnet error: ${errorMsg}`, timestamp: Date.now(), type: 'info' });
     }
 
     if (type === 'assistant' && msg.message) {
