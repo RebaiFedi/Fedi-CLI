@@ -724,7 +724,8 @@ export function Dashboard({ orchestrator, projectDir, claudePath, codexPath, res
         logger.info(`[DASHBOARD] Relay: ${msg.from} → ${msg.to}`);
         const fromLabel = AGENT_LABELS[msg.from as AgentId] ?? msg.from;
         const toLabel = AGENT_LABELS[msg.to as AgentId] ?? msg.to;
-        const preview = msg.content.length > 60 ? msg.content.slice(0, 60) + '...' : msg.content;
+        const flat = msg.content.replace(/\n+/g, ' ').replace(/\s+/g, ' ').trim();
+        const preview = flat.length > 60 ? flat.slice(0, 60) + '...' : flat;
         const relayLine = `${fromLabel} -> ${toLabel}: ${preview}`;
         // Show relay as info on the sender's output
         const fromAgent = msg.from as AgentId;

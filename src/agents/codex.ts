@@ -16,6 +16,7 @@ export class CodexAgent implements AgentProcess {
   private systemPromptSent = false;
   private contextReminder: string = '';
   private muted = false;
+  private execLock: Promise<string> | null = null;
 
   private setStatus(s: AgentStatus) {
     this.status = s;
@@ -72,6 +73,21 @@ export class CodexAgent implements AgentProcess {
   }
 
   private async exec(prompt: string): Promise<string> {
+    // Serialize exec calls — wait for any in-flight exec to finish first
+    if (this.execLock) {
+      await this.execLock;
+    }
+
+    const promise = this._doExec(prompt);
+    this.execLock = promise;
+    try {
+      return await promise;
+    } finally {
+      if (this.execLock === promise) this.execLock = null;
+    }
+  }
+
+  private async _doExec(prompt: string): Promise<string> {
     return new Promise((resolve, reject) => {
       const args = ['exec'];
 
@@ -190,6 +206,30 @@ export class CodexAgent implements AgentProcess {
         }
       }
 
+      // OpenAI Responses API "message" type — final agent output
+      if (itemType === 'message' || itemType === 'output_message') {
+        let text: string | undefined;
+        if (Array.isArray(item.content)) {
+          const texts: string[] = [];
+          for (const block of item.content as Array<Record<string, unknown>>) {
+            if (typeof block.text === 'string') texts.push(block.text);
+          }
+          if (texts.length > 0) text = texts.join('\n');
+        }
+        if (!text && Array.isArray(item.output)) {
+          const texts: string[] = [];
+          for (const block of item.output as Array<Record<string, unknown>>) {
+            if (typeof block.text === 'string') texts.push(block.text);
+          }
+          if (texts.length > 0) text = texts.join('\n');
+        }
+        if (!text && typeof item.text === 'string') text = item.text as string;
+        if (text) {
+          this.emit({ text, timestamp: Date.now(), type: 'stdout' });
+          return;
+        }
+      }
+
       // File change events — show action + status
       if (itemType === 'file_change') {
         const filename = item.filename as string | undefined;
@@ -248,6 +288,26 @@ export class CodexAgent implements AgentProcess {
         }
         return;
       }
+
+      // Catch-all: unknown item type with text content
+      logger.info(`[CODEX] Unhandled item.completed type="${itemType}" — attempting text extraction`);
+      if (typeof item.text === 'string' && (item.text as string).trim()) {
+        this.emit({ text: item.text as string, timestamp: Date.now(), type: 'stdout' });
+        return;
+      }
+      if (Array.isArray(item.output)) {
+        for (const block of item.output as Array<Record<string, unknown>>) {
+          if (typeof block.text === 'string' && block.text.trim()) {
+            this.emit({ text: block.text, timestamp: Date.now(), type: 'stdout' });
+          }
+        }
+        return;
+      }
+      if (typeof item.output === 'string' && (item.output as string).trim()) {
+        this.emit({ text: item.output as string, timestamp: Date.now(), type: 'stdout' });
+        return;
+      }
+      logger.warn(`[CODEX] item.completed type="${itemType}" — no text extracted. Keys: ${Object.keys(item).join(', ')}`);
     }
 
     // item.started — skip (we show on completed to avoid duplicates)
