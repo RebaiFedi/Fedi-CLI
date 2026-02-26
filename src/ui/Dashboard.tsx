@@ -10,7 +10,6 @@ import type {
   Message,
   OutputLine,
 } from '../agents/types.js';
-import { AGENT_LABELS } from '../agents/types.js';
 import type { Orchestrator } from '../orchestrator/orchestrator.js';
 import { InputBar } from './InputBar.js';
 import { logger } from '../utils/logger.js';
@@ -341,26 +340,9 @@ export function Dashboard({
       },
       onRelay: (msg: Message) => {
         logger.info(`[DASHBOARD] Relay: ${msg.from} \u2192 ${msg.to}`);
-        const fromLabel = AGENT_LABELS[msg.from as AgentId] ?? msg.from;
-        const toLabel = AGENT_LABELS[msg.to as AgentId] ?? msg.to;
-        const flat = msg.content.replace(/\n+/g, ' ').replace(/\s+/g, ' ').trim();
-        const preview = flat.length > 60 ? flat.slice(0, 60) + '...' : flat;
-        const relayLine = `${fromLabel} -> ${toLabel}: ${preview}`;
-        const fromAgent = msg.from as AgentId;
-        if (fromAgent === 'opus' || fromAgent === 'claude' || fromAgent === 'codex') {
-          enqueueOutput(fromAgent, [{ text: relayLine, kind: 'info' }]);
-        }
       },
       onRelayBlocked: (msg: Message) => {
         logger.info(`[DASHBOARD] Relay blocked: ${msg.from} \u2192 ${msg.to}`);
-        const fromLabel = AGENT_LABELS[msg.from as AgentId] ?? msg.from;
-        const toLabel = AGENT_LABELS[msg.to as AgentId] ?? msg.to;
-        const fromAgent = msg.from as AgentId;
-        if (fromAgent === 'opus' || fromAgent === 'claude' || fromAgent === 'codex') {
-          enqueueOutput(fromAgent, [
-            { text: `Relay bloque: ${fromLabel} -> ${toLabel} (profondeur max)`, kind: 'info' },
-          ]);
-        }
       },
     });
 

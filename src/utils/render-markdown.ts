@@ -44,8 +44,8 @@ function formatTableBlock(block: string[]): StyledLine[] {
   );
 
   const formatRow = (row: string[]) =>
-    `| ${row.map((cell, i) => cell.padEnd(widths[i])).join(' | ')} |`;
-  const separator = `|-${widths.map((w) => '-'.repeat(w)).join('-|-')}-|`;
+    row.map((cell, i) => cell.padEnd(widths[i])).join('  ');
+  const separator = widths.map((w) => '─'.repeat(w)).join('──');
 
   return [
     { text: formatRow(rows[0]), bold: true },
