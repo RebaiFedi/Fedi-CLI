@@ -357,35 +357,37 @@ function TodoPanel({ items }: { items: TodoItem[] }) {
   const doneCount = items.filter((t) => t.done).length;
   const total = items.length;
   const pct = total > 0 ? Math.round((doneCount / total) * 100) : 0;
-  const barWidth = 20;
+  const barWidth = 12;
   const filled = Math.round((doneCount / total) * barWidth);
-  const bar = '█'.repeat(filled) + '░'.repeat(barWidth - filled);
+  const bar = '━'.repeat(filled) + '─'.repeat(barWidth - filled);
+  const barColor = pct === 100 ? THEME.codex : THEME.claude;
 
-  // Show only first MAX_VISIBLE_TODOS items, collapse the rest
   const visible = items.slice(0, MAX_VISIBLE_TODOS);
   const hidden = items.length - MAX_VISIBLE_TODOS;
 
   return (
-    <Box flexDirection="column" borderStyle="round" borderColor={THEME.panelBorder} paddingX={1}>
+    <Box flexDirection="column" paddingX={1}>
       <Text>
-        <Text bold color={THEME.text}>{'  Plan '}</Text>
         <Text dimColor>{`${doneCount}/${total} `}</Text>
-        <Text color={THEME.claude}>{bar}</Text>
+        <Text color={barColor}>{bar}</Text>
         <Text dimColor>{` ${pct}%`}</Text>
       </Text>
-      {visible.map((item) => (
-        <Text key={item.id}>
-          {item.done
-            ? <Text color={THEME.codex}>{'  ✓ '}</Text>
-            : <Text dimColor>{'  ○ '}</Text>
-          }
-          <Text color={item.done ? THEME.muted : THEME.text} strikethrough={item.done}>
-            {item.text}
+      {visible.map((item) => {
+        const label = item.text.length > 60 ? item.text.slice(0, 57) + '...' : item.text;
+        return (
+          <Text key={item.id}>
+            {item.done
+              ? <Text color={THEME.codex}>{' ✓ '}</Text>
+              : <Text dimColor>{' ○ '}</Text>
+            }
+            <Text color={item.done ? THEME.muted : THEME.text} dimColor={item.done}>
+              {label}
+            </Text>
           </Text>
-        </Text>
-      ))}
+        );
+      })}
       {hidden > 0 && (
-        <Text dimColor>{`    + ${hidden} autres`}</Text>
+        <Text dimColor>{`   + ${hidden} more`}</Text>
       )}
     </Box>
   );
@@ -414,7 +416,18 @@ export function Dashboard({ orchestrator, projectDir, claudePath, codexPath, res
   const [codexStatus, setCodexStatus] = useState<AgentStatus>('idle');
   const [stopped, setStopped] = useState(false);
   const [todos, setTodos] = useState<TodoItem[]>([]);
+  const [todosVisible, setTodosVisible] = useState(true);
   const [thinking, setThinking] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (todos.length === 0) return;
+    const allDone = todos.every(t => t.done);
+    if (allDone) {
+      const timer = setTimeout(() => setTodosVisible(false), 1500);
+      return () => clearTimeout(timer);
+    }
+    setTodosVisible(true);
+  }, [todos]);
 
   const currentMsgRef = useRef<Map<string, string>>(new Map());
   const lastEntryKind = useRef<Map<string, DisplayEntry['kind']>>(new Map());
@@ -932,7 +945,7 @@ export function Dashboard({ orchestrator, projectDir, claudePath, codexPath, res
     <Box flexDirection="column">
       <Text>{' '}</Text>
       {thinking ? <ThinkingSpinner /> : <Text>{' '}</Text>}
-      {todos.length > 0 && <TodoPanel items={todos} />}
+      {todosVisible && todos.length > 0 && <TodoPanel items={todos} />}
       <Box width="100%" flexGrow={1}>
         <Box width="100%" flexGrow={1} paddingY={0} borderStyle="round" borderColor={anyRunning ? THEME.opus : THEME.panelBorder}>
           <Text color={THEME.text}>{' ❯ '}</Text>
