@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { Box, Text, useStdin, useInput } from 'ink';
 import TextInput from 'ink-text-input';
 
@@ -7,7 +7,7 @@ interface InputBarProps {
   placeholder?: string;
 }
 
-const PASTE_MIN_LINES = 3; // Only treat as paste if 3+ newlines
+const PASTE_MIN_LINES = 3;
 const MAX_HISTORY = 50;
 
 export function InputBar({ onSubmit, placeholder }: InputBarProps) {
@@ -21,8 +21,8 @@ export function InputBar({ onSubmit, placeholder }: InputBarProps) {
 
   // ── Input history (arrow up/down) ──────────────────────────────────────
   const history = useRef<string[]>([]);
-  const historyIndex = useRef(-1);      // -1 = not browsing history
-  const savedDraft = useRef('');         // saves current input when browsing
+  const historyIndex = useRef(-1);
+  const savedDraft = useRef('');
 
   // Detect paste via raw stdin
   useEffect(() => {
@@ -43,32 +43,40 @@ export function InputBar({ onSubmit, placeholder }: InputBarProps) {
     };
 
     stdin.on('data', onData);
-    return () => { stdin.off('data', onData); };
+    return () => {
+      stdin.off('data', onData);
+    };
   }, [stdin]);
 
-  // Handle backspace/delete when value is empty and paste exists → clear paste
-  const handleChange = (text: string) => {
-    if (skipNextChange.current) {
-      skipNextChange.current = false;
-      prevValue.current = '';
-      return;
-    }
+  const clearPaste = useCallback(() => {
+    setPastedLabel(null);
+    fullText.current = '';
+    setValue('');
+    prevValue.current = '';
+  }, []);
 
-    // Detect backspace: new text is shorter than previous
-    if (pastedLabel && text.length < prevValue.current.length && prevValue.current.length === 0) {
-      // Value was already empty and user pressed backspace → clear paste
-      clearPaste();
-      prevValue.current = '';
-      return;
-    }
+  const handleChange = useCallback(
+    (text: string) => {
+      if (skipNextChange.current) {
+        skipNextChange.current = false;
+        prevValue.current = '';
+        return;
+      }
 
-    prevValue.current = text;
-    setValue(text);
-    // Reset history browsing when user types
-    historyIndex.current = -1;
-  };
+      // Detect backspace when value is empty → clear paste
+      if (pastedLabel && text.length === 0 && prevValue.current.length === 0) {
+        clearPaste();
+        prevValue.current = '';
+        return;
+      }
 
-  // Catch arrow up/down + backspace/escape via useInput
+      prevValue.current = text;
+      setValue(text);
+      historyIndex.current = -1;
+    },
+    [pastedLabel, clearPaste],
+  );
+
   useInput((_input, key) => {
     if (pastedLabel && value === '' && (key.backspace || key.delete)) {
       clearPaste();
@@ -81,7 +89,6 @@ export function InputBar({ onSubmit, placeholder }: InputBarProps) {
     // Arrow UP — go back in history
     if (key.upArrow && history.current.length > 0) {
       if (historyIndex.current === -1) {
-        // Save current draft before browsing
         savedDraft.current = value;
         historyIndex.current = history.current.length - 1;
       } else if (historyIndex.current > 0) {
@@ -100,7 +107,6 @@ export function InputBar({ onSubmit, placeholder }: InputBarProps) {
         setValue(histVal);
         prevValue.current = histVal;
       } else {
-        // Back to saved draft
         historyIndex.current = -1;
         setValue(savedDraft.current);
         prevValue.current = savedDraft.current;
@@ -108,33 +114,31 @@ export function InputBar({ onSubmit, placeholder }: InputBarProps) {
     }
   });
 
-  const clearPaste = () => {
-    setPastedLabel(null);
-    fullText.current = '';
-    setValue('');
-    prevValue.current = '';
-  };
+  const handleSubmit = useCallback(
+    (text: string) => {
+      const extra = value.trim();
+      const pasted = fullText.current.trim();
+      const toSend = pasted ? (extra ? `${pasted}\n\n${extra}` : pasted) : text;
+      if (!toSend.trim()) return;
 
-  const handleSubmit = (text: string) => {
-    const extra = value.trim();
-    const pasted = fullText.current.trim();
-    const toSend = pasted ? (extra ? `${pasted}\n\n${extra}` : pasted) : text;
-    if (!toSend.trim()) return;
-
-    // Add to history
-    const msg = toSend.trim();
-    if (msg && (history.current.length === 0 || history.current[history.current.length - 1] !== msg)) {
-      history.current.push(msg);
-      if (history.current.length > MAX_HISTORY) {
-        history.current.shift();
+      const msg = toSend.trim();
+      if (
+        msg &&
+        (history.current.length === 0 || history.current[history.current.length - 1] !== msg)
+      ) {
+        history.current.push(msg);
+        if (history.current.length > MAX_HISTORY) {
+          history.current.shift();
+        }
       }
-    }
-    historyIndex.current = -1;
-    savedDraft.current = '';
+      historyIndex.current = -1;
+      savedDraft.current = '';
 
-    onSubmit(msg);
-    clearPaste();
-  };
+      onSubmit(msg);
+      clearPaste();
+    },
+    [value, onSubmit, clearPaste],
+  );
 
   return (
     <Box>
@@ -143,7 +147,9 @@ export function InputBar({ onSubmit, placeholder }: InputBarProps) {
         value={value}
         onChange={handleChange}
         onSubmit={handleSubmit}
-        placeholder={pastedLabel ? 'Backspace to clear paste' : (placeholder ?? 'Type your message...')}
+        placeholder={
+          pastedLabel ? 'Backspace to clear paste' : (placeholder ?? 'Type your message...')
+        }
       />
     </Box>
   );

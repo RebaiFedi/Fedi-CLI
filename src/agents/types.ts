@@ -45,10 +45,12 @@ export const ClaudeStreamMessageSchema = z.discriminatedUnion('type', [
     type: z.literal('assistant'),
     message: z.object({
       id: z.string(),
-      content: z.array(z.object({
-        type: z.string(),
-        text: z.string().optional(),
-      })),
+      content: z.array(
+        z.object({
+          type: z.string(),
+          text: z.string().optional(),
+        }),
+      ),
     }),
     session_id: z.string().optional(),
   }),
@@ -56,14 +58,14 @@ export const ClaudeStreamMessageSchema = z.discriminatedUnion('type', [
     type: z.literal('system'),
     subtype: z.string(),
     session_id: z.string().optional(),
-  }).passthrough(),
+  }),
   z.object({
     type: z.literal('result'),
     subtype: z.string().optional(),
     is_error: z.boolean().optional(),
     result: z.string().optional(),
     session_id: z.string().optional(),
-  }).passthrough(),
+  }),
 ]);
 
 export type ClaudeStreamMessage = z.infer<typeof ClaudeStreamMessageSchema>;
@@ -75,7 +77,7 @@ export const CodexResponseSchema = z.object({
   status: z.string().optional(),
   output: z.string().optional(),
   items: z.array(z.any()).optional(),
-}).passthrough();
+});
 
 export type CodexResponse = z.infer<typeof CodexResponseSchema>;
 
@@ -116,7 +118,6 @@ export interface SessionData {
     claude?: string;
     codex?: string;
   };
-  agentStats: Record<string, { linesOutput: number; duration: number }>;
 }
 
 // ── Chat message (unified view) ─────────────────────────────────────────────

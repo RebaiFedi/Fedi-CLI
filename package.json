@@ -10,7 +10,11 @@
     "dev": "tsx src/index.tsx",
     "build": "tsc",
     "typecheck": "tsc --noEmit",
-    "test": "npm run build --silent && node --test \"dist/**/*.test.js\""
+    "test": "npm run build --silent && node --test \"dist/**/*.test.js\"",
+    "lint": "eslint src/",
+    "lint:fix": "eslint src/ --fix",
+    "format": "prettier --write src/",
+    "format:check": "prettier --check src/"
   },
   "dependencies": {
     "@clack/prompts": "^0.9.1",
@@ -28,6 +32,13 @@
   "devDependencies": {
     "@types/node": "^22.13.0",
     "@types/react": "^19.0.0",
+    "@typescript-eslint/eslint-plugin": "^8.56.1",
+    "@typescript-eslint/parser": "^8.56.1",
+    "eslint": "^9.39.3",
+    "eslint-config-prettier": "^10.1.8",
+    "eslint-plugin-react": "^7.37.5",
+    "eslint-plugin-react-hooks": "^7.0.1",
+    "prettier": "^3.8.1",
     "tsx": "^4.19.0",
     "typescript": "^5.7.0"
   }

@@ -30,6 +30,9 @@ export class MessageBus extends EventEmitter {
     };
 
     this.history.push(full);
+    if (this.history.length > 500) {
+      this.history = this.history.slice(-500);
+    }
     logger.info(`[BUS] ${full.from} → ${full.to}: ${full.content.slice(0, 100)}`);
 
     this.emit('message', full);
@@ -51,7 +54,7 @@ export class MessageBus extends EventEmitter {
 
   relay(from: AgentId, to: AgentId, content: string, correlationId?: string): boolean {
     const relayCount = correlationId
-      ? this.history.filter(m => m.correlationId === correlationId).length
+      ? this.history.filter((m) => m.correlationId === correlationId).length
       : 0;
 
     if (relayCount >= MAX_RELAY_DEPTH) {
@@ -82,27 +85,38 @@ export class MessageBus extends EventEmitter {
     return true;
   }
 
+  reset(): void {
+    this.history = [];
+    // NOTE: Do NOT call removeAllListeners() here — bind() registers
+    // persistent handlers (message:opus, message:claude, etc.) that must
+    // survive a restart. Only clear the message history.
+  }
+
   getHistory(): readonly Message[] {
     return this.history;
   }
 
   getRelayHistory(): readonly Message[] {
-    return this.history.filter(m => m.correlationId != null);
+    return this.history.filter((m) => m.correlationId != null);
   }
 
   /**
    * Get a compact summary of recent messages that `forAgent` hasn't seen yet.
    * Used to inject cross-agent context when relaying messages.
    */
-  getContextSummary(forAgent: AgentId, sinceIndex: number, maxMessages = 5): { summary: string; newIndex: number } {
+  getContextSummary(
+    forAgent: AgentId,
+    sinceIndex: number,
+    maxMessages = 5,
+  ): { summary: string; newIndex: number } {
     const relevant = this.history
       .slice(sinceIndex)
-      .filter(m => m.to !== forAgent && m.from !== forAgent);
+      .filter((m) => m.to !== forAgent && m.from !== forAgent);
 
     if (relevant.length === 0) return { summary: '', newIndex: this.history.length };
 
     const recent = relevant.slice(-maxMessages);
-    const lines = recent.map(m => {
+    const lines = recent.map((m) => {
       const content = m.content.length > 150 ? m.content.slice(0, 150) + '...' : m.content;
       return `[${m.from.toUpperCase()}→${m.to.toUpperCase()}] ${content}`;
     });

@@ -20,13 +20,14 @@ export class CodexAgent implements AgentProcess {
 
   private setStatus(s: AgentStatus) {
     this.status = s;
-    if (this.muted) return;
-    this.statusHandlers.forEach(h => h(s));
+    // When muted, still notify on terminal states so the spinner clears
+    if (this.muted && s !== 'waiting' && s !== 'stopped' && s !== 'error') return;
+    this.statusHandlers.forEach((h) => h(s));
   }
 
   private emit(line: OutputLine) {
     if (this.muted) return;
-    this.outputHandlers.forEach(h => h(line));
+    this.outputHandlers.forEach((h) => h(line));
   }
 
   onOutput(handler: (line: OutputLine) => void) {
@@ -37,7 +38,11 @@ export class CodexAgent implements AgentProcess {
     this.statusHandlers.push(handler);
   }
 
-  async start(config: SessionConfig, systemPrompt: string, options?: { muted?: boolean }): Promise<void> {
+  async start(
+    config: SessionConfig,
+    systemPrompt: string,
+    options?: { muted?: boolean },
+  ): Promise<void> {
     this.projectDir = config.projectDir;
     this.cliPath = config.codexPath;
 
@@ -45,7 +50,7 @@ export class CodexAgent implements AgentProcess {
     this.setStatus('running');
 
     const suffix = options?.muted
-      ? '\n\nTu es en standby. Reponds UNIQUEMENT: "Pret." — rien d\'autre. N\'execute AUCUNE commande, ne lis AUCUN fichier. Attends qu\'on te donne une tache.'
+      ? "\n\nTu es en standby. Reponds UNIQUEMENT: \"Pret.\" — rien d'autre. N'execute AUCUNE commande, ne lis AUCUN fichier. Attends qu'on te donne une tache."
       : '\n\nNow begin working on the task.';
     await this.exec(`${systemPrompt}${suffix}`);
     this.systemPromptSent = true;
@@ -96,9 +101,12 @@ export class CodexAgent implements AgentProcess {
       }
 
       args.push(
-        '--model', 'gpt-5.3-codex',
-        '-c', 'model_reasoning_effort="xhigh"',
-        '-c', 'model_reasoning_summary_effort="auto"',
+        '--model',
+        'gpt-5.3-codex',
+        '-c',
+        'model_reasoning_effort="xhigh"',
+        '-c',
+        'model_reasoning_summary_effort="auto"',
         '--full-auto',
         '--json',
       );
@@ -108,7 +116,9 @@ export class CodexAgent implements AgentProcess {
 
       args.push(prompt);
 
-      logger.info(`[CODEX] Spawning: ${this.cliPath} ${args.slice(0, 3).join(' ')}... (prompt: ${prompt.slice(0, 80)})`);
+      logger.info(
+        `[CODEX] Spawning: ${this.cliPath} ${args.slice(0, 3).join(' ')}... (prompt: ${prompt.slice(0, 80)})`,
+      );
 
       const proc = spawn(this.cliPath, args, {
         cwd: this.projectDir,
@@ -154,6 +164,14 @@ export class CodexAgent implements AgentProcess {
 
       proc.on('exit', (code) => {
         logger.info(`[CODEX] Process exited with code ${code}`);
+        if (code !== null && code !== 0) {
+          logger.warn(`[CODEX] Non-zero exit code: ${code}`);
+          this.emit({
+            text: `Codex: processus termine avec code ${code}`,
+            timestamp: Date.now(),
+            type: 'info',
+          });
+        }
         this.activeProcess = null;
         this.setStatus('waiting');
         resolve(fullStdout);
@@ -181,7 +199,11 @@ export class CodexAgent implements AgentProcess {
     // Detect thread truncation / context limit
     if (eventType === 'thread.truncated' || eventType === 'context_limit_exceeded') {
       logger.warn(`[CODEX] Context limit: ${eventType}`);
-      this.emit({ text: 'Codex: contexte tronque (limite atteinte)', timestamp: Date.now(), type: 'info' });
+      this.emit({
+        text: 'Codex: contexte tronque (limite atteinte)',
+        timestamp: Date.now(),
+        type: 'info',
+      });
     }
 
     // item.completed — the main payload with text content
@@ -290,7 +312,9 @@ export class CodexAgent implements AgentProcess {
       }
 
       // Catch-all: unknown item type with text content
-      logger.info(`[CODEX] Unhandled item.completed type="${itemType}" — attempting text extraction`);
+      logger.info(
+        `[CODEX] Unhandled item.completed type="${itemType}" — attempting text extraction`,
+      );
       if (typeof item.text === 'string' && (item.text as string).trim()) {
         this.emit({ text: item.text as string, timestamp: Date.now(), type: 'stdout' });
         return;
@@ -307,7 +331,9 @@ export class CodexAgent implements AgentProcess {
         this.emit({ text: item.output as string, timestamp: Date.now(), type: 'stdout' });
         return;
       }
-      logger.warn(`[CODEX] item.completed type="${itemType}" — no text extracted. Keys: ${Object.keys(item).join(', ')}`);
+      logger.warn(
+        `[CODEX] item.completed type="${itemType}" — no text extracted. Keys: ${Object.keys(item).join(', ')}`,
+      );
     }
 
     // item.started — skip (we show on completed to avoid duplicates)

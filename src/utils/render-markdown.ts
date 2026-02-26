@@ -75,7 +75,12 @@ export function renderMarkdown(raw: string): StyledLine[] {
       if (inCodeBlock) {
         // Opening — show language tag if present
         const lang = trimmed.slice(3).trim();
-        lines.push({ text: lang ? `── ${lang} ──────────────────────────` : '──────────────────────────────────', dim: true });
+        lines.push({
+          text: lang
+            ? `── ${lang} ──────────────────────────`
+            : '──────────────────────────────────',
+          dim: true,
+        });
       } else {
         // Closing
         lines.push({ text: '──────────────────────────────────', dim: true });
@@ -117,7 +122,11 @@ export function renderMarkdown(raw: string): StyledLine[] {
     }
 
     // Markdown table block
-    if (isTableRow(trimmed) && idx + 1 < rawLines.length && isTableSeparatorRow(rawLines[idx + 1].trim())) {
+    if (
+      isTableRow(trimmed) &&
+      idx + 1 < rawLines.length &&
+      isTableSeparatorRow(rawLines[idx + 1].trim())
+    ) {
       const block: string[] = [trimmed];
       let j = idx + 1;
       while (j < rawLines.length && isTableRow(rawLines[j].trim())) {
@@ -184,14 +193,14 @@ function dedup(lines: StyledLine[]): StyledLine[] {
   return out;
 }
 
-/** Strip inline markdown formatting */
+/** Strip inline markdown formatting but keep visual hints via ANSI */
 function clean(text: string): string {
   return text
-    .replace(/\*\*(.+?)\*\*/g, '$1')   // **bold**
-    .replace(/__(.+?)__/g, '$1')        // __bold__
-    .replace(/\*(.+?)\*/g, '$1')        // *italic*
-    .replace(/_(.+?)_/g, '$1')          // _italic_
-    .replace(/~~(.+?)~~/g, '$1')        // ~~strikethrough~~
-    .replace(/`(.+?)`/g, '$1')          // `code`
-    .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1'); // [link](url) → link
+    .replace(/__(.+?)__/g, '$1') // __bold__
+    .replace(/~~(.+?)~~/g, '$1') // ~~strikethrough~~
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1') // [link](url) → link
+    .replace(/\*\*(.+?)\*\*/g, '\x1b[1m$1\x1b[22m') // **bold** → ANSI bold
+    .replace(/\*(.+?)\*/g, '\x1b[3m$1\x1b[23m') // *italic* → ANSI italic
+    .replace(/_(.+?)_/g, '\x1b[3m$1\x1b[23m') // _italic_ → ANSI italic
+    .replace(/`(.+?)`/g, '\x1b[33m$1\x1b[39m'); // `code` → yellow
 }

@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { promises as fs } from 'node:fs';
 import { join } from 'node:path';
 import type { AgentId, Message, SessionData } from '../agents/types.js';
 import { logger } from './logger.js';
@@ -15,9 +15,11 @@ export class SessionManager {
     this.sessionsDir = join(projectDir, 'sessions');
   }
 
-  createSession(task: string, projectDir: string): SessionData {
-    if (!existsSync(this.sessionsDir)) {
-      mkdirSync(this.sessionsDir, { recursive: true });
+  async createSession(task: string, projectDir: string): Promise<SessionData> {
+    try {
+      await fs.access(this.sessionsDir);
+    } catch {
+      await fs.mkdir(this.sessionsDir, { recursive: true });
     }
 
     this.session = {
@@ -28,7 +30,6 @@ export class SessionManager {
       startedAt: Date.now(),
       messages: [],
       agentSessions: {},
-      agentStats: {},
     };
 
     logger.info(`[SESSION] Created session ${this.session.id}`);
@@ -48,31 +49,42 @@ export class SessionManager {
     this.scheduleSave();
   }
 
-  finalize(): void {
+  async finalize(): Promise<void> {
     if (!this.session) return;
     this.session.finishedAt = Date.now();
-    // Flush immediately on finalize
     if (this.saveTimer) {
       clearTimeout(this.saveTimer);
       this.saveTimer = null;
     }
-    this.saveToDisk();
-    logger.info(`[SESSION] Finalized session ${this.session.id} (${this.session.messages.length} messages)`);
+    await this.saveToDisk();
+    logger.info(
+      `[SESSION] Finalized session ${this.session.id} (${this.session.messages.length} messages)`,
+    );
   }
 
   getSession(): SessionData | null {
     return this.session;
   }
 
-  listSessions(): Array<{ id: string; task: string; startedAt: number; finishedAt?: number }> {
-    if (!existsSync(this.sessionsDir)) return [];
+  async listSessions(): Promise<
+    Array<{ id: string; task: string; startedAt: number; finishedAt?: number }>
+  > {
+    try {
+      await fs.access(this.sessionsDir);
+    } catch {
+      return [];
+    }
 
-    const files = readdirSync(this.sessionsDir).filter(f => f.startsWith('session-') && f.endsWith('.json'));
-    const sessions: Array<{ id: string; task: string; startedAt: number; finishedAt?: number }> = [];
+    const files = (await fs.readdir(this.sessionsDir)).filter(
+      (f) => f.startsWith('session-') && f.endsWith('.json'),
+    );
+    const sessions: Array<{ id: string; task: string; startedAt: number; finishedAt?: number }> =
+      [];
 
     for (const file of files) {
       try {
-        const data = JSON.parse(readFileSync(join(this.sessionsDir, file), 'utf-8'));
+        const raw = await fs.readFile(join(this.sessionsDir, file), 'utf-8');
+        const data = JSON.parse(raw);
         if (data.version === 2) {
           sessions.push({
             id: data.id,
@@ -89,12 +101,17 @@ export class SessionManager {
     return sessions.sort((a, b) => b.startedAt - a.startedAt);
   }
 
-  loadSession(id: string): SessionData | null {
+  async loadSession(id: string): Promise<SessionData | null> {
     const filePath = join(this.sessionsDir, `session-${id}.json`);
-    if (!existsSync(filePath)) return null;
+    try {
+      await fs.access(filePath);
+    } catch {
+      return null;
+    }
 
     try {
-      const data = JSON.parse(readFileSync(filePath, 'utf-8'));
+      const raw = await fs.readFile(filePath, 'utf-8');
+      const data = JSON.parse(raw);
       if (data.version !== 2) return null;
       return data as SessionData;
     } catch {
@@ -106,20 +123,22 @@ export class SessionManager {
     if (this.saveTimer) return;
     this.saveTimer = setTimeout(() => {
       this.saveTimer = null;
-      this.saveToDisk();
+      this.saveToDisk().catch((err) => logger.error(`[SESSION] Scheduled save failed: ${err}`));
     }, SAVE_DEBOUNCE_MS);
   }
 
-  private saveToDisk(): void {
+  private async saveToDisk(): Promise<void> {
     if (!this.session) return;
 
-    if (!existsSync(this.sessionsDir)) {
-      mkdirSync(this.sessionsDir, { recursive: true });
+    try {
+      await fs.access(this.sessionsDir);
+    } catch {
+      await fs.mkdir(this.sessionsDir, { recursive: true });
     }
 
     const filePath = join(this.sessionsDir, `session-${this.session.id}.json`);
     try {
-      writeFileSync(filePath, JSON.stringify(this.session, null, 2), 'utf-8');
+      await fs.writeFile(filePath, JSON.stringify(this.session, null, 2), 'utf-8');
       logger.debug(`[SESSION] Saved to ${filePath}`);
     } catch (err) {
       logger.error(`[SESSION] Failed to save: ${err}`);

@@ -3,21 +3,15 @@ import { render } from 'ink';
 import chalk from 'chalk';
 import { detectAll } from './utils/detect.js';
 import { logger } from './utils/logger.js';
+import { initTrace } from './utils/trace.js';
 import { Orchestrator } from './orchestrator/orchestrator.js';
 import { Dashboard } from './ui/Dashboard.js';
 import { SessionManager } from './utils/session-manager.js';
+import { THEME } from './config/theme.js';
 
-const THEME = {
-  text: '#F8FAFC',
-  info: '#FBBF24',
-  opus: '#F59E0B',
-  claude: '#38BDF8',
-  codex: '#22C55E',
-} as const;
-
-function printSessionList(projectDir: string) {
+async function printSessionList(projectDir: string) {
   const sm = new SessionManager(projectDir);
-  const sessions = sm.listSessions();
+  const sessions = await sm.listSessions();
 
   if (sessions.length === 0) {
     console.log(chalk.dim('  Aucune session trouvee.'));
@@ -31,13 +25,21 @@ function printSessionList(projectDir: string) {
 
   for (const s of sessions) {
     const date = new Date(s.startedAt);
-    const dateStr = date.toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit', year: 'numeric' });
+    const dateStr = date.toLocaleDateString('fr-FR', {
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+    });
     const timeStr = date.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
-    const status = s.finishedAt ? chalk.hex(THEME.codex)('done') : chalk.hex(THEME.info)('interrupted');
+    const status = s.finishedAt
+      ? chalk.hex(THEME.codex)('done')
+      : chalk.hex(THEME.info)('interrupted');
     const task = s.task.length > 50 ? s.task.slice(0, 50) + '...' : s.task;
     const shortId = s.id.slice(0, 8);
 
-    console.log(`  ${chalk.dim(dateStr)} ${chalk.dim(timeStr)}  ${chalk.hex(THEME.claude)(shortId)}  ${status}  ${chalk.hex(THEME.text)(task)}`);
+    console.log(
+      `  ${chalk.dim(dateStr)} ${chalk.dim(timeStr)}  ${chalk.hex(THEME.claude)(shortId)}  ${status}  ${chalk.hex(THEME.text)(task)}`,
+    );
   }
 
   console.log('');
@@ -46,26 +48,29 @@ function printSessionList(projectDir: string) {
   console.log('');
 }
 
-function viewSession(projectDir: string, sessionId: string) {
+async function viewSession(projectDir: string, sessionId: string) {
   const sm = new SessionManager(projectDir);
 
   // Support short IDs (first 8 chars)
-  const sessions = sm.listSessions();
-  const match = sessions.find(s => s.id.startsWith(sessionId));
+  const sessions = await sm.listSessions();
+  const match = sessions.find((s) => s.id.startsWith(sessionId));
   if (!match) {
     console.error(chalk.red(`  Session "${sessionId}" non trouvee.`));
     console.log(chalk.dim('  Utilisez: fedi --sessions pour voir la liste.'));
     return;
   }
 
-  const session = sm.loadSession(match.id);
+  const session = await sm.loadSession(match.id);
   if (!session) {
     console.error(chalk.red(`  Impossible de charger la session ${match.id}`));
     return;
   }
 
   const startDate = new Date(session.startedAt);
-  const dateStr = startDate.toLocaleDateString('fr-FR') + ' ' + startDate.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
+  const dateStr =
+    startDate.toLocaleDateString('fr-FR') +
+    ' ' +
+    startDate.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
   const duration = session.finishedAt
     ? `${Math.round((session.finishedAt - session.startedAt) / 1000)}s`
     : 'interrompue';
@@ -88,7 +93,9 @@ function viewSession(projectDir: string, sessionId: string) {
   // Show agent sessions
   const agents = Object.entries(session.agentSessions);
   if (agents.length > 0) {
-    console.log(`  ${chalk.dim('Agents:')} ${agents.map(([a, id]) => `${agentLabels[a]?.label ?? a}(${(id as string).slice(0, 8)})`).join(', ')}`);
+    console.log(
+      `  ${chalk.dim('Agents:')} ${agents.map(([a, id]) => `${agentLabels[a]?.label ?? a}(${(id as string).slice(0, 8)})`).join(', ')}`,
+    );
   }
 
   console.log(chalk.dim('  ' + '─'.repeat(60)));
@@ -98,10 +105,16 @@ function viewSession(projectDir: string, sessionId: string) {
   for (const msg of session.messages) {
     const agent = agentLabels[msg.from] ?? { label: msg.from, color: chalk.white };
     const target = agentLabels[msg.to] ?? { label: msg.to, color: chalk.white };
-    const time = new Date(msg.timestamp).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    const time = new Date(msg.timestamp).toLocaleTimeString('fr-FR', {
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+    });
     const content = msg.content.length > 120 ? msg.content.slice(0, 120) + '...' : msg.content;
 
-    console.log(`  ${chalk.dim(time)} ${agent.color(agent.label)} ${chalk.dim('->')} ${target.color(target.label)}`);
+    console.log(
+      `  ${chalk.dim(time)} ${agent.color(agent.label)} ${chalk.dim('->')} ${target.color(target.label)}`,
+    );
     console.log(`    ${chalk.hex(THEME.text)(content)}`);
     console.log('');
   }
@@ -114,7 +127,7 @@ export async function main() {
 
   // Handle --sessions flag
   if (args.includes('--sessions')) {
-    printSessionList(process.cwd());
+    await printSessionList(process.cwd());
     process.exit(0);
   }
 
@@ -126,7 +139,7 @@ export async function main() {
       console.error(chalk.red('  Usage: fedi --view <session-id>'));
       process.exit(1);
     }
-    viewSession(process.cwd(), sessionId);
+    await viewSession(process.cwd(), sessionId);
     process.exit(0);
   }
 
@@ -155,6 +168,9 @@ export async function main() {
 
   const projectDir = process.cwd();
   const orchestrator = new Orchestrator();
+
+  // Initialize trace logging — writes to <projectDir>/fedi-trace.log
+  initTrace(projectDir);
 
   logger.info(`[MAIN] Project: ${projectDir}`);
 
