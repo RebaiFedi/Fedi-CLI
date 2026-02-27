@@ -7,7 +7,7 @@ export type AgentId = 'claude' | 'codex' | 'opus' | 'gemini';
 export const AGENT_LABELS: Record<AgentId, string> = {
   opus: 'Opus',
   claude: 'Sonnet',
-  codex: 'Codex CLI',
+  codex: 'Codex',
   gemini: 'Gemini',
 };
 
@@ -38,49 +38,6 @@ export interface OutputLine {
   timestamp: number;
   type: 'stdout' | 'stderr' | 'system' | 'relay' | 'info';
 }
-
-// ── Claude stream-json types ────────────────────────────────────────────────
-
-export const ClaudeStreamMessageSchema = z.discriminatedUnion('type', [
-  z.object({
-    type: z.literal('assistant'),
-    message: z.object({
-      id: z.string(),
-      content: z.array(
-        z.object({
-          type: z.string(),
-          text: z.string().optional(),
-        }),
-      ),
-    }),
-    session_id: z.string().optional(),
-  }),
-  z.object({
-    type: z.literal('system'),
-    subtype: z.string(),
-    session_id: z.string().optional(),
-  }),
-  z.object({
-    type: z.literal('result'),
-    subtype: z.string().optional(),
-    is_error: z.boolean().optional(),
-    result: z.string().optional(),
-    session_id: z.string().optional(),
-  }),
-]);
-
-export type ClaudeStreamMessage = z.infer<typeof ClaudeStreamMessageSchema>;
-
-// ── Codex response types ────────────────────────────────────────────────────
-
-export const CodexResponseSchema = z.object({
-  id: z.string().optional(),
-  status: z.string().optional(),
-  output: z.string().optional(),
-  items: z.array(z.any()).optional(),
-});
-
-export type CodexResponse = z.infer<typeof CodexResponseSchema>;
 
 // ── Session config ──────────────────────────────────────────────────────────
 
@@ -154,8 +111,3 @@ export const TO_CODEX_PATTERN = /^\s*\[TO:CODEX\]\s*(.*?)\s*$/;
 export const TO_OPUS_PATTERN = /^\s*\[TO:OPUS\]\s*(.*?)\s*$/;
 export const TO_GEMINI_PATTERN = /^\s*\[TO:GEMINI\]\s*(.*?)\s*$/;
 
-// Strict patterns that require content on the same line — used for false positive filtering
-export const TO_CLAUDE_STRICT = /^\s*\[TO:CLAUDE\]\s+\S/;
-export const TO_CODEX_STRICT = /^\s*\[TO:CODEX\]\s+\S/;
-export const TO_OPUS_STRICT = /^\s*\[TO:OPUS\]\s+\S/;
-export const TO_GEMINI_STRICT = /^\s*\[TO:GEMINI\]\s+\S/;

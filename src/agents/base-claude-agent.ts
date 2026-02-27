@@ -129,12 +129,12 @@ export abstract class BaseClaudeAgent implements AgentProcess {
   }
 
   protected handleStreamMessage(msg: Record<string, unknown>) {
-    const type = msg.type as string;
-    const subtype = msg.subtype as string | undefined;
+    const type = typeof msg.type === 'string' ? msg.type : '';
+    const subtype = typeof msg.subtype === 'string' ? msg.subtype : undefined;
     flog.debug('AGENT', `${this.logTag} event: ${type} ${subtype ?? ''}`);
 
-    if (type === 'system' && msg.session_id) {
-      this.sessionId = msg.session_id as string;
+    if (type === 'system' && typeof msg.session_id === 'string') {
+      this.sessionId = msg.session_id;
       flog.info('AGENT', `${this.logTag}: Session ID: ${this.sessionId}`);
     }
 
@@ -148,23 +148,27 @@ export abstract class BaseClaudeAgent implements AgentProcess {
     }
 
     if (type === 'result' && msg.is_error) {
-      const errorMsg = (msg.result as string) || 'Unknown error';
+      const errorMsg = typeof msg.result === 'string' ? msg.result : 'Unknown error';
       flog.error('AGENT', `${this.logTag}: Result error: ${errorMsg}`);
       this.emit({ text: `${this.logTag} error: ${errorMsg}`, timestamp: Date.now(), type: 'info' });
     }
 
-    if (type === 'assistant' && msg.message) {
+    if (type === 'assistant' && msg.message && typeof msg.message === 'object') {
       if (this.status !== 'running') this.setStatus('running');
-      const message = msg.message as { content: Array<Record<string, unknown>> };
+      const message = msg.message as Record<string, unknown>;
       if (Array.isArray(message.content)) {
         for (const block of message.content) {
-          if (block.type === 'text' && block.text) {
-            this.emit({ text: block.text as string, timestamp: Date.now(), type: 'stdout' });
-          }
-          if (block.type === 'tool_use') {
-            const toolName = (block.name as string) ?? 'tool';
-            const input = block.input as Record<string, unknown> | undefined;
-            this.emitToolAction(toolName, input);
+          if (block && typeof block === 'object') {
+            if (block.type === 'text' && typeof block.text === 'string') {
+              this.emit({ text: block.text, timestamp: Date.now(), type: 'stdout' });
+            }
+            if (block.type === 'tool_use') {
+              const toolName = typeof block.name === 'string' ? block.name : 'tool';
+              const input = block.input && typeof block.input === 'object'
+                ? block.input as Record<string, unknown>
+                : undefined;
+              this.emitToolAction(toolName, input);
+            }
           }
         }
       }
@@ -181,25 +185,24 @@ export abstract class BaseClaudeAgent implements AgentProcess {
   }
 
   protected emitToolAction(toolName: string, input?: Record<string, unknown>) {
+    const str = (key: string): string | undefined => {
+      const v = input?.[key];
+      return typeof v === 'string' ? v : undefined;
+    };
+
     let detail: string | undefined;
     switch (toolName) {
       case 'Read':
-        detail = input?.file_path as string;
-        break;
       case 'Write':
-        detail = input?.file_path as string;
-        break;
       case 'Edit':
-        detail = input?.file_path as string;
+        detail = str('file_path');
         break;
       case 'Bash':
-        detail = input?.command as string;
+        detail = str('command');
         break;
       case 'Glob':
-        detail = input?.pattern as string;
-        break;
       case 'Grep':
-        detail = input?.pattern as string;
+        detail = str('pattern');
         break;
       default:
         detail = undefined;
@@ -252,22 +255,21 @@ export abstract class BaseClaudeAgent implements AgentProcess {
   }
 
   async stop(): Promise<void> {
-    if (!this.process) return;
+    const proc = this.process;
+    if (!proc) return;
 
     flog.info('AGENT', `${this.logTag}: Stopping...`);
-    this.process.stdin?.end();
-    this.process.kill('SIGTERM');
+    proc.stdin?.end();
+    proc.kill('SIGTERM');
 
     await new Promise<void>((resolve) => {
       const timeout = setTimeout(() => {
-        if (this.process) {
-          flog.warn('AGENT', `${this.logTag}: Force killing after 3s`);
-          this.process.kill('SIGKILL');
-        }
+        try { proc.kill('SIGKILL'); } catch { /* already dead */ }
+        flog.warn('AGENT', `${this.logTag}: Force killing after 3s`);
         resolve();
       }, 3000);
 
-      this.process!.on('exit', () => {
+      proc.on('exit', () => {
         clearTimeout(timeout);
         resolve();
       });

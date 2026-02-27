@@ -1,4 +1,4 @@
-import { appendFileSync, mkdirSync, writeFileSync } from 'node:fs';
+import { createWriteStream, mkdirSync, writeFileSync, type WriteStream } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { getFlowId } from './flow.js';
@@ -25,8 +25,8 @@ const LEVEL_PRIORITY: Record<LogLevel, number> = {
 
 // ── State ──────────────────────────────────────────────────────────────────
 
-let jsonlPath: string | null = null;
-let humanPath: string | null = null;
+let jsonlStream: WriteStream | null = null;
+let humanStream: WriteStream | null = null;
 let minLevel: LogLevel = 'debug';
 let initialized = false;
 
@@ -34,7 +34,7 @@ let initialized = false;
 
 /**
  * Initialize the unified log system.
- * Logs are written to ~/.fedi-cli/logs/.
+ * Logs are written to ~/.fedi-cli/logs/ using async write streams.
  */
 export function initLog(options?: { level?: LogLevel }): void {
   if (initialized) return;
@@ -46,18 +46,26 @@ export function initLog(options?: { level?: LogLevel }): void {
   mkdirSync(logDir, { recursive: true });
 
   const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-  jsonlPath = join(logDir, `fedi-${ts}.jsonl`);
-  humanPath = join(logDir, `fedi-${ts}.log`);
+  const jsonlPath = join(logDir, `fedi-${ts}.jsonl`);
+  const humanPath = join(logDir, `fedi-${ts}.log`);
 
   // Write header to human log
   const header = `${'='.repeat(70)}\n  FEDI CLI — ${new Date().toISOString()}\n${'='.repeat(70)}\n\n`;
   writeFileSync(humanPath, header, 'utf-8');
   writeFileSync(jsonlPath, '', 'utf-8');
+
+  // Open async write streams
+  jsonlStream = createWriteStream(jsonlPath, { flags: 'a', encoding: 'utf-8' });
+  humanStream = createWriteStream(humanPath, { flags: 'a', encoding: 'utf-8' });
+
+  // Silently handle stream errors to avoid crashing on disk issues
+  jsonlStream.on('error', () => {});
+  humanStream.on('error', () => {});
 }
 
 // ── Core write ─────────────────────────────────────────────────────────────
 
-function ts(): string {
+function formatTimestamp(): string {
   const d = new Date();
   const h = String(d.getHours()).padStart(2, '0');
   const m = String(d.getMinutes()).padStart(2, '0');
@@ -71,10 +79,10 @@ function write(level: LogLevel, cat: LogCategory, msg: string, ctx?: Record<stri
   if (LEVEL_PRIORITY[level] < LEVEL_PRIORITY[minLevel]) return;
 
   const flowId = getFlowId();
-  const timestamp = ts();
+  const timestamp = formatTimestamp();
 
-  // JSON structured log
-  if (jsonlPath) {
+  // JSON structured log (async)
+  if (jsonlStream) {
     const entry: Record<string, unknown> = {
       t: new Date().toISOString(),
       level,
@@ -83,26 +91,18 @@ function write(level: LogLevel, cat: LogCategory, msg: string, ctx?: Record<stri
     };
     if (flowId) entry.flow = flowId;
     if (ctx) Object.assign(entry, ctx);
-    try {
-      appendFileSync(jsonlPath, JSON.stringify(entry) + '\n', 'utf-8');
-    } catch {
-      // Ignore write errors
-    }
+    jsonlStream.write(JSON.stringify(entry) + '\n');
   }
 
-  // Human-readable log
-  if (humanPath) {
+  // Human-readable log (async)
+  if (humanStream) {
     const lvl = level.toUpperCase().padEnd(5);
     const category = `[${cat}]`.padEnd(10);
     const flowStr = flowId ? `flow=${flowId} ` : '';
     const ctxStr = ctx
       ? ' ' + Object.entries(ctx).map(([k, v]) => `${k}=${v}`).join(' ')
       : '';
-    try {
-      appendFileSync(humanPath, `${timestamp} ${lvl} ${category} ${flowStr}${msg}${ctxStr}\n`, 'utf-8');
-    } catch {
-      // Ignore write errors
-    }
+    humanStream.write(`${timestamp} ${lvl} ${category} ${flowStr}${msg}${ctxStr}\n`);
   }
 }
 

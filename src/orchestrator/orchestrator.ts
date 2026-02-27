@@ -15,7 +15,6 @@ import {
   getGeminiContextReminder,
 } from './prompts.js';
 import { flog } from '../utils/log.js';
-import { startFlow, endFlow } from '../utils/flow.js';
 import { SessionManager } from '../utils/session-manager.js';
 
 export interface OrchestratorDeps {

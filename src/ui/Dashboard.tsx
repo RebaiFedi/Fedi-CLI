@@ -14,9 +14,9 @@ import type { Orchestrator } from '../orchestrator/orchestrator.js';
 import { InputBar } from './InputBar.js';
 import { flog } from '../utils/log.js';
 import { THEME, agentHex, agentDisplayName, agentChalkColor } from '../config/theme.js';
-import { MAX_MESSAGES, INDENT, FLUSH_INTERVAL, DOT_ACTIVE, DOT_IDLE } from '../config/constants.js';
+import { MAX_MESSAGES, INDENT, FLUSH_INTERVAL } from '../config/constants.js';
 import { outputToEntries, extractTasks } from '../rendering/output-transform.js';
-import { wordWrap, entriesToAnsiOutputLines } from '../rendering/ansi-renderer.js';
+import { entriesToAnsiOutputLines } from '../rendering/ansi-renderer.js';
 import { compactOutputLines } from '../rendering/compact.js';
 import { ThinkingSpinner, randomVerb } from './ThinkingSpinner.js';
 import { TodoPanel, type TodoItem } from './TodoPanel.js';
@@ -565,37 +565,11 @@ export function Dashboard({
     [orchestrator, stopped],
   );
 
-  const opusRunning = opusStatus === 'running';
-  const claudeRunning = claudeStatus === 'running';
-  const codexRunning = codexStatus === 'running';
-  const geminiRunning = geminiStatus === 'running';
-  const anyRunning = opusRunning || claudeRunning || codexRunning || geminiRunning;
-
-  const agentPill = (name: string, agentId: AgentId, status: AgentStatus, color: string) => {
-    if (status === 'running') {
-      return (
-        <Text>
-          <Text color={color}>{DOT_ACTIVE}</Text>
-          <Text color={color} bold>{` ${name} `}</Text>
-        </Text>
-      );
-    }
-    // Dim color = agent is waiting AND someone else is still running (work in progress)
-    if (status === 'waiting' && anyRunning && agentWasActive.current.has(agentId)) {
-      return (
-        <Text>
-          <Text color={color} dimColor>{DOT_ACTIVE}</Text>
-          <Text color={color} dimColor>{` ${name} `}</Text>
-        </Text>
-      );
-    }
-    return (
-      <Text>
-        <Text color={THEME.muted}>{DOT_IDLE}</Text>
-        <Text color={THEME.muted} dimColor>{` ${name} `}</Text>
-      </Text>
-    );
-  };
+  const anyRunning =
+    opusStatus === 'running' ||
+    claudeStatus === 'running' ||
+    codexStatus === 'running' ||
+    geminiStatus === 'running';
 
   return (
     <Box flexDirection="column">
@@ -616,7 +590,7 @@ export function Dashboard({
           </Box>
         </Box>
       </Box>
-      <Box paddingX={2} paddingTop={0} justifyContent="space-between">
+      <Box paddingX={2} paddingTop={0}>
         <Text>
           <Text dimColor>{'esc '}</Text>
           <Text color={THEME.muted}>{'stop'}</Text>
@@ -624,15 +598,6 @@ export function Dashboard({
           <Text dimColor>{'^C '}</Text>
           <Text color={THEME.muted}>{'quit'}</Text>
         </Text>
-        <Box>
-          {agentPill('Opus', 'opus', opusStatus, THEME.opus)}
-          <Text dimColor>{'  '}</Text>
-          {agentPill('Sonnet', 'claude', claudeStatus, THEME.claude)}
-          <Text dimColor>{'  '}</Text>
-          {agentPill('Codex', 'codex', codexStatus, THEME.codex)}
-          <Text dimColor>{'  '}</Text>
-          {agentPill('Gemini', 'gemini', geminiStatus, THEME.gemini)}
-        </Box>
       </Box>
     </Box>
   );

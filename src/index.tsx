@@ -193,7 +193,14 @@ export async function main() {
   flog.info('SYSTEM', '=== Fedi CLI exiting ===');
 }
 
-main().catch((err) => {
-  console.error('Fatal error:', err);
-  process.exit(1);
-});
+// Only auto-execute when run directly (not when imported by bin/fedi.js)
+const isDirectRun =
+  process.argv[1] &&
+  (process.argv[1].endsWith('/src/index.tsx') || process.argv[1].endsWith('/src/index.js'));
+
+if (isDirectRun) {
+  main().catch((err) => {
+    console.error('Fatal error:', err);
+    process.exit(1);
+  });
+}

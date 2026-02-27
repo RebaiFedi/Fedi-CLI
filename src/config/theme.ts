@@ -1,4 +1,4 @@
-import type { AgentId } from '../agents/types.js';
+import { AGENT_LABELS, type AgentId } from '../agents/types.js';
 
 export const THEME = {
   text: '#F8FAFC',
@@ -14,23 +14,28 @@ export const THEME = {
   userBubbleBg: '#1F2937',
 } as const;
 
+const AGENT_HEX: Record<AgentId, string> = {
+  opus: THEME.opus,
+  claude: THEME.claude,
+  codex: THEME.codex,
+  gemini: THEME.gemini,
+};
+
+const AGENT_CHALK_COLOR: Record<AgentId, 'green' | 'yellow' | 'magenta' | 'cyan'> = {
+  opus: 'magenta',
+  claude: 'green',
+  codex: 'yellow',
+  gemini: 'cyan',
+};
+
 export function agentHex(agent: AgentId): string {
-  if (agent === 'opus') return THEME.opus;
-  if (agent === 'claude') return THEME.claude;
-  if (agent === 'gemini') return THEME.gemini;
-  return THEME.codex;
+  return AGENT_HEX[agent] ?? THEME.codex;
 }
 
 export function agentDisplayName(agent: AgentId): string {
-  if (agent === 'claude') return 'Sonnet';
-  if (agent === 'opus') return 'Opus';
-  if (agent === 'gemini') return 'Gemini';
-  return 'Codex';
+  return AGENT_LABELS[agent] ?? agent;
 }
 
 export function agentChalkColor(agent: AgentId): 'green' | 'yellow' | 'magenta' | 'cyan' {
-  if (agent === 'opus') return 'magenta';
-  if (agent === 'claude') return 'green';
-  if (agent === 'gemini') return 'cyan';
-  return 'yellow';
+  return AGENT_CHALK_COLOR[agent] ?? 'yellow';
 }
