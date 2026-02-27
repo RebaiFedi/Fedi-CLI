@@ -1,5 +1,8 @@
 import type { AgentId } from './types.js';
 import { BaseClaudeAgent } from './base-claude-agent.js';
+import { loadUserConfig } from '../config/user-config.js';
+
+const cfg = loadUserConfig();
 
 export class OpusAgent extends BaseClaudeAgent {
   readonly id: AgentId = 'opus';
@@ -7,6 +10,6 @@ export class OpusAgent extends BaseClaudeAgent {
     return 'OPUS';
   }
   protected get model() {
-    return 'claude-opus-4-6';
+    return cfg.opusModel;
   }
 }

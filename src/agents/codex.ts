@@ -2,6 +2,9 @@ import type { SessionConfig } from './types.js';
 import { BaseExecAgent } from './base-exec-agent.js';
 import { flog } from '../utils/log.js';
 import { formatAction } from '../utils/format-action.js';
+import { loadUserConfig } from '../config/user-config.js';
+
+const cfg = loadUserConfig();
 
 export class CodexAgent extends BaseExecAgent {
   readonly id = 'codex' as const;
@@ -21,7 +24,7 @@ export class CodexAgent extends BaseExecAgent {
 
     args.push(
       '--model',
-      'gpt-5.3-codex',
+      cfg.codexModel,
       '-c',
       'model_reasoning_effort="xhigh"',
       '-c',

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Text } from 'ink';
 
 const THINKING_VERBS = [
@@ -33,17 +33,38 @@ const SPINNER_FRAMES = [
   '\u280F',
 ];
 
-export function ThinkingSpinner() {
+// ~37 ticks of 80ms ≈ 3000ms per verb change
+const VERB_TICK_INTERVAL = 37;
+
+function formatElapsed(ms: number): string {
+  const totalSecs = Math.floor(ms / 1000);
+  const mins = Math.floor(totalSecs / 60);
+  const secs = totalSecs % 60;
+  if (mins > 0) return `${mins}m${secs}s`;
+  return `${secs}s`;
+}
+
+function ThinkingSpinnerComponent() {
   const [frame, setFrame] = useState(0);
   const [verb, setVerb] = useState(randomVerb);
+  const [elapsed, setElapsed] = useState('0s');
+  const startTime = useRef(Date.now());
+  const tickCount = useRef(0);
 
   useEffect(() => {
-    const spinId = setInterval(() => setFrame((f) => (f + 1) % SPINNER_FRAMES.length), 80);
-    const verbId = setInterval(() => setVerb(randomVerb()), 3000);
-    return () => {
-      clearInterval(spinId);
-      clearInterval(verbId);
-    };
+    startTime.current = Date.now();
+    tickCount.current = 0;
+
+    const id = setInterval(() => {
+      setFrame((f) => (f + 1) % SPINNER_FRAMES.length);
+      setElapsed(formatElapsed(Date.now() - startTime.current));
+      tickCount.current += 1;
+      if (tickCount.current % VERB_TICK_INTERVAL === 0) {
+        setVerb(randomVerb());
+      }
+    }, 80);
+
+    return () => clearInterval(id);
   }, []);
 
   return (
@@ -55,6 +76,11 @@ export function ThinkingSpinner() {
       <Text color="#e8912d" dimColor>
         {'...'}
       </Text>
+      <Text color="#e8912d" dimColor>
+        {` ${elapsed}`}
+      </Text>
     </Text>
   );
 }
+
+export const ThinkingSpinner = React.memo(ThinkingSpinnerComponent);

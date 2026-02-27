@@ -1,4 +1,4 @@
-import React, { useState, useReducer, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useReducer, useEffect, useCallback, useRef, useMemo } from 'react';
 import { Box, Text, useApp, useInput, useStdout } from 'ink';
 import chalk from 'chalk';
 import { randomUUID } from 'node:crypto';
@@ -14,7 +14,7 @@ import type { Orchestrator } from '../orchestrator/orchestrator.js';
 import { InputBar } from './InputBar.js';
 import { flog } from '../utils/log.js';
 import { THEME, agentHex, agentDisplayName, agentChalkColor } from '../config/theme.js';
-import { MAX_MESSAGES, INDENT, FLUSH_INTERVAL } from '../config/constants.js';
+import { getMaxMessages, getFlushInterval, INDENT } from '../config/constants.js';
 import { outputToEntries, extractTasks } from '../rendering/output-transform.js';
 import { entriesToAnsiOutputLines } from '../rendering/ansi-renderer.js';
 import { compactOutputLines } from '../rendering/compact.js';
@@ -43,6 +43,10 @@ interface BufferedEntry {
   entries: DisplayEntry[];
 }
 
+// ── Constants ────────────────────────────────────────────────────────────────
+
+const AGENT_IDS = ['opus', 'claude', 'codex', 'gemini'] as const;
+
 // ── Dashboard ───────────────────────────────────────────────────────────────
 
 export function Dashboard({
@@ -54,6 +58,8 @@ export function Dashboard({
   resumeSessionId,
 }: DashboardProps) {
   const { exit } = useApp();
+  const maxMessages = getMaxMessages();
+  const flushInterval = getFlushInterval();
 
   const [agentStatuses, dispatchStatus] = useReducer(
     (state: Record<string, AgentStatus>, action: { agent: string; status: AgentStatus }) => ({
@@ -81,7 +87,7 @@ export function Dashboard({
 
   const currentMsgRef = useRef<Map<string, string>>(new Map());
   const lastEntryKind = useRef<Map<string, DisplayEntry['kind']>>(new Map());
-  const chatMessagesRef = useRef<ChatMessage[]>([]);
+  const chatMessagesMap = useRef<Map<string, ChatMessage>>(new Map());
   const outputBuffer = useRef<BufferedEntry[]>([]);
   const flushTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const welcomePrinted = useRef(false);
@@ -182,7 +188,7 @@ export function Dashboard({
       const prevKind = lastEntryKind.current.get(agent);
       const currentId = currentMsgRef.current.get(agent);
       if (currentId) {
-        const msg = chatMessagesRef.current.find((m) => m.id === currentId);
+        const msg = chatMessagesMap.current.get(currentId);
         if (msg) {
           const agentSwitched = lastPrintedAgent.current && lastPrintedAgent.current !== agent;
           if (agentSwitched) {
@@ -207,15 +213,18 @@ export function Dashboard({
 
       const id = randomUUID();
       currentMsgRef.current.set(agent, id);
-      chatMessagesRef.current.push({
+      chatMessagesMap.current.set(id, {
         id,
         agent,
         lines: [...entries],
         timestamp: Date.now(),
         status: 'streaming',
       });
-      if (chatMessagesRef.current.length > MAX_MESSAGES) {
-        chatMessagesRef.current = chatMessagesRef.current.slice(-MAX_MESSAGES);
+      if (chatMessagesMap.current.size > maxMessages) {
+        const keys = [...chatMessagesMap.current.keys()];
+        for (const k of keys.slice(0, chatMessagesMap.current.size - maxMessages)) {
+          chatMessagesMap.current.delete(k);
+        }
       }
 
       const name = chalk.hex(agentHex(agent)).bold(agentDisplayName(agent));
@@ -243,10 +252,10 @@ export function Dashboard({
         if (flushTimer.current) clearTimeout(flushTimer.current);
         flushTimer.current = setTimeout(flushBuffer, 0);
       } else if (!flushTimer.current) {
-        flushTimer.current = setTimeout(flushBuffer, FLUSH_INTERVAL);
+        flushTimer.current = setTimeout(flushBuffer, flushInterval);
       }
     },
-    [flushBuffer],
+    [flushBuffer, flushInterval],
   );
 
   useInput((_input, key) => {
@@ -319,9 +328,13 @@ export function Dashboard({
 
         // Update agentErrors
         if (status === 'error') {
-          setAgentErrors((prev) => ({ ...prev, [agent]: 'error' }));
+          setAgentErrors((prev) => {
+            if (prev[agent] === 'error') return prev;
+            return { ...prev, [agent]: `Agent ${agent} en erreur` };
+          });
         } else if (status === 'running' || status === 'idle') {
           setAgentErrors((prev) => {
+            if (!(agent in prev)) return prev;
             const n = { ...prev };
             delete n[agent];
             return n;
@@ -380,7 +393,7 @@ export function Dashboard({
           }
           const currentId = currentMsgRef.current.get(agent);
           if (currentId) {
-            const msg = chatMessagesRef.current.find((m) => m.id === currentId);
+            const msg = chatMessagesMap.current.get(currentId);
             if (msg) msg.status = 'done';
             currentMsgRef.current.delete(agent);
             lastEntryKind.current.delete(agent);
@@ -483,8 +496,9 @@ export function Dashboard({
     (text: string) => {
       flog.info('UI', `User input: ${text.slice(0, 100)}`);
       printUserBubble(text);
-      chatMessagesRef.current.push({
-        id: randomUUID(),
+      const userMsgId = randomUUID();
+      chatMessagesMap.current.set(userMsgId, {
+        id: userMsgId,
         agent: 'user',
         lines: [{ text, kind: 'text' }],
         timestamp: Date.now(),
@@ -532,7 +546,7 @@ export function Dashboard({
             sessionLines.push('', chalk.dim('    Voir en detail: fedi --view <id>'), '');
             console.log(sessionLines.join('\n'));
           }
-        })().catch((err) => flog.error('UI',`[DASHBOARD] Sessions list error: ${err}`));
+        })().catch((err) => flog.error('UI',`[DASHBOARD] Sessions list error: ${err}`)).finally(() => setThinking(false));
         return;
       }
 
@@ -544,6 +558,7 @@ export function Dashboard({
           setStopped(false);
           stoppedRef.current = false;
           setTodos([]);
+          console.log('Redemarrage...');
           orchestrator
             .restart(`Le user parle a tous les agents directement. Attends.`)
             .then(() => orchestrator.sendToAllDirect(allMessage))
@@ -577,6 +592,7 @@ export function Dashboard({
         setTodos([]);
         if (targetAgent && targetAgent !== 'opus') {
           const agentNames: Record<string, string> = { claude: 'Sonnet', codex: 'Codex', gemini: 'Gemini' };
+          console.log('Redemarrage...');
           orchestrator
             .restart(
               `Le user veut parler directement a ${agentNames[targetAgent] ?? targetAgent}. Attends.`,
@@ -586,6 +602,7 @@ export function Dashboard({
             })
             .catch((err) => flog.error('UI',`[DASHBOARD] Start error: ${err}`));
         } else {
+          console.log('Redemarrage...');
           orchestrator
             .restart(targetAgent === 'opus' ? agentMessage : text)
             .catch((err) => flog.error('UI',`[DASHBOARD] Start error: ${err}`));
@@ -602,14 +619,17 @@ export function Dashboard({
     [orchestrator, stopped],
   );
 
-  const anyRunning = Object.values(agentStatuses).some((s) => s === 'running');
+  const anyRunning = useMemo(
+    () => Object.values(agentStatuses).some((s) => s === 'running'),
+    [agentStatuses],
+  );
 
   return (
     <Box flexDirection="column">
       <Text> </Text>
       {thinking ? <ThinkingSpinner /> : <Text> </Text>}
       <Box paddingX={2} gap={2}>
-        {(['opus', 'claude', 'codex', 'gemini'] as const).map((id) => {
+        {AGENT_IDS.map((id) => {
           const s = agentStatuses[id];
           const color =
             s === 'running' ? THEME[id] : s === 'error' ? 'red' : THEME.muted;
@@ -629,9 +649,9 @@ export function Dashboard({
       </Box>
       {Object.keys(agentErrors).length > 0 && (
         <Box paddingX={2} flexDirection="column">
-          {Object.entries(agentErrors).map(([agent]) => (
+          {Object.entries(agentErrors).map(([agent, msg]) => (
             <Text key={agent} color="red">
-              {'  ⚠ '}{agent}{' en erreur'}
+              {'  ⚠ '}{msg}
             </Text>
           ))}
         </Box>

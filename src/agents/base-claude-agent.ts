@@ -13,6 +13,12 @@ export abstract class BaseClaudeAgent implements AgentProcess {
   protected cliPath: string = 'claude';
   protected outputHandlers: Array<(line: OutputLine) => void> = [];
   protected statusHandlers: Array<(status: AgentStatus) => void> = [];
+  private stdoutRl: ReturnType<typeof createInterface> | null = null;
+  private stderrRl: ReturnType<typeof createInterface> | null = null;
+  private procExitHandler: ((code: number | null) => void) | null = null;
+  private procErrorHandler: ((err: Error) => void) | null = null;
+  private sendChain: Promise<void> = Promise.resolve();
+  private sendAborted = false;
 
   /** Human-readable agent name for log messages */
   protected abstract get logTag(): string;
@@ -23,8 +29,9 @@ export abstract class BaseClaudeAgent implements AgentProcess {
     return [];
   }
 
-  protected setStatus(s: AgentStatus) {
+  protected setStatus(s: AgentStatus, notify = true) {
     this.status = s;
+    if (!notify) return;
     this.statusHandlers.forEach((h) => h(s));
   }
 
@@ -45,6 +52,8 @@ export abstract class BaseClaudeAgent implements AgentProcess {
       flog.warn('AGENT', `${this.logTag}: Already running, stopping first`);
       await this.stop();
     }
+    this.sendAborted = false;
+    this.sendChain = Promise.resolve();
 
     this.cliPath = config.claudePath;
 
@@ -79,6 +88,7 @@ export abstract class BaseClaudeAgent implements AgentProcess {
     this.setStatus('running');
 
     const rl = createInterface({ input: this.process.stdout! });
+    this.stdoutRl = rl;
     rl.on('line', (line) => {
       if (!line.trim()) return;
       try {
@@ -90,22 +100,26 @@ export abstract class BaseClaudeAgent implements AgentProcess {
     });
 
     const stderrRl = createInterface({ input: this.process.stderr! });
+    this.stderrRl = stderrRl;
     stderrRl.on('line', (line) => {
       if (!line.trim()) return;
       flog.debug('AGENT', `${this.logTag} stderr: ${line}`);
     });
 
-    this.process.on('exit', (code) => {
+    this.procExitHandler = (code) => {
       flog.info('AGENT', `${this.logTag}: Process exited with code ${code}`);
       this.setStatus('stopped');
       this.process = null;
-    });
+      this.clearHandlers();
+    };
+    this.process.on('exit', this.procExitHandler);
 
-    this.process.on('error', (err) => {
+    this.procErrorHandler = (err) => {
       flog.error('AGENT', `${this.logTag}: Process error: ${err.message}`);
       this.emit({ text: `Error: ${err.message}`, timestamp: Date.now(), type: 'system' });
       this.setStatus('error');
-    });
+    };
+    this.process.on('error', this.procErrorHandler);
 
     // When resuming a session, the CLI already has the conversation history.
     // Don't re-send the system prompt — it would be redundant.
@@ -121,7 +135,7 @@ export abstract class BaseClaudeAgent implements AgentProcess {
     const imageBlocks = await parseMessageWithImages(systemPrompt);
     const content: string | ContentBlock[] = imageBlocks ?? systemPrompt;
 
-    this.sendRaw({
+    await this.sendRaw({
       type: 'user',
       message: { role: 'user', content },
       ...(this.sessionId ? { session_id: this.sessionId } : {}),
@@ -253,22 +267,32 @@ export abstract class BaseClaudeAgent implements AgentProcess {
 
   /** Internal: resolve images (async) then send the message */
   private sendWithImages(prompt: string) {
-    parseMessageWithImages(prompt).then((imageBlocks) => {
-      const content: string | ContentBlock[] = imageBlocks ?? prompt;
-      this.sendRaw({
-        type: 'user',
-        message: { role: 'user', content },
-        ...(this.sessionId ? { session_id: this.sessionId } : {}),
+    this.sendChain = this.sendChain
+      .then(async () => {
+        if (this.sendAborted) return;
+        try {
+          const imageBlocks = await parseMessageWithImages(prompt);
+          if (this.sendAborted) return;
+          const content: string | ContentBlock[] = imageBlocks ?? prompt;
+          await this.sendRaw({
+            type: 'user',
+            message: { role: 'user', content },
+            ...(this.sessionId ? { session_id: this.sessionId } : {}),
+          });
+        } catch (err) {
+          flog.error('AGENT', `${this.logTag}: Image parsing failed: ${err}`);
+          if (this.sendAborted) return;
+          // Fall back to text-only
+          await this.sendRaw({
+            type: 'user',
+            message: { role: 'user', content: prompt },
+            ...(this.sessionId ? { session_id: this.sessionId } : {}),
+          });
+        }
+      })
+      .catch((err) => {
+        flog.error('AGENT', `${this.logTag}: sendWithImages queue failed: ${String(err).slice(0, 120)}`);
       });
-    }).catch((err) => {
-      flog.error('AGENT', `${this.logTag}: Image parsing failed: ${err}`);
-      // Fall back to text-only
-      this.sendRaw({
-        type: 'user',
-        message: { role: 'user', content: prompt },
-        ...(this.sessionId ? { session_id: this.sessionId } : {}),
-      });
-    });
   }
 
   /** Remove unpaired Unicode surrogates that cause JSON encoding errors.
@@ -278,39 +302,85 @@ export abstract class BaseClaudeAgent implements AgentProcess {
     return text.replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, '\uFFFD');
   }
 
-  protected sendRaw(obj: Record<string, unknown>) {
-    if (!this.process?.stdin?.writable) return;
+  protected async sendRaw(obj: Record<string, unknown>) {
+    const stdin = this.process?.stdin;
+    if (!stdin?.writable || this.sendAborted) return;
     const json = this.sanitizeUnicode(JSON.stringify(obj));
     flog.debug('AGENT', `${this.logTag}: Sending: ${json.slice(0, 200)}`);
-    this.process.stdin.write(json + '\n');
+    const ok = stdin.write(json + '\n');
+    if (!ok) {
+      await new Promise<void>((resolve) => {
+        stdin.once('drain', resolve);
+      });
+    }
   }
 
   getSessionId(): string | null {
     return this.sessionId;
   }
 
+  protected clearHandlers() {
+    if (this.stdoutRl) {
+      this.stdoutRl.removeAllListeners();
+      try {
+        this.stdoutRl.close();
+      } catch (err) {
+        flog.debug('AGENT', `${this.logTag}: stdout readline close ignored: ${String(err).slice(0, 120)}`);
+      }
+      this.stdoutRl = null;
+    }
+    if (this.stderrRl) {
+      this.stderrRl.removeAllListeners();
+      try {
+        this.stderrRl.close();
+      } catch (err) {
+        flog.debug('AGENT', `${this.logTag}: stderr readline close ignored: ${String(err).slice(0, 120)}`);
+      }
+      this.stderrRl = null;
+    }
+    if (this.process && this.procExitHandler) {
+      this.process.off('exit', this.procExitHandler);
+    }
+    if (this.process && this.procErrorHandler) {
+      this.process.off('error', this.procErrorHandler);
+    }
+    this.procExitHandler = null;
+    this.procErrorHandler = null;
+  }
+
   async stop(): Promise<void> {
+    this.sendAborted = true;
+    this.sendChain = Promise.resolve();
     const proc = this.process;
-    if (!proc) return;
+    if (!proc) {
+      this.clearHandlers();
+      return;
+    }
 
     flog.info('AGENT', `${this.logTag}: Stopping...`);
+    this.clearHandlers();
     proc.stdin?.end();
     proc.kill('SIGTERM');
 
     await new Promise<void>((resolve) => {
       const timeout = setTimeout(() => {
-        try { proc.kill('SIGKILL'); } catch { /* already dead */ }
+        try {
+          proc.kill('SIGKILL');
+        } catch (err) {
+          flog.debug('AGENT', `${this.logTag}: SIGKILL ignored in stop(): ${String(err).slice(0, 120)}`);
+        }
         flog.warn('AGENT', `${this.logTag}: Force killing after 3s`);
         resolve();
       }, 3000);
 
-      proc.on('exit', () => {
+      proc.once('exit', () => {
         clearTimeout(timeout);
         resolve();
       });
     });
 
     this.process = null;
+    this.clearHandlers();
     this.setStatus('stopped');
   }
 }

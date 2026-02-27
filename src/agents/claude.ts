@@ -1,5 +1,8 @@
 import type { AgentId, SessionConfig } from './types.js';
 import { BaseClaudeAgent } from './base-claude-agent.js';
+import { loadUserConfig } from '../config/user-config.js';
+
+const cfg = loadUserConfig();
 
 export class ClaudeAgent extends BaseClaudeAgent {
   readonly id: AgentId = 'claude';
@@ -7,7 +10,7 @@ export class ClaudeAgent extends BaseClaudeAgent {
     return 'CLAUDE';
   }
   protected get model() {
-    return 'claude-sonnet-4-6';
+    return cfg.claudeModel;
   }
 
   protected override getExtraArgs(systemPrompt: string): string[] {
@@ -31,6 +34,6 @@ export class ClaudeAgent extends BaseClaudeAgent {
     // No initial message sent — set to idle (not waiting!) so the
     // orchestrator's relay safety-net doesn't think we finished a task.
     // The status will change to 'running' when send() is called.
-    this.status = 'idle'; // Direct assignment — don't notify handlers
+    this.setStatus('idle', false);
   }
 }

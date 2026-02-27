@@ -30,6 +30,7 @@ export abstract class BaseExecAgent implements AgentProcess {
   private statusHandlers: Array<(status: AgentStatus) => void> = [];
   private execLock: Promise<string> | null = null;
   private urgentQueue: string[] = [];
+  private abortController: AbortController = new AbortController();
 
   /** Max execution time per exec call */
   protected static readonly EXEC_TIMEOUT_MS = loadUserConfig().execTimeoutMs;
@@ -57,6 +58,39 @@ export abstract class BaseExecAgent implements AgentProcess {
   /** Optional: handle stderr lines (default: debug log) */
   protected handleStderrLine(line: string): void {
     flog.debug('AGENT', `${this.logTag} stderr: ${line}`);
+  }
+
+  private ensureAbortController() {
+    if (this.abortController.signal.aborted) {
+      this.abortController = new AbortController();
+    }
+  }
+
+  private emitExecFailed(err: unknown) {
+    const message = String(err);
+    this.emit({
+      text: `[EXEC_FAILED] ${message}`,
+      timestamp: Date.now(),
+      type: 'system',
+    });
+  }
+
+  private async sleepWithAbort(ms: number, signal: AbortSignal): Promise<void> {
+    if (signal.aborted) {
+      throw new Error(`${this.logTag}: aborted`);
+    }
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        signal.removeEventListener('abort', onAbort);
+        resolve();
+      }, ms);
+      const onAbort = () => {
+        clearTimeout(timer);
+        signal.removeEventListener('abort', onAbort);
+        reject(new Error(`${this.logTag}: aborted`));
+      };
+      signal.addEventListener('abort', onAbort, { once: true });
+    });
   }
 
   // ── Status & output management ────────────────────────────────────────
@@ -91,6 +125,7 @@ export abstract class BaseExecAgent implements AgentProcess {
     systemPrompt: string,
     options?: { muted?: boolean },
   ): Promise<void> {
+    this.ensureAbortController();
     this.projectDir = config.projectDir;
     this.cliPath = this.getCliPath(config);
 
@@ -123,6 +158,7 @@ export abstract class BaseExecAgent implements AgentProcess {
   }
 
   send(prompt: string) {
+    this.ensureAbortController();
     this.muted = false;
     this.setStatus('running');
 
@@ -143,6 +179,7 @@ export abstract class BaseExecAgent implements AgentProcess {
 
     this.exec(finalPrompt).catch((err) => {
       flog.error('AGENT', `${this.logTag}: exec error: ${err}`);
+      this.emit({ text: `[EXEC_FAILED] ${err}`, timestamp: Date.now(), type: 'info' });
       this.setStatus('error');
     });
   }
@@ -152,16 +189,23 @@ export abstract class BaseExecAgent implements AgentProcess {
   }
 
   async stop(): Promise<void> {
+    this.abortController.abort();
+    this.abortController = new AbortController();
+
     const proc = this.activeProcess;
     if (proc) {
       flog.info('AGENT', `${this.logTag}: Stopping active process...`);
       proc.kill('SIGTERM');
       await new Promise<void>((resolve) => {
         const timeout = setTimeout(() => {
-          try { proc.kill('SIGKILL'); } catch { /* already dead */ }
+          try {
+            proc.kill('SIGKILL');
+          } catch (err) {
+            flog.debug('AGENT', `${this.logTag}: SIGKILL ignored in stop(): ${String(err).slice(0, 120)}`);
+          }
           resolve();
         }, 3000);
-        proc.on('exit', () => {
+        proc.once('exit', () => {
           clearTimeout(timeout);
           resolve();
         });
@@ -174,29 +218,37 @@ export abstract class BaseExecAgent implements AgentProcess {
   // ── Exec serialization ────────────────────────────────────────────────
 
   protected async exec(prompt: string): Promise<string> {
-    if (this.execLock) {
-      await this.execLock;
-    }
-
-    const promise = this._execWithRetry(prompt);
-    this.execLock = promise;
-    try {
-      return await promise;
-    } finally {
-      if (this.execLock === promise) this.execLock = null;
-    }
+    const previous = this.execLock ?? Promise.resolve('');
+    const next = previous.then(
+      () => this._execWithRetry(prompt),
+      () => this._execWithRetry(prompt),
+    );
+    this.execLock = next.then(() => '', () => '');
+    return next;
   }
 
   private async _execWithRetry(prompt: string): Promise<string> {
     const maxRetries = (this.constructor as typeof BaseExecAgent).MAX_EXEC_RETRIES;
     const backoffMs = (this.constructor as typeof BaseExecAgent).RETRY_BACKOFF_MS;
+    const signal = this.abortController.signal;
 
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      if (signal.aborted) {
+        const err = new Error(`${this.logTag}: aborted`);
+        this.emitExecFailed(err);
+        throw err;
+      }
       try {
         return await this._doExec(prompt);
       } catch (err) {
+        if (signal.aborted) {
+          this.emitExecFailed(err);
+          throw err;
+        }
         if (attempt >= maxRetries) throw err;
-        const waitMs = backoffMs * Math.pow(3, attempt); // 5s, 15s
+        const baseWait = backoffMs * Math.pow(3, attempt); // 5s, 15s
+        const jitter = Math.random() * 0.4 * baseWait - 0.2 * baseWait;
+        const waitMs = Math.round(baseWait + jitter);
         flog.warn(
           'AGENT',
           `${this.logTag}: Exec failed (attempt ${attempt + 1}/${maxRetries + 1}) — retrying in ${waitMs / 1000}s: ${String(err).slice(0, 100)}`,
@@ -206,10 +258,12 @@ export abstract class BaseExecAgent implements AgentProcess {
           timestamp: Date.now(),
           type: 'info',
         });
-        await new Promise<void>((resolve) => setTimeout(resolve, waitMs));
+        await this.sleepWithAbort(waitMs, signal);
       }
     }
-    throw new Error(`${this.logTag}: exec failed after retries`);
+    const finalErr = new Error(`${this.logTag}: exec failed after retries`);
+    this.emitExecFailed(finalErr);
+    throw finalErr;
   }
 
   private _doExec(prompt: string): Promise<string> {
@@ -235,7 +289,11 @@ export abstract class BaseExecAgent implements AgentProcess {
         if (settled) return;
         flog.warn('AGENT', `${this.logTag}: Exec timeout after ${timeoutMs / 1000}s — killing process`);
         this.emit({ text: `${this.logTag}: timeout — processus termine`, timestamp: Date.now(), type: 'info' });
-        try { proc.kill('SIGKILL'); } catch { /* already dead */ }
+        try {
+          proc.kill('SIGKILL');
+        } catch (err) {
+          flog.debug('AGENT', `${this.logTag}: SIGKILL ignored on timeout: ${String(err).slice(0, 120)}`);
+        }
       }, timeoutMs);
 
       const rl = createInterface({ input: proc.stdout! });
@@ -260,14 +318,29 @@ export abstract class BaseExecAgent implements AgentProcess {
         this.handleStderrLine(line);
       });
 
+      const closeReadlines = () => {
+        try {
+          rl.close();
+        } catch (err) {
+          flog.debug('AGENT', `${this.logTag}: stdout readline close ignored: ${String(err).slice(0, 120)}`);
+        }
+        try {
+          stderrRl.close();
+        } catch (err) {
+          flog.debug('AGENT', `${this.logTag}: stderr readline close ignored: ${String(err).slice(0, 120)}`);
+        }
+      };
+
       proc.on('error', (err) => {
         if (settled) return;
         settled = true;
         clearTimeout(execTimeout);
+        closeReadlines();
         flog.error('AGENT', `${this.logTag}: Process error: ${err.message}`);
         this.emit({ text: `Error: ${err.message}`, timestamp: Date.now(), type: 'system' });
         this.setStatus('error');
         this.activeProcess = null;
+        this.emitExecFailed(err);
         reject(err);
       });
 
@@ -275,6 +348,7 @@ export abstract class BaseExecAgent implements AgentProcess {
         if (settled) return;
         settled = true;
         clearTimeout(execTimeout);
+        closeReadlines();
         flog.info('AGENT', `${this.logTag}: Process exited with code ${code}`);
         if (code !== null && code !== 0) {
           flog.warn('AGENT', `${this.logTag}: Non-zero exit code: ${code}`);
@@ -283,6 +357,7 @@ export abstract class BaseExecAgent implements AgentProcess {
             timestamp: Date.now(),
             type: 'info',
           });
+          this.emitExecFailed(new Error(`${this.logTag}: exit code ${code}`));
         }
         this.activeProcess = null;
         this.setStatus('waiting');

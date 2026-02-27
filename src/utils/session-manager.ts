@@ -1,10 +1,26 @@
 import { randomUUID } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import { join } from 'node:path';
-import type { AgentId, Message, SessionData } from '../agents/types.js';
+import { z } from 'zod';
+import { MessageSchema, type AgentId, type Message, type SessionData } from '../agents/types.js';
 import { flog } from './log.js';
 
 const SAVE_DEBOUNCE_MS = 2000;
+const SessionDataSchema = z.object({
+  id: z.string(),
+  version: z.literal(2),
+  task: z.string(),
+  projectDir: z.string(),
+  startedAt: z.number(),
+  finishedAt: z.number().optional(),
+  messages: z.array(MessageSchema),
+  agentSessions: z.object({
+    opus: z.string().optional(),
+    claude: z.string().optional(),
+    codex: z.string().optional(),
+    gemini: z.string().optional(),
+  }),
+});
 
 export class SessionManager {
   private session: SessionData | null = null;
@@ -76,24 +92,31 @@ export class SessionManager {
     const files = (await fs.readdir(this.sessionsDir)).filter(
       (f) => f.startsWith('session-') && f.endsWith('.json'),
     );
-    const sessions: Array<{ id: string; task: string; startedAt: number; finishedAt?: number }> =
-      [];
-
-    for (const file of files) {
-      try {
-        const raw = await fs.readFile(join(this.sessionsDir, file), 'utf-8');
-        const data = JSON.parse(raw);
-        if (data.version === 2) {
-          sessions.push({
+    const loaded = await Promise.all(
+      files.map(async (file) => {
+        try {
+          const raw = await fs.readFile(join(this.sessionsDir, file), 'utf-8');
+          const parsed = SessionDataSchema.safeParse(JSON.parse(raw));
+          if (!parsed.success) return null;
+          const data = parsed.data;
+          const meta: { id: string; task: string; startedAt: number; finishedAt?: number } = {
             id: data.id,
             task: data.task,
             startedAt: data.startedAt,
-            finishedAt: data.finishedAt,
-          });
+          };
+          if (data.finishedAt !== undefined) {
+            meta.finishedAt = data.finishedAt;
+          }
+          return meta;
+        } catch (err) {
+          flog.debug('SESSION', `Invalid session file skipped (${file}): ${String(err).slice(0, 120)}`);
+          return null;
         }
-      } catch {
-        // Skip corrupt files
-      }
+      }),
+    );
+    const sessions: Array<{ id: string; task: string; startedAt: number; finishedAt?: number }> = [];
+    for (const item of loaded) {
+      if (item) sessions.push(item);
     }
 
     return sessions.sort((a, b) => b.startedAt - a.startedAt);
@@ -109,10 +132,14 @@ export class SessionManager {
 
     try {
       const raw = await fs.readFile(filePath, 'utf-8');
-      const data = JSON.parse(raw);
-      if (data.version !== 2) return null;
-      return data as SessionData;
-    } catch {
+      const parsed = SessionDataSchema.safeParse(JSON.parse(raw));
+      if (!parsed.success) {
+        flog.warn('SESSION', `Invalid session schema: ${id}`);
+        return null;
+      }
+      return parsed.data;
+    } catch (err) {
+      flog.debug('SESSION', `Failed to load session ${id}: ${String(err).slice(0, 120)}`);
       return null;
     }
   }
@@ -144,7 +171,11 @@ export class SessionManager {
     } catch (err) {
       flog.error('SESSION', `Failed to save: ${err}`);
       // Clean up temp file on failure
-      try { await fs.unlink(tmpPath); } catch { /* ignore */ }
+      try {
+        await fs.unlink(tmpPath);
+      } catch (unlinkErr) {
+        flog.debug('SESSION', `Temp cleanup skipped: ${String(unlinkErr).slice(0, 120)}`);
+      }
     }
   }
 }

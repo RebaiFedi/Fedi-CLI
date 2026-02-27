@@ -1,11 +1,21 @@
 import { loadUserConfig } from './user-config.js';
 
-const cfg = loadUserConfig();
+let cfg: ReturnType<typeof loadUserConfig> | null = null;
+function getCfg() {
+  if (!cfg) {
+    cfg = loadUserConfig();
+  }
+  return cfg;
+}
 
-export const MAX_MESSAGES = cfg.maxMessages;
+export function getMaxMessages() {
+  return getCfg().maxMessages;
+}
+export function getFlushInterval() {
+  return getCfg().flushIntervalMs;
+}
 export const INDENT = '';
-export const FLUSH_INTERVAL = cfg.flushIntervalMs;
 export const BUBBLE_SIDE_MARGIN = 0;
-export const MAX_READABLE_WIDTH = 200;
+export const MAX_READABLE_WIDTH = 120;
 export const DOT_ACTIVE = '\u2022';
 export const MAX_VISIBLE_TODOS = 4;

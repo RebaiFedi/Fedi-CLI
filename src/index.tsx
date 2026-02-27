@@ -5,6 +5,7 @@ import { detectAll } from './utils/detect.js';
 import { initLog, flog } from './utils/log.js';
 import { Orchestrator } from './orchestrator/orchestrator.js';
 import { Dashboard } from './ui/Dashboard.js';
+import { ErrorBoundary } from './ui/ErrorBoundary.js';
 import { SessionManager } from './utils/session-manager.js';
 import { THEME } from './config/theme.js';
 
@@ -248,14 +249,16 @@ export async function main() {
   flog.info('SYSTEM', `Project: ${projectDir}`);
 
   const { waitUntilExit } = render(
-    <Dashboard
-      orchestrator={orchestrator}
-      projectDir={projectDir}
-      claudePath={clis.claude.path!}
-      codexPath={clis.codex.path!}
-      geminiPath={clis.gemini.path ?? ''}
-      resumeSessionId={resumeSessionId}
-    />,
+    <ErrorBoundary>
+      <Dashboard
+        orchestrator={orchestrator}
+        projectDir={projectDir}
+        claudePath={clis.claude.path!}
+        codexPath={clis.codex.path!}
+        geminiPath={clis.gemini.path ?? ''}
+        resumeSessionId={resumeSessionId}
+      />
+    </ErrorBoundary>,
   );
 
   await waitUntilExit();

@@ -41,6 +41,9 @@ export function printWelcomeBanner(projectDir: string): void {
     chalk.hex(THEME.border)('  \u2570' + '\u2500'.repeat(inner) + '\u256F'),
     '',
     `  ${chalk.white.bold('Tip:')} ${chalk.dim.italic('Type @opus, @sonnet, @codex, or @gemini to speak directly to an agent.')}`,
+    `  ${chalk.dim.italic('       @tous <message> envoie a tous les agents simultanement.')}`,
+    `  ${chalk.dim.italic('       @sessions liste vos sessions enregistrees.')}`,
+    `  ${chalk.dim.italic('       Esc arrete les agents en cours  |  Ctrl+C quitte.')}`,
     '',
   ].join('\n');
   console.log(output);

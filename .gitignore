@@ -1,6 +1,8 @@
 node_modules/
 dist/
 *.log
+fedi.log
+fedi-trace.log
 .DS_Store
 sessions/
 .env

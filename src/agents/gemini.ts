@@ -2,6 +2,9 @@ import type { SessionConfig } from './types.js';
 import { BaseExecAgent } from './base-exec-agent.js';
 import { flog } from '../utils/log.js';
 import { formatAction } from '../utils/format-action.js';
+import { loadUserConfig } from '../config/user-config.js';
+
+const cfg = loadUserConfig();
 
 export class GeminiAgent extends BaseExecAgent {
   readonly id = 'gemini' as const;
@@ -26,7 +29,7 @@ export class GeminiAgent extends BaseExecAgent {
 
     args.push('-p', prompt);
     args.push('-o', 'stream-json');
-    args.push('-m', 'gemini-2.5-pro');
+    args.push('-m', cfg.geminiModel);
     args.push('--approval-mode', 'auto_edit');
 
     if (this.sessionId) {

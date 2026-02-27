@@ -46,6 +46,7 @@ export class Orchestrator {
   readonly codex: AgentProcess;
   readonly gemini: AgentProcess;
   readonly bus: MessageBus;
+  private readonly agents: Record<AgentId, AgentProcess>;
 
   constructor(deps?: OrchestratorDeps) {
     this.opus = deps?.opus ?? new OpusAgent();
@@ -53,6 +54,12 @@ export class Orchestrator {
     this.codex = deps?.codex ?? new CodexAgent();
     this.gemini = deps?.gemini ?? new GeminiAgent();
     this.bus = deps?.bus ?? new MessageBus();
+    this.agents = {
+      opus: this.opus,
+      claude: this.claude,
+      codex: this.codex,
+      gemini: this.gemini,
+    };
   }
   private opusQueue = new PQueue({ concurrency: 1 });
   private claudeQueue = new PQueue({ concurrency: 1 });
@@ -71,6 +78,7 @@ export class Orchestrator {
     ['gemini', Promise.resolve()],
   ]);
   private opusRestartPending = false;
+  private opusRestartCount = 0;
   private config: Omit<SessionConfig, 'task'> | null = null;
   private relayTimestamps: number[] = [];
   private sessionMessageHandler: ((msg: Message) => void) | null = null;
@@ -106,6 +114,9 @@ export class Orchestrator {
   private readonly DELEGATE_TIMEOUT_MS = _cfg.delegateTimeoutMs;
   /** Grace period (ms) before safety-net auto-relay fires for spawn-per-exec agents */
   private readonly SAFETY_NET_GRACE_MS = 3_000;
+  /** Relay timeout follows the same timeout used for exec-based agents */
+  private readonly RELAY_TIMEOUT_MS = _cfg.execTimeoutMs;
+  private readonly MAX_OPUS_RESTARTS = 3;
   /** Cross-talk message counter — reset each round, blocks after MAX */
   private crossTalkCount = 0;
   private readonly MAX_CROSS_TALK_PER_ROUND = _cfg.maxCrossTalkPerRound;
@@ -163,10 +174,28 @@ export class Orchestrator {
     this.opus.onStatusChange((s) => {
       flog.info('AGENT', `opus: ${s}`, { agent: 'opus' });
       cb.onAgentStatus('opus', s);
+      if (s === 'running') {
+        this.opusRestartCount = 0;
+      }
       if ((s === 'error' || s === 'stopped') && this.started && !this.opusRestartPending) {
+        if (this.opusRestartCount >= this.MAX_OPUS_RESTARTS) {
+          flog.error('ORCH', `Opus restart limit reached (${this.MAX_OPUS_RESTARTS})`);
+          cb.onAgentOutput('opus', {
+            text: `Opus: restart limite atteinte (${this.MAX_OPUS_RESTARTS})`,
+            timestamp: Date.now(),
+            type: 'info',
+          });
+          return;
+        }
         this.opusRestartPending = true;
         setTimeout(async () => {
           this.opusRestartPending = false;
+          const config = this.config;
+          if (!config) {
+            flog.warn('ORCH', 'Opus restart skipped: config missing');
+            return;
+          }
+          this.opusRestartCount++;
           flog.warn('ORCH', 'Opus crashed — auto-restarting...');
           cb.onAgentOutput('opus', {
             text: 'Opus redémarrage en cours...',
@@ -175,8 +204,8 @@ export class Orchestrator {
           });
           try {
             await this.opus.start(
-              { ...this.config!, task: '' },
-              getOpusSystemPrompt(this.config!.projectDir),
+              { ...config, task: '' },
+              getOpusSystemPrompt(config.projectDir),
             );
           } catch (e) {
             flog.error('ORCH', `Opus restart failed: ${e}`);
@@ -308,11 +337,11 @@ export class Orchestrator {
       }
       if (this.agentsOnRelay.has(agentId)) {
         const start = this.relayStartTime.get(agentId) ?? 0;
-        if (Date.now() - start > 120_000) {
+        if (Date.now() - start > this.RELAY_TIMEOUT_MS) {
           this.agentsOnRelay.delete(agentId);
           this.relayBuffer.set(agentId, []);
           this.relayStartTime.delete(agentId);
-          flog.warn('ORCH', `${label} relay timeout (120s) — unmuting`);
+          flog.warn('ORCH', `${label} relay timeout (${this.RELAY_TIMEOUT_MS / 1000}s) — unmuting`);
         } else {
           this.detectRelayPatterns(agentId, line.text);
           if (line.type === 'stdout') {
@@ -478,46 +507,7 @@ export class Orchestrator {
     await this.sessionManager?.finalize();
 
     // Reset internal orchestration state (but NOT agent sessionIds — they're preserved)
-    this.started = false;
-    this.opusRestartPending = false;
-    this.workerStarted = new Map([
-      ['claude', false],
-      ['codex', false],
-      ['gemini', false],
-    ]);
-    this.workerReady = new Map([
-      ['claude', Promise.resolve()],
-      ['codex', Promise.resolve()],
-      ['gemini', Promise.resolve()],
-    ]);
-    this.agentLastContextIndex = new Map([
-      ['opus', 0],
-      ['claude', 0],
-      ['codex', 0],
-      ['gemini', 0],
-    ]);
-    this.agentsOnRelay.clear();
-    this.agentsOnCrossTalk.clear();
-    this.awaitingCrossTalkReply.clear();
-    this.relayBuffer = new Map([
-      ['claude', []],
-      ['codex', []],
-      ['opus', []],
-      ['gemini', []],
-    ]);
-    this.relayStartTime.clear();
-    this.relayTimestamps = [];
-    this.expectedDelegates.clear();
-    this.pendingReportsForOpus.clear();
-    this.deliveredToOpus.clear();
-    this.crossTalkCount = 0;
-    this.lastDelegationContent.clear();
-    for (const timer of this.safetyNetTimers.values()) clearTimeout(timer);
-    this.safetyNetTimers.clear();
-    if (this.delegateTimeoutTimer) {
-      clearTimeout(this.delegateTimeoutTimer);
-      this.delegateTimeoutTimer = null;
-    }
+    this.resetState();
 
     // Cleanup session message listener before re-registering in startWithTask
     if (this.sessionMessageHandler) {
@@ -638,9 +628,54 @@ export class Orchestrator {
     }
   }
 
-  private isRelayRateLimited(): boolean {
-    const now = Date.now();
-    this.relayTimestamps = this.relayTimestamps.filter((t) => now - t < RELAY_WINDOW_MS);
+  private resetState() {
+    this.started = false;
+    this.opusRestartPending = false;
+    this.opusRestartCount = 0;
+    this.workerStarted = new Map([
+      ['claude', false],
+      ['codex', false],
+      ['gemini', false],
+    ]);
+    this.workerReady = new Map([
+      ['claude', Promise.resolve()],
+      ['codex', Promise.resolve()],
+      ['gemini', Promise.resolve()],
+    ]);
+    this.agentLastContextIndex = new Map([
+      ['opus', 0],
+      ['claude', 0],
+      ['codex', 0],
+      ['gemini', 0],
+    ]);
+    this.agentsOnRelay.clear();
+    this.agentsOnCrossTalk.clear();
+    this.awaitingCrossTalkReply.clear();
+    this.relayBuffer = new Map([
+      ['claude', []],
+      ['codex', []],
+      ['opus', []],
+      ['gemini', []],
+    ]);
+    this.relayStartTime.clear();
+    this.relayTimestamps = [];
+    this.expectedDelegates.clear();
+    this.pendingReportsForOpus.clear();
+    this.deliveredToOpus.clear();
+    this.crossTalkCount = 0;
+    this.lastDelegationContent.clear();
+    for (const timer of this.safetyNetTimers.values()) clearTimeout(timer);
+    this.safetyNetTimers.clear();
+    if (this.delegateTimeoutTimer) {
+      clearTimeout(this.delegateTimeoutTimer);
+      this.delegateTimeoutTimer = null;
+    }
+  }
+
+  private isRelayRateLimited(now = Date.now()): boolean {
+    while (this.relayTimestamps.length > 0 && now - this.relayTimestamps[0] >= RELAY_WINDOW_MS) {
+      this.relayTimestamps.shift();
+    }
     return this.relayTimestamps.length >= MAX_RELAYS_PER_WINDOW;
   }
 
@@ -679,16 +714,14 @@ export class Orchestrator {
 
   /** Resolve an AgentId to the corresponding agent instance */
   private getAgent(id: AgentId) {
-    if (id === 'opus') return this.opus;
-    if (id === 'claude') return this.claude;
-    if (id === 'gemini') return this.gemini;
-    return this.codex;
+    return this.agents[id];
   }
 
   /** Detect [TO:*] relay tags in agent output and route messages.
    *  Returns true if at least one relay tag was found and processed. */
   private detectRelayPatterns(from: AgentId, text: string): boolean {
-    if (this.isRelayRateLimited()) {
+    const rateLimited = this.isRelayRateLimited();
+    if (rateLimited) {
       flog.warn('ORCH', `Relay rate limited — skipping from ${from}`);
       this.callbacks?.onAgentOutput(from, {
         text: '[Rate limit] Trop de relays — patientez quelques secondes.',
@@ -724,14 +757,6 @@ export class Orchestrator {
     let i = 0;
     let foundRelay = false;
     while (i < lines.length) {
-      if (this.isRelayRateLimited()) {
-        this.callbacks?.onAgentOutput(from, {
-          text: '[Rate limit] Trop de relays — patientez quelques secondes.',
-          timestamp: Date.now(),
-          type: 'info',
-        });
-        break;
-      }
       const line = lines[i];
 
       // Try to match a [TO:*] relay tag on this line

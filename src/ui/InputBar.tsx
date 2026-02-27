@@ -10,7 +10,7 @@ interface InputBarProps {
 const PASTE_MIN_LINES = 3;
 const MAX_HISTORY = 50;
 
-export function InputBar({ onSubmit, placeholder }: InputBarProps) {
+function InputBarComponent({ onSubmit, placeholder }: InputBarProps) {
   const [value, setValue] = useState('');
   const [pastedLabel, setPastedLabel] = useState<string | null>(null);
   const fullText = useRef<string>('');
@@ -154,3 +154,5 @@ export function InputBar({ onSubmit, placeholder }: InputBarProps) {
     </Box>
   );
 }
+
+export const InputBar = React.memo(InputBarComponent);

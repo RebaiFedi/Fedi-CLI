@@ -11,13 +11,24 @@ export interface TodoItem {
   agent: AgentId;
 }
 
-export function TodoPanel({ items }: { items: TodoItem[] }) {
+const BAR_WIDTH = 12;
+
+function buildProgressBar(done: number, total: number): string {
+  if (total === 0) return '';
+  const filled = Math.round((done / total) * BAR_WIDTH);
+  const empty = BAR_WIDTH - filled;
+  return '\u2588'.repeat(filled) + '\u2591'.repeat(empty);
+}
+
+function TodoPanelComponent({ items }: { items: TodoItem[] }) {
   if (items.length === 0) return null;
   const doneCount = items.filter((t) => t.done).length;
   const total = items.length;
 
   const visible = items.slice(0, MAX_VISIBLE_TODOS);
   const hidden = items.length - MAX_VISIBLE_TODOS;
+
+  const progressBar = buildProgressBar(doneCount, total);
 
   return (
     <Box flexDirection="column" paddingX={2} marginBottom={0}>
@@ -53,9 +64,11 @@ export function TodoPanel({ items }: { items: TodoItem[] }) {
       <Text dimColor>
         {'  ' + '\u2500'.repeat(40) + ' '}
         <Text color={doneCount === total ? THEME.codex : THEME.muted}>
-          {doneCount}/{total}
+          {progressBar}{' '}{doneCount}/{total}
         </Text>
       </Text>
     </Box>
   );
 }
+
+export const TodoPanel = React.memo(TodoPanelComponent);
