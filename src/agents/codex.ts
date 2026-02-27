@@ -17,6 +17,8 @@ export class CodexAgent implements AgentProcess {
   private contextReminder: string = '';
   private muted = false;
   private execLock: Promise<string> | null = null;
+  /** Queued urgent messages — drained at the start of the next send() call */
+  private urgentQueue: string[] = [];
 
   private setStatus(s: AgentStatus) {
     this.status = s;
@@ -61,14 +63,32 @@ export class CodexAgent implements AgentProcess {
     this.contextReminder = reminder;
   }
 
+  /** Queue an urgent message to be prepended to the next send() call.
+   *  Codex spawns a new process per exec() so we cannot inject mid-execution. */
+  sendUrgent(prompt: string) {
+    this.urgentQueue.push(prompt);
+    logger.info(`[CODEX] Urgent queued (${this.urgentQueue.length} pending): ${prompt.slice(0, 80)}`);
+  }
+
   send(prompt: string) {
     this.muted = false;
     this.setStatus('running');
+
+    // Drain urgent queue — prepend urgent messages before the main prompt
+    let finalPrompt = prompt;
+    if (this.urgentQueue.length > 0) {
+      const urgentMessages = this.urgentQueue
+        .map((m) => `[LIVE MESSAGE DU USER] ${m}`)
+        .join('\n\n');
+      finalPrompt = `${urgentMessages}\n\n${prompt}`;
+      logger.info(`[CODEX] Drained ${this.urgentQueue.length} urgent messages`);
+      this.urgentQueue = [];
+    }
+
     // If session was lost (no threadId) but system prompt was already sent,
     // prepend a compact reminder instead of the full 600-token prompt
-    let finalPrompt = prompt;
     if (!this.sessionId && this.systemPromptSent && this.contextReminder) {
-      finalPrompt = `${this.contextReminder}\n\n${prompt}`;
+      finalPrompt = `${this.contextReminder}\n\n${finalPrompt}`;
       logger.info('[CODEX] Session lost — prepending compact context reminder');
     }
     this.exec(finalPrompt).catch((err) => {

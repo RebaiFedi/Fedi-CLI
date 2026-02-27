@@ -214,6 +214,19 @@ export abstract class BaseClaudeAgent implements AgentProcess {
     });
   }
 
+  /** Inject a message directly into stdin WITHOUT changing agent status.
+   *  Used for LIVE user messages and cross-talk while the agent is already running. */
+  sendUrgent(prompt: string) {
+    if (!this.process?.stdin?.writable) return;
+    const imageBlocks = parseMessageWithImages(prompt);
+    const content: string | ContentBlock[] = imageBlocks ?? prompt;
+    this.sendRaw({
+      type: 'user',
+      message: { role: 'user', content },
+      ...(this.sessionId ? { session_id: this.sessionId } : {}),
+    });
+  }
+
   protected sendRaw(obj: Record<string, unknown>) {
     if (!this.process?.stdin?.writable) return;
     const json = JSON.stringify(obj);

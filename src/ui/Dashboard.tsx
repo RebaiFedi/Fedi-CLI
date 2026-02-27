@@ -340,6 +340,18 @@ export function Dashboard({
       },
       onRelay: (msg: Message) => {
         logger.info(`[DASHBOARD] Relay: ${msg.from} \u2192 ${msg.to}`);
+        // Show cross-talk and delegation messages to the user
+        const fromName = agentDisplayName(msg.from as AgentId);
+        const toName = agentDisplayName(msg.to as AgentId);
+        const fromColor = agentHex(msg.from as AgentId);
+        const toColor = agentHex(msg.to as AgentId);
+        const preview = msg.content.length > 120
+          ? msg.content.slice(0, 117) + '...'
+          : msg.content;
+        const relayLine =
+          `${INDENT}${chalk.hex(fromColor).bold(fromName)} ${chalk.dim('\u2192')} ${chalk.hex(toColor).bold(toName)}${chalk.dim(':')} ${chalk.hex('#CBD5E1')(preview)}`;
+        console.log('');
+        console.log(relayLine);
       },
       onRelayBlocked: (msg: Message) => {
         logger.info(`[DASHBOARD] Relay blocked: ${msg.from} \u2192 ${msg.to}`);

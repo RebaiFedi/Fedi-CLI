@@ -52,6 +52,23 @@ export class MessageBus extends EventEmitter {
     return full;
   }
 
+  /** Record a message in history without routing it (for LIVE-injected messages) */
+  record(msg: Omit<Message, 'id' | 'timestamp' | 'relayCount'>): Message {
+    const full: Message = {
+      ...msg,
+      id: randomUUID(),
+      timestamp: Date.now(),
+      relayCount: 0,
+    };
+    this.history.push(full);
+    if (this.history.length > 500) {
+      this.history = this.history.slice(-500);
+    }
+    logger.info(`[BUS] Record (LIVE): ${full.from} → ${full.to}: ${full.content.slice(0, 100)}`);
+    this.emit('message', full);
+    return full;
+  }
+
   relay(from: AgentId, to: AgentId, content: string, correlationId?: string): boolean {
     const relayCount = correlationId
       ? this.history.filter((m) => m.correlationId === correlationId).length

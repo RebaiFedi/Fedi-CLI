@@ -72,6 +72,11 @@ export class Orchestrator {
   private expectedDelegates: Set<AgentId> = new Set();
   /** Buffered reports from delegates — delivered to Opus as one combined message */
   private pendingReportsForOpus: Map<AgentId, string> = new Map();
+  /** Cross-talk message counter — reset each round, blocks after MAX */
+  private crossTalkCount = 0;
+  private readonly MAX_CROSS_TALK_PER_ROUND = 4;
+  /** Agents responding to a cross-talk message — stdout muted until timeout or next user interaction */
+  private agentsOnCrossTalk: Map<AgentId, number> = new Map(); // agentId → timestamp when set
 
   setConfig(config: Omit<SessionConfig, 'task'>) {
     this.config = config;
@@ -123,6 +128,23 @@ export class Orchestrator {
     // Claude output & status — buffer text when on relay, forward actions for live display
     this.claude.onOutput((line) => {
       traceAgentOutput('claude', line);
+      // Cross-talk mute — agent is responding to a peer message, suppress stdout
+      if (this.agentsOnCrossTalk.has('claude')) {
+        const muteTime = this.agentsOnCrossTalk.get('claude')!;
+        if (Date.now() - muteTime > 30_000) {
+          logger.warn('[ORCH] Claude cross-talk mute timeout (30s) — unmuting');
+          this.agentsOnCrossTalk.delete('claude');
+        } else {
+          this.detectRelayPatterns('claude', line.text);
+          // If also on relay, capture stdout in buffer for the Opus report
+          if (this.agentsOnRelay.has('claude') && line.type === 'stdout') {
+            traceBuffered('claude', 'on cross-talk + relay for opus');
+            this.relayBuffer.get('claude')!.push(line);
+          }
+          if (line.type !== 'stdout') cb.onAgentOutput('claude', line);
+          return;
+        }
+      }
       if (this.agentsOnRelay.has('claude')) {
         const start = this.relayStartTime.get('claude') ?? 0;
         if (Date.now() - start > 120_000) {
@@ -147,6 +169,15 @@ export class Orchestrator {
     });
     this.claude.onStatusChange((s) => {
       traceAgentStatus('claude', s);
+      if (s === 'waiting' || s === 'stopped' || s === 'error') {
+        const muteTime = this.agentsOnCrossTalk.get('claude');
+        if (muteTime !== undefined) {
+          const elapsed = Date.now() - muteTime;
+          if (elapsed > 3_000 || s === 'stopped' || s === 'error') {
+            this.agentsOnCrossTalk.delete('claude');
+          }
+        }
+      }
       if (s === 'stopped' || s === 'error') {
         traceRelayState('claude', 'end', `status=${s}`);
         this.agentsOnRelay.delete('claude');
@@ -169,6 +200,7 @@ export class Orchestrator {
         const textLines = buffer
           .filter((l) => l.type === 'stdout')
           .map((l) => l.text)
+          .filter((t) => !this.isRelayTag(t))
           .join('\n')
           .trim();
         if (textLines) {
@@ -210,6 +242,24 @@ export class Orchestrator {
     // Codex output & status — buffer text when on relay, forward actions for live display
     this.codex.onOutput((line) => {
       traceAgentOutput('codex', line);
+      // Cross-talk mute — agent is responding to a peer message, suppress stdout
+      if (this.agentsOnCrossTalk.has('codex')) {
+        const muteTime = this.agentsOnCrossTalk.get('codex')!;
+        if (Date.now() - muteTime > 30_000) {
+          logger.warn('[ORCH] Codex cross-talk mute timeout (30s) — unmuting');
+          this.agentsOnCrossTalk.delete('codex');
+        } else {
+          logger.info(`[ORCH] Codex output MUTED (cross-talk): ${line.text.slice(0, 80)}`);
+          this.detectRelayPatterns('codex', line.text);
+          // If also on relay, capture stdout in buffer for the Opus report
+          if (this.agentsOnRelay.has('codex') && line.type === 'stdout') {
+            traceBuffered('codex', 'on cross-talk + relay for opus');
+            this.relayBuffer.get('codex')!.push(line);
+          }
+          if (line.type !== 'stdout') cb.onAgentOutput('codex', line);
+          return;
+        }
+      }
       if (this.agentsOnRelay.has('codex')) {
         const start = this.relayStartTime.get('codex') ?? 0;
         if (Date.now() - start > 120_000) {
@@ -234,6 +284,20 @@ export class Orchestrator {
     });
     this.codex.onStatusChange((s) => {
       traceAgentStatus('codex', s);
+      if (s === 'waiting' || s === 'stopped' || s === 'error') {
+        const muteTime = this.agentsOnCrossTalk.get('codex');
+        if (muteTime !== undefined) {
+          const elapsed = Date.now() - muteTime;
+          // Codex uses exec() per message — ignore spurious 'waiting' from earlier execs.
+          // Only clear after enough time for the cross-talk exec to have run.
+          if (elapsed > 2_000 || s === 'stopped' || s === 'error') {
+            logger.info(`[ORCH] Cross-talk MUTE CLEARED for codex (status=${s}, elapsed=${elapsed}ms)`);
+            this.agentsOnCrossTalk.delete('codex');
+          } else {
+            logger.info(`[ORCH] Cross-talk mute kept for codex (status=${s}, elapsed=${elapsed}ms — too soon, likely stale exec)`);
+          }
+        }
+      }
       if (s === 'stopped' || s === 'error') {
         traceRelayState('codex', 'end', `status=${s}`);
         this.agentsOnRelay.delete('codex');
@@ -256,6 +320,7 @@ export class Orchestrator {
         const textLines = buffer
           .filter((l) => l.type === 'stdout')
           .map((l) => l.text)
+          .filter((t) => !this.isRelayTag(t))
           .join('\n')
           .trim();
         if (textLines) {
@@ -325,6 +390,11 @@ export class Orchestrator {
       if (msg.from === 'claude') return;
       this.claudeQueue.add(async () => {
         await this.ensureClaudeStarted();
+        // Refresh cross-talk mute right before send — prevents stale status
+        // transitions from clearing the mute during the async queue wait
+        if (this.agentsOnCrossTalk.has('claude')) {
+          this.agentsOnCrossTalk.set('claude', Date.now());
+        }
         const prefix = `[FROM:${msg.from.toUpperCase()}]`;
         const context = this.getNewContext('claude');
         let payload = `${prefix} ${msg.content}`;
@@ -342,6 +412,11 @@ export class Orchestrator {
       this.codexQueue.add(async () => {
         await this.ensureCodexStarted();
         await this.codexReady; // Wait for start() to fully complete before sending
+        // Refresh cross-talk mute right before send — prevents stale status
+        // transitions from clearing the mute during the async queue wait
+        if (this.agentsOnCrossTalk.has('codex')) {
+          this.agentsOnCrossTalk.set('codex', Date.now());
+        }
         const prefix = `[FROM:${msg.from.toUpperCase()}]`;
         const context = this.getNewContext('codex');
         let payload = `${prefix} ${msg.content}`;
@@ -435,6 +510,7 @@ export class Orchestrator {
       ['codex', 0],
     ]);
     this.agentsOnRelay.clear();
+    this.agentsOnCrossTalk.clear();
     this.relayBuffer = new Map([
       ['claude', []],
       ['codex', []],
@@ -444,6 +520,8 @@ export class Orchestrator {
     this.relayTimestamps = [];
     this.expectedDelegates.clear();
     this.pendingReportsForOpus.clear();
+    this.crossTalkCount = 0;
+
 
     // Cleanup session message listener before re-registering in startWithTask
     if (this.sessionMessageHandler) {
@@ -459,12 +537,30 @@ export class Orchestrator {
   }
 
   sendUserMessage(text: string) {
-    this.bus.send({ from: 'user', to: 'opus', content: text });
+    // If Opus is actively running, inject LIVE instead of queuing behind PQueue
+    if (this.opus.status === 'running') {
+      this.sendUserMessageLive(text, 'opus');
+    } else {
+      this.bus.send({ from: 'user', to: 'opus', content: text });
+    }
+  }
+
+  /** Send a LIVE message to an agent — bypasses PQueue if agent is running */
+  sendUserMessageLive(text: string, target: AgentId) {
+    const agent = this.getAgent(target);
+    if (agent.status === 'running') {
+      agent.sendUrgent(`[LIVE MESSAGE DU USER] ${text}`);
+      // Record in bus history so context tracking stays accurate
+      this.bus.record({ from: 'user', to: target, content: text });
+    } else {
+      this.bus.send({ from: 'user', to: target, content: text });
+    }
   }
 
   sendToAgent(agent: AgentId, text: string) {
     // User speaking directly to agent — clear relay mute and flush buffer
     this.agentsOnRelay.delete(agent);
+    this.agentsOnCrossTalk.delete(agent);
     this.expectedDelegates.delete(agent);
     this.pendingReportsForOpus.delete(agent);
     if (this.callbacks) {
@@ -473,7 +569,14 @@ export class Orchestrator {
       }
     }
     this.relayBuffer.set(agent, []);
-    this.bus.send({ from: 'user', to: agent, content: text });
+    // If agent is running, inject LIVE instead of queuing
+    const agentInstance = this.getAgent(agent);
+    if (agentInstance.status === 'running') {
+      agentInstance.sendUrgent(`[FROM:USER] ${text}`);
+      this.bus.record({ from: 'user', to: agent, content: text });
+    } else {
+      this.bus.send({ from: 'user', to: agent, content: text });
+    }
   }
 
   sendToAll(text: string) {
@@ -486,9 +589,12 @@ export class Orchestrator {
   sendToAllDirect(text: string) {
     // Clear all relay state so agents respond directly (not buffered for Opus)
     this.agentsOnRelay.clear();
+    this.agentsOnCrossTalk.clear();
     this.relayStartTime.clear();
     this.expectedDelegates.clear();
     this.pendingReportsForOpus.clear();
+    this.crossTalkCount = 0;
+
     for (const agent of ['claude', 'codex', 'opus'] as AgentId[]) {
       if (this.callbacks) {
         for (const buffered of this.relayBuffer.get(agent) ?? []) {
@@ -497,10 +603,17 @@ export class Orchestrator {
       }
       this.relayBuffer.set(agent, []);
     }
-    // Send as user to all 3 agents
-    this.bus.send({ from: 'user', to: 'opus', content: text });
-    this.bus.send({ from: 'user', to: 'claude', content: text });
-    this.bus.send({ from: 'user', to: 'codex', content: text });
+    // Send LIVE to running agents, normal bus.send to idle ones
+    for (const agentId of ['opus', 'claude', 'codex'] as AgentId[]) {
+      const agent = this.getAgent(agentId);
+      if (agent.status === 'running') {
+        agent.sendUrgent(`[FROM:USER] ${text}`);
+        // Record in bus history
+        this.bus.record({ from: 'user', to: agentId, content: text });
+      } else {
+        this.bus.send({ from: 'user', to: agentId, content: text });
+      }
+    }
   }
 
   private isRelayRateLimited(): boolean {
@@ -538,6 +651,11 @@ export class Orchestrator {
     return null;
   }
 
+  /** Resolve an AgentId to the corresponding agent instance */
+  private getAgent(id: AgentId) {
+    return id === 'opus' ? this.opus : id === 'claude' ? this.claude : this.codex;
+  }
+
   private detectRelayPatterns(from: AgentId, text: string) {
     if (this.isRelayRateLimited()) {
       logger.warn(`[ORCH] Relay rate limited — skipping from ${from}`);
@@ -571,28 +689,53 @@ export class Orchestrator {
 
       if (content) {
         logger.info(`[ORCH] Relay: ${from} → ${target}: ${content.slice(0, 80)}`);
-        if (from === 'opus' && target !== 'opus') {
-          this.agentsOnRelay.add(target);
-          this.relayStartTime.set(target, Date.now());
-          this.expectedDelegates.add(target);
-          logger.info(`[ORCH] Expected delegates: ${[...this.expectedDelegates].join(', ')}`);
-        }
-        this.recordRelay();
-        // Agent reporting back to Opus — buffer the report instead of delivering immediately.
-        // When ALL expected delegates have reported, deliver a combined message.
-        if (target === 'opus' && from !== 'opus' && this.expectedDelegates.has(from as AgentId)) {
-          this.pendingReportsForOpus.set(from as AgentId, content);
-          this.relayBuffer.set(from, []);
-          logger.info(`[ORCH] Buffered report from ${from} (${this.pendingReportsForOpus.size}/${this.expectedDelegates.size} received)`);
-          // Check if all delegates have reported
-          if (this.pendingReportsForOpus.size >= this.expectedDelegates.size) {
-            this.deliverCombinedReportsToOpus();
+
+        // ── Cross-talk: peer-to-peer between claude ↔ codex (not via Opus) ──
+        const isPeerToPeer =
+          from !== 'opus' && target !== 'opus' && from !== target;
+
+        if (isPeerToPeer) {
+          if (this.crossTalkCount >= this.MAX_CROSS_TALK_PER_ROUND) {
+            logger.warn(
+              `[ORCH] Cross-talk limit reached (${this.crossTalkCount}/${this.MAX_CROSS_TALK_PER_ROUND}) — blocking ${from} → ${target}`,
+            );
+            // Don't relay — agents will continue their own work
+          } else {
+            this.crossTalkCount++;
+            logger.info(
+              `[ORCH] Cross-talk ${this.crossTalkCount}/${this.MAX_CROSS_TALK_PER_ROUND}: ${from} → ${target}`,
+            );
+            // Mute the target agent's stdout — cross-talk response is internal
+            this.agentsOnCrossTalk.set(target, Date.now());
+            logger.info(`[ORCH] Cross-talk MUTE SET for ${target}`);
+            this.recordRelay();
+            this.bus.relay(from, target, content);
           }
         } else {
-          this.bus.relay(from, target, content);
-          // Keep muted until the agent finishes — safety-net on 'waiting' will auto-relay
-          if (target === 'opus' && from !== 'opus') {
+          // ── Standard delegation / report flow ──
+          if (from === 'opus' && target !== 'opus') {
+            this.agentsOnRelay.add(target);
+            this.relayStartTime.set(target, Date.now());
+            this.expectedDelegates.add(target);
+            logger.info(`[ORCH] Expected delegates: ${[...this.expectedDelegates].join(', ')}`);
+          }
+          this.recordRelay();
+          // Agent reporting back to Opus — buffer the report instead of delivering immediately.
+          // When ALL expected delegates have reported, deliver a combined message.
+          if (target === 'opus' && from !== 'opus' && this.expectedDelegates.has(from as AgentId)) {
+            this.pendingReportsForOpus.set(from as AgentId, content);
             this.relayBuffer.set(from, []);
+            logger.info(`[ORCH] Buffered report from ${from} (${this.pendingReportsForOpus.size}/${this.expectedDelegates.size} received)`);
+            // Check if all delegates have reported
+            if (this.pendingReportsForOpus.size >= this.expectedDelegates.size) {
+              this.deliverCombinedReportsToOpus();
+            }
+          } else {
+            this.bus.relay(from, target, content);
+            // Keep muted until the agent finishes — safety-net on 'waiting' will auto-relay
+            if (target === 'opus' && from !== 'opus') {
+              this.relayBuffer.set(from, []);
+            }
           }
         }
       }
@@ -629,9 +772,11 @@ export class Orchestrator {
     const combined = parts.join('\n\n---\n\n');
     logger.info(`[ORCH] Delivering combined report to Opus (${this.pendingReportsForOpus.size} delegates): ${combined.slice(0, 120)}`);
 
-    // Clear delegate tracking
+    // Clear delegate tracking + reset cross-talk counter for next round
+    // to a cross-talk message. They clear themselves on status → waiting.
     this.expectedDelegates.clear();
     this.pendingReportsForOpus.clear();
+    this.crossTalkCount = 0;
 
     // Deliver as a single message via the bus
     this.recordRelay();

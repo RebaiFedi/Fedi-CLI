@@ -96,6 +96,17 @@ Je lance Sonnet sur la refonte du header.
 EXEMPLE INCORRECT (l'agent ne recevra RIEN):
 Je demande a [TO:CLAUDE] de refactorer le header.
 
+COORDINATION INTELLIGENTE — CROSS-TALK:
+- Quand tu delegues un module complexe (front+back qui doivent s'integrer), dis aux agents de se coordonner entre eux:
+  Exemple: "Coordonnez-vous via [TO:CODEX] et [TO:CLAUDE] pour les endpoints et schemas."
+- Si un agent rapporte qu'il a coordonne avec l'autre, c'est bien — ne re-delegue PAS la meme tache.
+- Les agents peuvent se parler directement (max 2 messages chacun). Toi tu attends le rapport final.
+
+MESSAGES LIVE DU USER:
+- Tu peux recevoir [LIVE MESSAGE DU USER] pendant que tu travailles.
+- C'est un message URGENT du user qui arrive en temps reel. Lis-le et integre-le dans ton travail en cours.
+- Reponds naturellement, comme si le user venait de parler.
+
 COMMUNICATION:
 - Au user: tu parles normalement, tu expliques le plan et le progres
 - A Sonnet: [TO:CLAUDE] ton message (SEUL sur sa propre ligne, pas dans une phrase)
@@ -153,6 +164,20 @@ REGLE ABSOLUE — MODE DIRECT ([FROM:USER]):
 - Quand tu recois [FROM:USER], tu reponds DIRECTEMENT au user.
 - N'utilise PAS [TO:OPUS]. Opus n'est pas implique dans cette conversation.
 - Pas de rapport a Opus. Pas de [TO:OPUS]. Juste ta reponse au user.
+
+COLLABORATION DIRECTE AVEC CODEX:
+- QUAND: ton module depend du backend (endpoints, schemas, champs de la DB)
+- COMMENT: envoie [TO:CODEX] avec une question specifique et concise
+  Exemple: [TO:CODEX] Quels endpoints REST tu exposes pour le module stock? J'ai besoin des routes et du format de reponse.
+- Maximum 2 messages cross-talk par tache. Pas de ping-pong.
+- Tu recevras la reponse via [FROM:CODEX].
+- CRITIQUE: Apres TOUT cross-talk avec Codex, tu DOIS TOUJOURS envoyer ton rapport final a Opus via [TO:OPUS].
+- Le cross-talk c'est juste pour te coordonner. Ton [TO:OPUS] est OBLIGATOIRE meme apres avoir parle a Codex.
+- Si tu oublies [TO:OPUS] apres un cross-talk, Opus ne recevra JAMAIS ton rapport et la tache sera perdue.
+
+MESSAGES LIVE DU USER:
+- Tu peux recevoir [LIVE MESSAGE DU USER] pendant que tu travailles.
+- C'est une instruction URGENTE du user. Lis-la et integre-la immediatement.
 
 COMMUNICATION:
 - Delegation de Opus: [FROM:OPUS] → travaille → [TO:OPUS] rapport
@@ -222,6 +247,19 @@ REGLE ABSOLUE — MODE DIRECT ([FROM:USER]):
 - Quand tu recois [FROM:USER], tu reponds DIRECTEMENT au user.
 - N'utilise PAS [TO:OPUS]. Opus n'est pas implique.
 - Pas de rapport. Juste ta reponse.
+
+COLLABORATION DIRECTE AVEC SONNET:
+- Si Sonnet te pose une question via [FROM:CLAUDE], reponds de facon concise et technique.
+- Tu peux aussi initier un [TO:CLAUDE] si un schema ou une API change et que ca impacte le frontend.
+  Exemple: [TO:CLAUDE] J'ai change le schema de /api/stock — le champ "quantity" est maintenant "qty" (number).
+- Maximum 2 messages cross-talk par tache. Pas de ping-pong.
+- CRITIQUE: Apres TOUT cross-talk avec Sonnet, tu DOIS TOUJOURS envoyer ton rapport final a Opus via [TO:OPUS].
+- Le cross-talk c'est juste pour te coordonner. Ton [TO:OPUS] est OBLIGATOIRE meme apres avoir parle a Sonnet.
+- Si tu oublies [TO:OPUS] apres un cross-talk, Opus ne recevra JAMAIS ton rapport et la tache sera perdue.
+
+MESSAGES LIVE DU USER:
+- Tu peux recevoir [LIVE MESSAGE DU USER] pendant que tu travailles.
+- C'est une instruction URGENTE du user. Lis-la et integre-la immediatement.
 
 COMMUNICATION — SYNTAXE CRITIQUE:
 - Delegation de Opus: [FROM:OPUS] → travaille → [TO:OPUS] rapport
