@@ -30,18 +30,18 @@ export function printWelcomeBanner(projectDir: string): void {
     );
   };
 
-  console.log('');
-  console.log(chalk.hex(THEME.border)('  \u256D' + '\u2500'.repeat(inner) + '\u256E'));
-
-  console.log(row(line1));
-  console.log(row(line2));
-  console.log(row(line3));
-  console.log(row(line4));
-
-  console.log(chalk.hex(THEME.border)('  \u2570' + '\u2500'.repeat(inner) + '\u256F'));
-  console.log('');
-  console.log(
+  // Single console.log to avoid Ink ghost lines from multiple erase+redraw cycles
+  const output = [
+    '',
+    chalk.hex(THEME.border)('  \u256D' + '\u2500'.repeat(inner) + '\u256E'),
+    row(line1),
+    row(line2),
+    row(line3),
+    row(line4),
+    chalk.hex(THEME.border)('  \u2570' + '\u2500'.repeat(inner) + '\u256F'),
+    '',
     `  ${chalk.white.bold('Tip:')} ${chalk.dim.italic('Type @opus, @sonnet, @codex, or @gemini to speak directly to an agent.')}`,
-  );
-  console.log('');
+    '',
+  ].join('\n');
+  console.log(output);
 }

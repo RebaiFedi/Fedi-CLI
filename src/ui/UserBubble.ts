@@ -10,18 +10,20 @@ export function printUserBubble(text: string): void {
   const wrapWidth = Math.max(10, Math.min(bubbleWidth - 3, MAX_READABLE_WIDTH));
   const wrapped = wordWrap(text, wrapWidth, '');
 
-  const printBg = (line: string) => {
+  const formatBg = (line: string): string => {
     const visible = stripAnsi(line).length;
     const pad = Math.max(0, bubbleWidth - visible);
     const margin = ' '.repeat(BUBBLE_SIDE_MARGIN);
-    console.log(`${margin}${chalk.bgHex(THEME.userBubbleBg)(line + ' '.repeat(pad))}${margin}`);
+    return `${margin}${chalk.bgHex(THEME.userBubbleBg)(line + ' '.repeat(pad))}${margin}`;
   };
 
   const userPrefix = chalk.hex(THEME.userPrefix)(' \u276F ');
-  console.log('');
-  printBg(`${userPrefix}${chalk.hex(THEME.text)(wrapped[0] || '')}`);
+  // Single console.log to avoid Ink ghost lines
+  const outputLines: string[] = [''];
+  outputLines.push(formatBg(`${userPrefix}${chalk.hex(THEME.text)(wrapped[0] || '')}`));
   for (let i = 1; i < wrapped.length; i++) {
-    printBg(`   ${chalk.hex(THEME.text)(wrapped[i] ?? '')}`);
+    outputLines.push(formatBg(`   ${chalk.hex(THEME.text)(wrapped[i] ?? '')}`));
   }
-  console.log('');
+  outputLines.push('');
+  console.log(outputLines.join('\n'));
 }

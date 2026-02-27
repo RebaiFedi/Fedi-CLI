@@ -54,11 +54,13 @@ export interface SessionConfig {
 export interface AgentProcess {
   readonly id: AgentId;
   status: AgentStatus;
+  /** Last API error message — used by orchestrator for auto-relay placeholders */
+  lastError?: string | null;
   send(prompt: string): void;
   /** Inject a message directly into the agent's stdin without changing status.
    *  Used for LIVE user messages and cross-talk while the agent is running. */
   sendUrgent(prompt: string): void;
-  start(config: SessionConfig, systemPrompt: string, options?: Record<string, unknown>): Promise<void>;
+  start(config: SessionConfig, systemPrompt: string, options?: { muted?: boolean }): Promise<void>;
   stop(): Promise<void>;
   onOutput(handler: (line: OutputLine) => void): void;
   onStatusChange(handler: (status: AgentStatus) => void): void;

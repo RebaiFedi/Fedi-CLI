@@ -4,7 +4,8 @@ import type { Message, AgentId } from '../agents/types.js';
 import { MAX_RELAY_DEPTH } from '../agents/types.js';
 import { flog } from '../utils/log.js';
 
-export interface MessageBusEvents {
+/** Event types emitted by MessageBus — for documentation only */
+interface MessageBusEvents {
   message: [Message];
   'message:claude': [Message];
   'message:codex': [Message];

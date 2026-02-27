@@ -110,15 +110,15 @@ export abstract class BaseClaudeAgent implements AgentProcess {
     // When resuming a session, the CLI already has the conversation history.
     // Don't re-send the system prompt — it would be redundant.
     if (!this.sessionId) {
-      this.sendInitialMessage(systemPrompt);
+      await this.sendInitialMessage(systemPrompt);
     } else {
       flog.info('AGENT', `${this.logTag}: Skipping initial message (resumed session)`);
     }
   }
 
   /** Send the first message after spawn. Override to customize (e.g., mute response). */
-  protected sendInitialMessage(systemPrompt: string) {
-    const imageBlocks = parseMessageWithImages(systemPrompt);
+  protected async sendInitialMessage(systemPrompt: string) {
+    const imageBlocks = await parseMessageWithImages(systemPrompt);
     const content: string | ContentBlock[] = imageBlocks ?? systemPrompt;
 
     this.sendRaw({
@@ -220,26 +220,33 @@ export abstract class BaseClaudeAgent implements AgentProcess {
     }
     this.setStatus('running');
 
-    const imageBlocks = parseMessageWithImages(prompt);
-    const content: string | ContentBlock[] = imageBlocks ?? prompt;
-
-    this.sendRaw({
-      type: 'user',
-      message: { role: 'user', content },
-      ...(this.sessionId ? { session_id: this.sessionId } : {}),
-    });
+    this.sendWithImages(prompt);
   }
 
   /** Inject a message directly into stdin WITHOUT changing agent status.
    *  Used for LIVE user messages and cross-talk while the agent is already running. */
   sendUrgent(prompt: string) {
     if (!this.process?.stdin?.writable) return;
-    const imageBlocks = parseMessageWithImages(prompt);
-    const content: string | ContentBlock[] = imageBlocks ?? prompt;
-    this.sendRaw({
-      type: 'user',
-      message: { role: 'user', content },
-      ...(this.sessionId ? { session_id: this.sessionId } : {}),
+    this.sendWithImages(prompt);
+  }
+
+  /** Internal: resolve images (async) then send the message */
+  private sendWithImages(prompt: string) {
+    parseMessageWithImages(prompt).then((imageBlocks) => {
+      const content: string | ContentBlock[] = imageBlocks ?? prompt;
+      this.sendRaw({
+        type: 'user',
+        message: { role: 'user', content },
+        ...(this.sessionId ? { session_id: this.sessionId } : {}),
+      });
+    }).catch((err) => {
+      flog.error('AGENT', `${this.logTag}: Image parsing failed: ${err}`);
+      // Fall back to text-only
+      this.sendRaw({
+        type: 'user',
+        message: { role: 'user', content: prompt },
+        ...(this.sessionId ? { session_id: this.sessionId } : {}),
+      });
     });
   }
 

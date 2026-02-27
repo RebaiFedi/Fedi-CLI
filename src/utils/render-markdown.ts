@@ -201,6 +201,6 @@ function clean(text: string): string {
     .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1') // [link](url) → link
     .replace(/\*\*(.+?)\*\*/g, '\x1b[1m$1\x1b[22m') // **bold** → ANSI bold
     .replace(/\*(.+?)\*/g, '\x1b[3m$1\x1b[23m') // *italic* → ANSI italic
-    .replace(/_(.+?)_/g, '\x1b[3m$1\x1b[23m') // _italic_ → ANSI italic
+    .replace(/(?<![a-zA-Z0-9])_([^_]+?)_(?![a-zA-Z0-9])/g, '\x1b[3m$1\x1b[23m') // _italic_ → ANSI italic (not snake_case)
     .replace(/`(.+?)`/g, '\x1b[33m$1\x1b[39m'); // `code` → yellow
 }

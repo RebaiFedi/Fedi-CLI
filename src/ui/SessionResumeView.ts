@@ -24,13 +24,14 @@ export function printSessionResume(session: SessionData, matchId: string): void 
     user: { label: 'User', color: chalk.hex(THEME.text), dot: chalk.hex(THEME.text)('\u276F') },
   };
 
-  console.log(
+  // Single console.log to avoid Ink ghost lines
+  const lines: string[] = [
     chalk.dim('  \u2500\u2500\u2500 Session reprise: ') +
       chalk.hex(THEME.claude)(matchId.slice(0, 8)) +
       chalk.dim(' \u2500\u2500\u2500'),
-  );
-  console.log(chalk.dim(`  Tache: ${session.task}`));
-  console.log('');
+    chalk.dim(`  Tache: ${session.task}`),
+    '',
+  ];
 
   const recentMsgs = session.messages.slice(-10);
   for (const msg of recentMsgs) {
@@ -41,16 +42,15 @@ export function printSessionResume(session: SessionData, matchId: string): void 
     };
     const content = msg.content.length > 100 ? msg.content.slice(0, 100) + '...' : msg.content;
     if (msg.from === 'user') {
-      console.log(`  ${chalk.dim('\u276F')}  ${chalk.white(content)}`);
+      lines.push(`  ${chalk.dim('\u276F')}  ${chalk.white(content)}`);
     } else {
-      console.log(`  ${meta.dot} ${chalk.bold(meta.color(meta.label))}`);
-      console.log(`${INDENT}${chalk.dim(content)}`);
+      lines.push(`  ${meta.dot} ${chalk.bold(meta.color(meta.label))}`);
+      lines.push(`${INDENT}${chalk.dim(content)}`);
     }
   }
 
-  console.log('');
-  console.log(chalk.dim('  \u2500\u2500\u2500 Fin historique \u2500\u2500\u2500'));
-  console.log('');
+  lines.push('', chalk.dim('  \u2500\u2500\u2500 Fin historique \u2500\u2500\u2500'), '');
+  console.log(lines.join('\n'));
 }
 
 export function buildResumePrompt(session: SessionData): string {

@@ -33,6 +33,8 @@ export class GeminiAgent extends BaseExecAgent {
   protected handleStreamEvent(event: Record<string, unknown>) {
     const eventType = typeof event.type === 'string' ? event.type : undefined;
     flog.debug('AGENT', `[GEMINI event] ${eventType}`);
+    // Clear lastError on any successful event (agent is responsive)
+    if (eventType && eventType !== 'error') this.lastError = null;
 
     // init event -> capture session_id
     if (eventType === 'init' && typeof event.session_id === 'string') {

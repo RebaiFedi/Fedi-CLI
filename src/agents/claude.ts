@@ -22,7 +22,7 @@ export class ClaudeAgent extends BaseClaudeAgent {
    * queue will be sent via send() right after start() resolves.
    * This avoids the mute/unmute complexity entirely.
    */
-  protected override sendInitialMessage(_systemPrompt: string) {
+  protected override async sendInitialMessage(_systemPrompt: string): Promise<void> {
     // No-op: wait for the first real task via send()
   }
 

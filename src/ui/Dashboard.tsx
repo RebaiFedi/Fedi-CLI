@@ -59,8 +59,6 @@ export function Dashboard({
   const [claudeStatus, setClaudeStatus] = useState<AgentStatus>('idle');
   const [codexStatus, setCodexStatus] = useState<AgentStatus>('idle');
   const [geminiStatus, setGeminiStatus] = useState<AgentStatus>('idle');
-  /** Track which agents have actually worked (been 'running' at least once) */
-  const agentWasActive = useRef<Set<AgentId>>(new Set());
   const [stopped, setStopped] = useState(false);
   const stoppedRef = useRef(false);
   const [todos, setTodos] = useState<TodoItem[]>([]);
@@ -257,9 +255,8 @@ export function Dashboard({
       }
       // Stop all agents — fire-and-forget but agents are killed immediately
       orchestrator.stop().catch((err) => flog.error('UI', `Stop error: ${err}`));
-      console.log('');
       console.log(
-        chalk.dim('  Agents stoppes. Tapez un message pour relancer, ou Ctrl+C pour quitter.'),
+        '\n' + chalk.dim('  Agents stoppes. Tapez un message pour relancer, ou Ctrl+C pour quitter.'),
       );
     }
   });
@@ -316,7 +313,6 @@ export function Dashboard({
         if (stoppedRef.current) return;
 
         if (status === 'running') {
-          agentWasActive.current.add(agent);
           if (thinkingClearTimer.current) {
             clearTimeout(thinkingClearTimer.current);
             thinkingClearTimer.current = null;
@@ -375,17 +371,22 @@ export function Dashboard({
       onRelay: (msg: Message) => {
         flog.info('UI', `Relay: ${msg.from}->${msg.to}`);
         // Show cross-talk and delegation messages to the user
-        const fromName = agentDisplayName(msg.from as AgentId);
-        const toName = agentDisplayName(msg.to as AgentId);
-        const fromColor = agentHex(msg.from as AgentId);
-        const toColor = agentHex(msg.to as AgentId);
+        const fromId = msg.from as string;
+        const toId = msg.to as string;
+        // Validate agent IDs before using theme functions
+        const validAgents = new Set<string>(['opus', 'claude', 'codex', 'gemini']);
+        const fromAgent: AgentId = validAgents.has(fromId) ? fromId as AgentId : 'opus';
+        const toAgent: AgentId = validAgents.has(toId) ? toId as AgentId : 'opus';
+        const fromName = agentDisplayName(fromAgent);
+        const toName = agentDisplayName(toAgent);
+        const fromColor = agentHex(fromAgent);
+        const toColor = agentHex(toAgent);
         const preview = msg.content.length > 120
           ? msg.content.slice(0, 117) + '...'
           : msg.content;
         const relayLine =
           `${INDENT}${chalk.hex(fromColor).bold(fromName)} ${chalk.dim('\u2192')} ${chalk.hex(toColor).bold(toName)}${chalk.dim(':')} ${chalk.hex('#CBD5E1')(preview)}`;
-        console.log('');
-        console.log(relayLine);
+        console.log(`\n${relayLine}`);
       },
       onRelayBlocked: (msg: Message) => {
         flog.info('UI', `Relay blocked: ${msg.from}->${msg.to}`);
@@ -468,9 +469,11 @@ export function Dashboard({
           if (sessions.length === 0) {
             console.log(chalk.dim('    Aucune session enregistree.'));
           } else {
-            console.log('');
-            console.log(chalk.white.bold('    Sessions enregistrees'));
-            console.log(chalk.dim('    ' + '\u2500'.repeat(50)));
+            const sessionLines: string[] = [
+              '',
+              chalk.white.bold('    Sessions enregistrees'),
+              chalk.dim('    ' + '\u2500'.repeat(50)),
+            ];
             for (const s of sessions.slice(0, 10)) {
               const date = new Date(s.startedAt);
               const dateStr = date.toLocaleDateString('fr-FR', {
@@ -486,13 +489,12 @@ export function Dashboard({
                 : chalk.hex(THEME.info)('run');
               const task = s.task.length > 40 ? s.task.slice(0, 40) + '...' : s.task;
               const shortId = s.id.slice(0, 8);
-              console.log(
+              sessionLines.push(
                 `    ${chalk.dim(dateStr)} ${chalk.dim(timeStr)}  ${chalk.hex(THEME.claude)(shortId)}  ${status}  ${chalk.hex(THEME.text)(task)}`,
               );
             }
-            console.log('');
-            console.log(chalk.dim('    Voir en detail: fedi --view <id>'));
-            console.log('');
+            sessionLines.push('', chalk.dim('    Voir en detail: fedi --view <id>'), '');
+            console.log(sessionLines.join('\n'));
           }
         })().catch((err) => flog.error('UI',`[DASHBOARD] Sessions list error: ${err}`));
         return;
@@ -537,7 +539,6 @@ export function Dashboard({
         setStopped(false);
         stoppedRef.current = false;
         setTodos([]);
-        agentWasActive.current.clear();
         if (targetAgent && targetAgent !== 'opus') {
           const agentNames: Record<string, string> = { claude: 'Sonnet', codex: 'Codex', gemini: 'Gemini' };
           orchestrator

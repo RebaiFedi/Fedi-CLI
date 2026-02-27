@@ -61,6 +61,15 @@ export function initLog(options?: { level?: LogLevel }): void {
   // Silently handle stream errors to avoid crashing on disk issues
   jsonlStream.on('error', () => {});
   humanStream.on('error', () => {});
+
+  // Flush and close streams on process exit to prevent data loss
+  const closeStreams = () => {
+    jsonlStream?.end();
+    humanStream?.end();
+  };
+  process.once('exit', closeStreams);
+  process.once('SIGINT', closeStreams);
+  process.once('SIGTERM', closeStreams);
 }
 
 // ── Core write ─────────────────────────────────────────────────────────────

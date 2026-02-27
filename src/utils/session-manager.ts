@@ -135,11 +135,16 @@ export class SessionManager {
     }
 
     const filePath = join(this.sessionsDir, `session-${this.session.id}.json`);
+    const tmpPath = `${filePath}.tmp`;
     try {
-      await fs.writeFile(filePath, JSON.stringify(this.session, null, 2), 'utf-8');
+      // Atomic write: write to temp file, then rename (rename is atomic on POSIX)
+      await fs.writeFile(tmpPath, JSON.stringify(this.session, null, 2), 'utf-8');
+      await fs.rename(tmpPath, filePath);
       flog.debug('SESSION', `Saved to ${filePath}`);
     } catch (err) {
       flog.error('SESSION', `Failed to save: ${err}`);
+      // Clean up temp file on failure
+      try { await fs.unlink(tmpPath); } catch { /* ignore */ }
     }
   }
 }
