@@ -78,6 +78,7 @@ async function viewSession(projectDir: string, sessionId: string) {
     opus: { label: 'Opus', color: chalk.hex(THEME.opus) },
     claude: { label: 'Sonnet', color: chalk.hex(THEME.claude) },
     codex: { label: 'Codex', color: chalk.hex(THEME.codex) },
+    gemini: { label: 'Gemini', color: chalk.hex(THEME.gemini) },
     user: { label: 'User', color: chalk.hex(THEME.text) },
     system: { label: 'System', color: chalk.dim },
   };
@@ -167,6 +168,11 @@ export async function main() {
     process.exit(1);
   }
 
+  if (!clis.gemini.available) {
+    console.warn(chalk.yellow('  Gemini CLI not found. Explorer agent will be unavailable.'));
+    console.warn(chalk.dim('  Install with: npm i -g @anthropic-ai/gemini-cli'));
+  }
+
   const projectDir = process.cwd();
   const orchestrator = new Orchestrator();
 
@@ -178,6 +184,7 @@ export async function main() {
       projectDir={projectDir}
       claudePath={clis.claude.path!}
       codexPath={clis.codex.path!}
+      geminiPath={clis.gemini.path ?? ''}
       resumeSessionId={resumeSessionId}
     />,
   );

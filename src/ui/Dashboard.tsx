@@ -32,6 +32,7 @@ interface DashboardProps {
   projectDir: string;
   claudePath: string;
   codexPath: string;
+  geminiPath: string;
   resumeSessionId?: string;
 }
 
@@ -49,6 +50,7 @@ export function Dashboard({
   projectDir,
   claudePath,
   codexPath,
+  geminiPath,
   resumeSessionId,
 }: DashboardProps) {
   const { exit } = useApp();
@@ -56,6 +58,7 @@ export function Dashboard({
   const [opusStatus, setOpusStatus] = useState<AgentStatus>('idle');
   const [claudeStatus, setClaudeStatus] = useState<AgentStatus>('idle');
   const [codexStatus, setCodexStatus] = useState<AgentStatus>('idle');
+  const [geminiStatus, setGeminiStatus] = useState<AgentStatus>('idle');
   const [stopped, setStopped] = useState(false);
   const [todos, setTodos] = useState<TodoItem[]>([]);
   const [todosHiddenAt, setTodosHiddenAt] = useState<number>(0);
@@ -116,7 +119,7 @@ export function Dashboard({
     // lines because each call triggers Ink to erase + redraw its dynamic zone.
     const outputLines: string[] = [];
 
-    const flushPendingActions = (agent: AgentId, agentColor: 'green' | 'yellow' | 'magenta') => {
+    const flushPendingActions = (agent: AgentId, agentColor: 'green' | 'yellow' | 'magenta' | 'cyan') => {
       const actions = pendingActions.current.get(agent);
       if (!actions || actions.length === 0) return;
       const summary: DisplayEntry[] = [];
@@ -277,7 +280,7 @@ export function Dashboard({
   }, []);
 
   useEffect(() => {
-    orchestrator.setConfig({ projectDir, claudePath, codexPath });
+    orchestrator.setConfig({ projectDir, claudePath, codexPath, geminiPath });
     orchestrator.bind({
       onAgentOutput: (agent: AgentId, line: OutputLine) => {
         if (line.type === 'stdout') processTaskTags(agent, line.text);
@@ -289,6 +292,7 @@ export function Dashboard({
         if (agent === 'opus') setOpusStatus(status);
         if (agent === 'claude') setClaudeStatus(status);
         if (agent === 'codex') setCodexStatus(status);
+        if (agent === 'gemini') setGeminiStatus(status);
 
         if (status === 'running') {
           setThinking((prev) => prev ?? randomVerb());
@@ -297,6 +301,7 @@ export function Dashboard({
             agent === 'opus' ? status : orchestrator.opus.status,
             agent === 'claude' ? status : orchestrator.claude.status,
             agent === 'codex' ? status : orchestrator.codex.status,
+            agent === 'gemini' ? status : orchestrator.gemini.status,
           ];
           const anyRunningNow = statuses.some((s) => s === 'running');
           if (!anyRunningNow) {
@@ -400,6 +405,7 @@ export function Dashboard({
     projectDir,
     claudePath,
     codexPath,
+    geminiPath,
     resumeSessionId,
     processTaskTags,
     enqueueOutput,
@@ -491,15 +497,19 @@ export function Dashboard({
       } else if (text.startsWith('@claude ') || text.startsWith('@sonnet ')) {
         targetAgent = 'claude';
         agentMessage = text.slice(text.indexOf(' ') + 1);
+      } else if (text.startsWith('@gemini ')) {
+        targetAgent = 'gemini';
+        agentMessage = text.slice(8);
       }
 
       if (!orchestrator.isStarted || stopped) {
         setStopped(false);
         setTodos([]);
         if (targetAgent && targetAgent !== 'opus') {
+          const agentNames: Record<string, string> = { claude: 'Sonnet', codex: 'Codex', gemini: 'Gemini' };
           orchestrator
             .restart(
-              `Le user veut parler directement a ${targetAgent === 'claude' ? 'Sonnet' : 'Codex'}. Attends.`,
+              `Le user veut parler directement a ${agentNames[targetAgent] ?? targetAgent}. Attends.`,
             )
             .then(() => {
               orchestrator.sendToAgent(targetAgent!, agentMessage);
@@ -525,7 +535,8 @@ export function Dashboard({
   const opusRunning = opusStatus === 'running';
   const claudeRunning = claudeStatus === 'running';
   const codexRunning = codexStatus === 'running';
-  const anyRunning = opusRunning || claudeRunning || codexRunning;
+  const geminiRunning = geminiStatus === 'running';
+  const anyRunning = opusRunning || claudeRunning || codexRunning || geminiRunning;
 
   const agentPill = (name: string, running: boolean, color: string) => {
     if (running) {
@@ -577,6 +588,8 @@ export function Dashboard({
           {agentPill('Sonnet', claudeRunning, THEME.claude)}
           <Text dimColor>{'  '}</Text>
           {agentPill('Codex', codexRunning, THEME.codex)}
+          <Text dimColor>{'  '}</Text>
+          {agentPill('Gemini', geminiRunning, THEME.gemini)}
         </Box>
       </Box>
     </Box>

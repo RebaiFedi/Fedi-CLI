@@ -42,7 +42,7 @@ function isTableLine(text: string): boolean {
 
 export function entryToAnsiLines(
   e: DisplayEntry,
-  _agentColor: 'green' | 'yellow' | 'magenta',
+  _agentColor: 'green' | 'yellow' | 'magenta' | 'cyan',
 ): string[] {
   const termW = process.stdout.columns || 80;
   const maxW = Math.max(20, Math.min(termW - INDENT.length, MAX_READABLE_WIDTH));
@@ -92,7 +92,7 @@ export function entryToAnsiLines(
 /** Convert entries to ANSI lines with proper spacing around action groups */
 export function entriesToAnsiOutputLines(
   entries: DisplayEntry[],
-  agentColor: 'green' | 'yellow' | 'magenta',
+  agentColor: 'green' | 'yellow' | 'magenta' | 'cyan',
   prevKind?: DisplayEntry['kind'],
 ): string[] {
   const withContext: DisplayEntry[] = prevKind

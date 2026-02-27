@@ -2,12 +2,13 @@ import { z } from 'zod';
 
 // ── Agent identifiers ──────────────────────────────────────────────────────
 
-export type AgentId = 'claude' | 'codex' | 'opus';
+export type AgentId = 'claude' | 'codex' | 'opus' | 'gemini';
 
 export const AGENT_LABELS: Record<AgentId, string> = {
   opus: 'Opus',
   claude: 'Sonnet',
   codex: 'Codex CLI',
+  gemini: 'Gemini',
 };
 
 // ── Agent status ────────────────────────────────────────────────────────────
@@ -18,8 +19,8 @@ export type AgentStatus = 'idle' | 'running' | 'waiting' | 'error' | 'stopped';
 
 export const MessageSchema = z.object({
   id: z.string(),
-  from: z.enum(['claude', 'codex', 'opus', 'user', 'system']),
-  to: z.enum(['claude', 'codex', 'opus', 'all']),
+  from: z.enum(['claude', 'codex', 'opus', 'gemini', 'user', 'system']),
+  to: z.enum(['claude', 'codex', 'opus', 'gemini', 'all']),
   content: z.string(),
   correlationId: z.string().optional(),
   relayCount: z.number().default(0),
@@ -88,6 +89,7 @@ export interface SessionConfig {
   task: string;
   claudePath: string;
   codexPath: string;
+  geminiPath: string;
 }
 
 // ── Agent process interface ─────────────────────────────────────────────────
@@ -121,6 +123,7 @@ export interface SessionData {
     opus?: string;
     claude?: string;
     codex?: string;
+    gemini?: string;
   };
 }
 
@@ -135,7 +138,7 @@ export interface DisplayEntry {
 
 export interface ChatMessage {
   id: string;
-  agent: 'claude' | 'codex' | 'opus' | 'user' | 'system';
+  agent: 'claude' | 'codex' | 'opus' | 'gemini' | 'user' | 'system';
   lines: DisplayEntry[];
   timestamp: number;
   status: 'streaming' | 'done';
@@ -149,8 +152,10 @@ export interface ChatMessage {
 export const TO_CLAUDE_PATTERN = /^\s*\[TO:CLAUDE\]\s*(.*?)\s*$/;
 export const TO_CODEX_PATTERN = /^\s*\[TO:CODEX\]\s*(.*?)\s*$/;
 export const TO_OPUS_PATTERN = /^\s*\[TO:OPUS\]\s*(.*?)\s*$/;
+export const TO_GEMINI_PATTERN = /^\s*\[TO:GEMINI\]\s*(.*?)\s*$/;
 
 // Strict patterns that require content on the same line — used for false positive filtering
 export const TO_CLAUDE_STRICT = /^\s*\[TO:CLAUDE\]\s+\S/;
 export const TO_CODEX_STRICT = /^\s*\[TO:CODEX\]\s+\S/;
 export const TO_OPUS_STRICT = /^\s*\[TO:OPUS\]\s+\S/;
+export const TO_GEMINI_STRICT = /^\s*\[TO:GEMINI\]\s+\S/;

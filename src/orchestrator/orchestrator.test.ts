@@ -319,6 +319,74 @@ describe('Orchestrator', () => {
     });
   });
 
+  // ── Gemini relay ───────────────────────────────────────────────────────
+
+  describe('Gemini relay', () => {
+    it('detects [TO:GEMINI] delegation from Opus', async () => {
+      h.opus.emitText('[TO:GEMINI] Lis le fichier src/index.tsx et analyse la structure');
+      await h.flush();
+
+      const relay = h.log.relays.find((r) => r.to === 'gemini');
+      assert.ok(relay, 'relay should target gemini');
+      assert.ok(relay.content.includes('Lis le fichier src/index.tsx'));
+    });
+
+    it('receives Gemini report via [TO:OPUS]', async () => {
+      h.opus.emitText('[TO:GEMINI] Analyse le module auth');
+      await h.flush();
+
+      h.gemini.emitText('[TO:OPUS] Le module auth contient 3 fichiers...');
+      await h.flush();
+
+      const opusMessages = h.opus.getSentMessages();
+      const report = opusMessages.find((m) => m.includes('Le module auth contient 3 fichiers'));
+      assert.ok(report, 'Opus should receive Gemini report');
+    });
+
+    it('blocks cross-talk: Gemini to Claude is blocked', async () => {
+      h.gemini.emitText('[TO:CLAUDE] Hey Sonnet check this');
+      await h.flush();
+
+      const claudeRelays = h.log.relays.filter((r) => r.from === 'gemini' && r.to === 'claude');
+      assert.equal(claudeRelays.length, 0, 'Gemini should not be able to talk to Claude');
+    });
+
+    it('blocks cross-talk: Claude to Gemini is blocked', async () => {
+      h.claude.emitText('[TO:GEMINI] Hey Gemini read this file');
+      await h.flush();
+
+      const geminiRelays = h.log.relays.filter((r) => r.from === 'claude' && r.to === 'gemini');
+      assert.equal(geminiRelays.length, 0, 'Claude should not be able to talk to Gemini');
+    });
+
+    it('includes Gemini in combined delivery with other delegates', async () => {
+      h.opus.emitText('[TO:GEMINI] Explore the codebase\n[TO:CLAUDE] Fix the frontend');
+      await h.flush();
+
+      // Gemini reports
+      h.gemini.emitText('[TO:OPUS] Found 5 components');
+      await h.flush();
+
+      // Combined should NOT be delivered yet (waiting for Claude)
+      let opusMessages = h.opus.getSentMessages();
+      let combined = opusMessages.find(
+        (m) => m.includes('[FROM:GEMINI]') && m.includes('[FROM:CLAUDE]'),
+      );
+      assert.equal(combined, undefined, 'should not deliver until all delegates report');
+
+      // Claude reports
+      h.claude.emitText('[TO:OPUS] Frontend fixed');
+      await h.flush();
+
+      // Now both reported
+      opusMessages = h.opus.getSentMessages();
+      combined = opusMessages.find(
+        (m) => m.includes('[FROM:GEMINI]') && m.includes('[FROM:CLAUDE]'),
+      );
+      assert.ok(combined, 'combined report should include both Gemini and Claude');
+    });
+  });
+
   // ── Rate limiting ───────────────────────────────────────────────────────
 
   describe('rate limiting', () => {
