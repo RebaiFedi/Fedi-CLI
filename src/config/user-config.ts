@@ -12,7 +12,7 @@ export interface UserConfig {
   codexTimeoutMs: number;
   /** Max execution time specifically for Gemini (ms). Default: 360000 (3x execTimeoutMs) */
   geminiTimeoutMs: number;
-  /** Max time to wait for all delegates before force-delivering (ms). Default: 180000 */
+  /** Max time to wait for all delegates before force-delivering (ms). Default: 420000 */
   delegateTimeoutMs: number;
   /** Max relays per time window. Default: 50 */
   maxRelaysPerWindow: number;
@@ -40,7 +40,7 @@ const DEFAULTS: UserConfig = {
   execTimeoutMs: 120_000,
   codexTimeoutMs: 360_000,
   geminiTimeoutMs: 360_000,
-  delegateTimeoutMs: 180_000,
+  delegateTimeoutMs: 420_000,
   maxRelaysPerWindow: 50,
   relayWindowMs: 60_000,
   flushIntervalMs: 400,

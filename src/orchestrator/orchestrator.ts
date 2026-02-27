@@ -903,12 +903,56 @@ export class Orchestrator {
       this.delegateTimeoutTimer = null;
       if (this.expectedDelegates.size === 0) return;
       flog.warn('ORCH', `Delegate timeout (${this.DELEGATE_TIMEOUT_MS / 1000}s) — force-delivering ${this.pendingReportsForOpus.size}/${this.expectedDelegates.size} reports`);
-      // Fill in placeholder reports for any delegates that haven't reported
-      for (const delegate of this.expectedDelegates) {
-        if (!this.pendingReportsForOpus.has(delegate)) {
-          this.pendingReportsForOpus.set(delegate, '(timeout — pas de rapport)');
+
+      // For each timed-out delegate, try fallback before using placeholder
+      const timedOut = [...this.expectedDelegates].filter(
+        (d) => !this.pendingReportsForOpus.has(d),
+      );
+
+      for (const delegate of timedOut) {
+        const fallback = this.pickFallbackAgent(delegate);
+        const originalTask = this.lastDelegationContent.get(delegate);
+
+        if (fallback && originalTask) {
+          // Attempt fallback — remove timed-out delegate, add fallback
+          flog.info('ORCH', `Delegate timeout fallback: ${delegate} → ${fallback}`);
+          this.expectedDelegates.delete(delegate);
+          this.expectedDelegates.add(fallback);
+          this.deliveredToOpus.delete(fallback);
+          this.agentsOnRelay.add(fallback);
+          this.relayStartTime.set(fallback, Date.now());
+          this.lastDelegationContent.set(fallback, originalTask);
+          this.recordRelay();
+          this.bus.relay('opus', fallback, `[FALLBACK — ${delegate} timeout] ${originalTask}`);
+
+          // Notify UI immediately — visible message for the user
+          if (this.callbacks) {
+            this.callbacks.onAgentOutput(delegate, {
+              text: `${delegate} timeout — tache redirigee vers ${fallback}`,
+              timestamp: Date.now(),
+              type: 'info',
+            });
+          }
+
+          // Restart delegate timeout for the new fallback agent
+          this.resetDelegateTimeout();
+          return;
+        }
+
+        // No fallback available — use placeholder and notify UI
+        flog.warn('ORCH', `${delegate} timeout — no fallback available, using placeholder`);
+        this.pendingReportsForOpus.set(delegate, '(timeout — pas de rapport)');
+
+        // Notify UI so user sees the failure
+        if (this.callbacks) {
+          this.callbacks.onAgentOutput(delegate, {
+            text: `${delegate} timeout — pas de reponse (aucun agent de secours disponible)`,
+            timestamp: Date.now(),
+            type: 'info',
+          });
         }
       }
+
       this.deliverCombinedReportsToOpus();
     }, this.DELEGATE_TIMEOUT_MS);
   }
