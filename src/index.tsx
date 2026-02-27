@@ -120,12 +120,58 @@ async function viewSession(projectDir: string, sessionId: string) {
   }
 }
 
+function printHelp() {
+  console.log(`
+${chalk.hex(THEME.opus).bold('Fedi CLI')} ${chalk.dim('v1.0.0')} — Orchestrateur multi-agents IA
+
+${chalk.white.bold('USAGE')}
+  fedi [options]                Lancer une session interactive
+  fedi --sessions              Lister les sessions sauvegardees
+  fedi --view <id>             Voir le transcript d'une session
+  fedi --resume <id>           Reprendre une session interrompue
+
+${chalk.white.bold('OPTIONS')}
+  -h, --help                   Afficher cette aide
+  --sessions                   Lister toutes les sessions
+  --view <id>                  Afficher une session (supporte les IDs courts)
+  --resume <id>                Reprendre une session precedente
+  --agents <list>              Agents a activer (ex: opus,claude,codex)
+
+${chalk.white.bold('COMMANDES INTERACTIVES')}
+  @opus <message>              Parler directement a Opus (directeur)
+  @claude <message>            Parler directement a Claude/Sonnet (frontend)
+  @codex <message>             Parler directement a Codex (backend)
+  @gemini <message>            Parler directement a Gemini (explorateur)
+  @tous <message>              Envoyer a tous les agents
+  @sessions                    Lister les sessions
+
+${chalk.white.bold('RACCOURCIS')}
+  ${chalk.dim('Esc')}                          Arreter les agents en cours
+  ${chalk.dim('Ctrl+C')}                       Quitter
+
+${chalk.white.bold('AGENTS')}
+  ${chalk.hex(THEME.opus)('Opus')}     Claude Opus 4.6     Directeur / orchestrateur
+  ${chalk.hex(THEME.claude)('Sonnet')}   Claude Sonnet 4.6   Specialiste frontend
+  ${chalk.hex(THEME.codex)('Codex')}    GPT-5.3 Codex       Specialiste backend
+  ${chalk.hex(THEME.gemini)('Gemini')}   Gemini 2.5 Pro      Explorateur / analyste
+
+${chalk.dim('Logs:     ~/.fedi-cli/logs/')}
+${chalk.dim('Sessions: ./sessions/')}
+`);
+}
+
 export async function main() {
   // Initialize unified logging — writes to ~/.fedi-cli/logs/
   initLog();
   flog.info('SYSTEM', '=== Fedi CLI starting ===');
 
   const args = process.argv.slice(2);
+
+  // Handle --help flag
+  if (args.includes('--help') || args.includes('-h')) {
+    printHelp();
+    process.exit(0);
+  }
 
   // Handle --sessions flag
   if (args.includes('--sessions')) {
@@ -156,6 +202,28 @@ export async function main() {
     }
   }
 
+  // Handle --agents flag: restrict which agents are enabled
+  const agentsIdx = args.indexOf('--agents');
+  const enabledAgents = new Set<string>(['opus', 'claude', 'codex', 'gemini']);
+  if (agentsIdx !== -1) {
+    const agentList = args[agentsIdx + 1];
+    if (!agentList) {
+      console.error(chalk.red('  Usage: fedi --agents opus,claude,codex,gemini'));
+      process.exit(1);
+    }
+    enabledAgents.clear();
+    for (const a of agentList.split(',').map((s) => s.trim().toLowerCase())) {
+      if (['opus', 'claude', 'codex', 'gemini', 'sonnet'].includes(a)) {
+        enabledAgents.add(a === 'sonnet' ? 'claude' : a);
+      } else {
+        console.warn(chalk.yellow(`  Agent inconnu: ${a} (ignoring)`));
+      }
+    }
+    // Opus is always required as director
+    enabledAgents.add('opus');
+    flog.info('SYSTEM', `Agents enabled: ${[...enabledAgents].join(', ')}`);
+  }
+
   const clis = await detectAll();
 
   if (!clis.claude.available) {
@@ -163,14 +231,15 @@ export async function main() {
     process.exit(1);
   }
 
-  if (!clis.codex.available) {
+  if (!clis.codex.available && enabledAgents.has('codex')) {
     console.error('Codex CLI not found. Install with: npm i -g @openai/codex');
     process.exit(1);
   }
 
-  if (!clis.gemini.available) {
+  if (!clis.gemini.available && enabledAgents.has('gemini')) {
     console.warn(chalk.yellow('  Gemini CLI not found. Explorer agent will be unavailable.'));
     console.warn(chalk.dim('  Install with: npm i -g @anthropic-ai/gemini-cli'));
+    enabledAgents.delete('gemini');
   }
 
   const projectDir = process.cwd();

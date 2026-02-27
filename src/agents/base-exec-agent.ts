@@ -2,6 +2,7 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import type { AgentProcess, AgentId, AgentStatus, OutputLine, SessionConfig } from './types.js';
 import { flog } from '../utils/log.js';
+import { loadUserConfig } from '../config/user-config.js';
 
 /**
  * Abstract base class for spawn-per-exec agents (Codex, Gemini).
@@ -30,8 +31,8 @@ export abstract class BaseExecAgent implements AgentProcess {
   private execLock: Promise<string> | null = null;
   private urgentQueue: string[] = [];
 
-  /** Max execution time per exec call (2 minutes) */
-  protected static readonly EXEC_TIMEOUT_MS = 120_000;
+  /** Max execution time per exec call */
+  protected static readonly EXEC_TIMEOUT_MS = loadUserConfig().execTimeoutMs;
 
   /** Human-readable tag for log messages */
   protected abstract get logTag(): string;

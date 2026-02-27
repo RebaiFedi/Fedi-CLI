@@ -9,6 +9,11 @@ export class GeminiAgent extends BaseExecAgent {
   /** Last API error message — included in auto-relay placeholder so Opus knows why */
   lastError: string | null = null;
 
+  /** Consecutive 429/capacity failures — used for exponential backoff */
+  private consecutiveFailures = 0;
+  private static readonly MAX_RETRIES = 2;
+  private static readonly BASE_BACKOFF_MS = 2_000;
+
   protected get logTag() { return '[GEMINI]'; }
 
   protected getCliPath(config: SessionConfig): string {
@@ -33,8 +38,11 @@ export class GeminiAgent extends BaseExecAgent {
   protected handleStreamEvent(event: Record<string, unknown>) {
     const eventType = typeof event.type === 'string' ? event.type : undefined;
     flog.debug('AGENT', `[GEMINI event] ${eventType}`);
-    // Clear lastError on any successful event (agent is responsive)
-    if (eventType && eventType !== 'error') this.lastError = null;
+    // Clear lastError and reset failure counter on any successful event
+    if (eventType && eventType !== 'error') {
+      this.lastError = null;
+      this.consecutiveFailures = 0;
+    }
 
     // init event -> capture session_id
     if (eventType === 'init' && typeof event.session_id === 'string') {
@@ -123,7 +131,18 @@ export class GeminiAgent extends BaseExecAgent {
 
   protected handleStderrLine(line: string): void {
     flog.debug('AGENT', `[GEMINI stderr] ${line}`);
+    // Auth consent error — Gemini CLI needs interactive authentication first
+    if (line.includes('Interactive consent could not be obtained') || line.includes('Please run Gemini CLI in an interactive terminal')) {
+      this.lastError = 'Gemini: authentification requise — lancez `gemini` seul pour vous connecter';
+      this.emit({
+        text: 'Gemini: authentification requise. Lancez `gemini` dans un terminal pour vous connecter.',
+        timestamp: Date.now(),
+        type: 'info',
+      });
+      return;
+    }
     if (line.includes('Max attempts reached') || line.includes('Error when talking to Gemini API')) {
+      this.consecutiveFailures++;
       const short = line.includes('No capacity')
         ? 'Gemini API: pas de capacite disponible (429)'
         : line.includes('Error when talking')
@@ -131,6 +150,29 @@ export class GeminiAgent extends BaseExecAgent {
           : `Gemini: ${line.slice(0, 80)}`;
       this.lastError = short;
       this.emit({ text: short, timestamp: Date.now(), type: 'info' });
+    } else if (line.includes('status 429') || line.includes('exhausted your capacity')) {
+      this.consecutiveFailures++;
+      flog.warn('AGENT', `[GEMINI] Rate limited (failure #${this.consecutiveFailures})`);
     }
   }
+
+  /** Override send to add retry with exponential backoff on capacity errors */
+  override send(prompt: string) {
+    if (this.consecutiveFailures >= GeminiAgent.MAX_RETRIES) {
+      const backoffMs = GeminiAgent.BASE_BACKOFF_MS * Math.pow(2, this.consecutiveFailures - 1);
+      const cappedMs = Math.min(backoffMs, 30_000);
+      flog.info('AGENT', `[GEMINI] Backoff ${cappedMs}ms before retry (failure #${this.consecutiveFailures})`);
+      this.emit({
+        text: `Gemini: attente ${Math.round(cappedMs / 1000)}s avant retry...`,
+        timestamp: Date.now(),
+        type: 'info',
+      });
+      setTimeout(() => {
+        super.send(prompt);
+      }, cappedMs);
+      return;
+    }
+    super.send(prompt);
+  }
+
 }

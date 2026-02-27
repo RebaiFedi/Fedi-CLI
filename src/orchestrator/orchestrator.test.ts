@@ -1,4 +1,4 @@
-import { describe, it, beforeEach } from 'node:test';
+import { describe, it, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { createTestOrchestrator, type TestHarness } from '../test-utils/test-harness.js';
 
@@ -7,6 +7,12 @@ describe('Orchestrator', () => {
 
   beforeEach(() => {
     h = createTestOrchestrator();
+  });
+
+  afterEach(async () => {
+    // Stop the orchestrator to clean up PQueue tasks, timers, and event listeners.
+    // Without this, Node.js keeps the process alive waiting for open handles.
+    await h.orchestrator.stop();
   });
 
   // ── Relay detection ─────────────────────────────────────────────────────

@@ -150,7 +150,19 @@ export abstract class BaseClaudeAgent implements AgentProcess {
     if (type === 'result' && msg.is_error) {
       const errorMsg = typeof msg.result === 'string' ? msg.result : 'Unknown error';
       flog.error('AGENT', `${this.logTag}: Result error: ${errorMsg}`);
-      this.emit({ text: `${this.logTag} error: ${errorMsg}`, timestamp: Date.now(), type: 'info' });
+      // Detect quota/usage limit errors and show user-friendly message
+      if (errorMsg.includes('out of extra usage') || errorMsg.includes('rate limit')) {
+        const resetMatch = errorMsg.match(/resets?\s+(.+)/i);
+        const resetInfo = resetMatch ? ` (reset: ${resetMatch[1]})` : '';
+        this.emit({
+          text: `${this.logTag}: quota epuise${resetInfo}. Attendez le reset ou changez de plan.`,
+          timestamp: Date.now(),
+          type: 'info',
+        });
+        this.setStatus('error');
+      } else {
+        this.emit({ text: `${this.logTag} error: ${errorMsg}`, timestamp: Date.now(), type: 'info' });
+      }
     }
 
     if (type === 'assistant' && msg.message && typeof msg.message === 'object') {
@@ -216,6 +228,12 @@ export abstract class BaseClaudeAgent implements AgentProcess {
   send(prompt: string) {
     if (!this.process?.stdin?.writable) {
       flog.error('AGENT', `${this.logTag}: Cannot send: process not running`);
+      this.setStatus('error');
+      this.emit({
+        text: `${this.logTag}: processus mort — redemarrage necessaire`,
+        timestamp: Date.now(),
+        type: 'info',
+      });
       return;
     }
     this.setStatus('running');
@@ -226,7 +244,10 @@ export abstract class BaseClaudeAgent implements AgentProcess {
   /** Inject a message directly into stdin WITHOUT changing agent status.
    *  Used for LIVE user messages and cross-talk while the agent is already running. */
   sendUrgent(prompt: string) {
-    if (!this.process?.stdin?.writable) return;
+    if (!this.process?.stdin?.writable) {
+      flog.warn('AGENT', `${this.logTag}: Cannot sendUrgent: process not running`);
+      return;
+    }
     this.sendWithImages(prompt);
   }
 
@@ -250,9 +271,16 @@ export abstract class BaseClaudeAgent implements AgentProcess {
     });
   }
 
+  /** Remove unpaired Unicode surrogates that cause JSON encoding errors.
+   *  Replaces lone surrogates (U+D800..U+DFFF) with the Unicode replacement character. */
+  private sanitizeUnicode(text: string): string {
+    // eslint-disable-next-line no-control-regex
+    return text.replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, '\uFFFD');
+  }
+
   protected sendRaw(obj: Record<string, unknown>) {
     if (!this.process?.stdin?.writable) return;
-    const json = JSON.stringify(obj);
+    const json = this.sanitizeUnicode(JSON.stringify(obj));
     flog.debug('AGENT', `${this.logTag}: Sending: ${json.slice(0, 200)}`);
     this.process.stdin.write(json + '\n');
   }

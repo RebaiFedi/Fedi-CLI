@@ -87,6 +87,8 @@ export function Dashboard({
   const lastActionPrint = useRef<Map<AgentId, number>>(new Map());
   /** Debounce timer for clearing the thinking spinner (avoids flicker between agent transitions) */
   const thinkingClearTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** Prevents double-shutdown on repeated SIGINT — must be a ref to survive re-renders */
+  const exitInProgress = useRef(false);
 
   // Print welcome banner once at mount
   useEffect(() => {
@@ -256,7 +258,7 @@ export function Dashboard({
       // Stop all agents — fire-and-forget but agents are killed immediately
       orchestrator.stop().catch((err) => flog.error('UI', `Stop error: ${err}`));
       console.log(
-        '\n' + chalk.dim('  Agents stoppes. Tapez un message pour relancer, ou Ctrl+C pour quitter.'),
+        '\n' + chalk.dim('  Agents arretes. Tapez un message pour relancer, ou Ctrl+C pour quitter.'),
       );
     }
   });
@@ -420,7 +422,24 @@ export function Dashboard({
     }
 
     const handleExit = () => {
-      orchestrator.stop().finally(() => exit());
+      if (exitInProgress.current) {
+        // Second signal = force quit
+        flog.warn('UI', 'Force exit requested');
+        process.exit(1);
+      }
+      exitInProgress.current = true;
+      flog.info('UI', 'Graceful shutdown initiated...');
+      // Flush pending output before stopping
+      if (flushTimer.current) {
+        clearTimeout(flushTimer.current);
+        flushBuffer();
+      }
+      orchestrator.stop()
+        .catch((err) => flog.error('UI', `Shutdown error: ${err}`))
+        .finally(() => {
+          flog.info('UI', 'Shutdown complete');
+          exit();
+        });
     };
     process.on('SIGINT', handleExit);
     process.on('SIGTERM', handleExit);

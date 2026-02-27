@@ -1,7 +1,8 @@
-import { createWriteStream, mkdirSync, writeFileSync, type WriteStream } from 'node:fs';
+import { createWriteStream, mkdirSync, writeFileSync, readdirSync, unlinkSync, type WriteStream } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { getFlowId } from './flow.js';
+import { loadUserConfig } from '../config/user-config.js';
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -44,6 +45,9 @@ export function initLog(options?: { level?: LogLevel }): void {
 
   const logDir = join(homedir(), '.fedi-cli', 'logs');
   mkdirSync(logDir, { recursive: true });
+
+  // Rotate old log files — keep only the most recent N pairs
+  rotateLogFiles(logDir);
 
   const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
   const jsonlPath = join(logDir, `fedi-${ts}.jsonl`);
@@ -113,6 +117,30 @@ function write(level: LogLevel, cat: LogCategory, msg: string, ctx?: Record<stri
       : '';
     humanStream.write(`${timestamp} ${lvl} ${category} ${flowStr}${msg}${ctxStr}\n`);
   }
+}
+
+// ── Log rotation ──────────────────────────────────────────────────────
+
+/** Remove old log files, keeping only the most recent N sets */
+function rotateLogFiles(logDir: string): void {
+  try {
+    const maxFiles = loadUserConfig().maxLogFiles;
+    const files = readdirSync(logDir)
+      .filter((f) => f.startsWith('fedi-') && (f.endsWith('.log') || f.endsWith('.jsonl')))
+      .sort()
+      .reverse(); // newest first
+
+    // Each session creates 2 files (.log + .jsonl), so keep maxFiles * 2
+    const limit = maxFiles * 2;
+    if (files.length <= limit) return;
+
+    const toDelete = files.slice(limit);
+    for (const file of toDelete) {
+      try {
+        unlinkSync(join(logDir, file));
+      } catch { /* ignore individual file errors */ }
+    }
+  } catch { /* ignore rotation errors — don't block startup */ }
 }
 
 // ── Public API ─────────────────────────────────────────────────────────────

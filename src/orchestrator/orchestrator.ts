@@ -16,6 +16,7 @@ import {
 } from './prompts.js';
 import { flog } from '../utils/log.js';
 import { SessionManager } from '../utils/session-manager.js';
+import { loadUserConfig } from '../config/user-config.js';
 
 export interface OrchestratorDeps {
   opus?: AgentProcess;
@@ -26,8 +27,9 @@ export interface OrchestratorDeps {
 }
 
 /** Max relays within a time window before blocking */
-const RELAY_WINDOW_MS = 60_000;
-const MAX_RELAYS_PER_WINDOW = 50;
+const _cfg = loadUserConfig();
+const RELAY_WINDOW_MS = _cfg.relayWindowMs;
+const MAX_RELAYS_PER_WINDOW = _cfg.maxRelaysPerWindow;
 
 export interface OrchestratorCallbacks {
   onAgentOutput: (agent: AgentId, line: OutputLine) => void;
@@ -94,12 +96,12 @@ export class Orchestrator {
   /** Independent timeout for expectedDelegates — prevents Opus from blocking forever */
   private delegateTimeoutTimer: ReturnType<typeof setTimeout> | null = null;
   /** Max time (ms) to wait for all delegates before force-delivering whatever we have */
-  private readonly DELEGATE_TIMEOUT_MS = 180_000;
+  private readonly DELEGATE_TIMEOUT_MS = _cfg.delegateTimeoutMs;
   /** Grace period (ms) before safety-net auto-relay fires for spawn-per-exec agents */
   private readonly SAFETY_NET_GRACE_MS = 3_000;
   /** Cross-talk message counter — reset each round, blocks after MAX */
   private crossTalkCount = 0;
-  private readonly MAX_CROSS_TALK_PER_ROUND = 20;
+  private readonly MAX_CROSS_TALK_PER_ROUND = _cfg.maxCrossTalkPerRound;
   /** Agents responding to a cross-talk message — stdout muted until timeout or next user interaction */
   private agentsOnCrossTalk: Map<AgentId, number> = new Map(); // agentId → timestamp when set
   /** Last delegation content sent to each agent — used for auto-fallback on failure */
@@ -995,9 +997,15 @@ export class Orchestrator {
     const combined = parts.join('\n\n---\n\n');
     flog.info('ORCH', `Delivering combined report to Opus (${this.pendingReportsForOpus.size} delegates): ${combined.slice(0, 120)}`);
 
-    // Track delivered agents — late output from these will be muted completely
+    // Track delivered agents — late output from these will be muted completely.
+    // Also mute exec-based agents to stop wasting compute on their current task.
     for (const delegate of this.expectedDelegates) {
       this.deliveredToOpus.add(delegate);
+      const agent = this.getAgent(delegate);
+      if ('muted' in agent) {
+        (agent as { muted: boolean }).muted = true;
+        flog.info('ORCH', `Muted ${delegate} after combined delivery (save compute)`);
+      }
     }
 
     // Clear ALL delegate tracking — relay, mute, cross-talk, safety-net timers
