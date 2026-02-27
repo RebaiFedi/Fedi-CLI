@@ -46,6 +46,7 @@ interface BufferedEntry {
 // ── Constants ────────────────────────────────────────────────────────────────
 
 const AGENT_IDS = ['opus', 'claude', 'codex', 'gemini'] as const;
+const VALID_AGENT_IDS = new Set<string>(['opus', 'claude', 'codex', 'gemini']);
 
 // ── Dashboard ───────────────────────────────────────────────────────────────
 
@@ -332,7 +333,7 @@ export function Dashboard({
             if (prev[agent] === 'error') return prev;
             return { ...prev, [agent]: `Agent ${agent} en erreur` };
           });
-        } else if (status === 'running' || status === 'idle') {
+        } else if (status === 'running' || status === 'idle' || status === 'waiting') {
           setAgentErrors((prev) => {
             if (!(agent in prev)) return prev;
             const n = { ...prev };
@@ -358,7 +359,10 @@ export function Dashboard({
             agent === 'gemini' ? status : orchestrator.gemini.status,
           ];
           const anyRunningNow = statuses.some((s) => s === 'running');
-          if (!anyRunningNow && !thinkingClearTimer.current) {
+          // Keep spinner active if Opus still has pending delegates (agents answered
+          // but Opus hasn't received the combined report yet — app would look frozen)
+          const pendingDelegates = orchestrator.hasPendingDelegates;
+          if (!anyRunningNow && !pendingDelegates && !thinkingClearTimer.current) {
             thinkingClearTimer.current = setTimeout(() => {
               thinkingClearTimer.current = null;
               setThinking(false);
@@ -406,7 +410,7 @@ export function Dashboard({
         const fromId = msg.from as string;
         const toId = msg.to as string;
         // Validate agent IDs before using theme functions
-        const validAgents = new Set<string>(['opus', 'claude', 'codex', 'gemini']);
+        const validAgents = VALID_AGENT_IDS;
         const fromAgent: AgentId = validAgents.has(fromId) ? fromId as AgentId : 'opus';
         const toAgent: AgentId = validAgents.has(toId) ? toId as AgentId : 'opus';
         const fromName = agentDisplayName(fromAgent);
@@ -440,7 +444,10 @@ export function Dashboard({
             setThinking(true);
             orchestrator
               .startWithTask(resumePrompt)
-              .catch((err) => flog.error('UI',`[DASHBOARD] Resume error: ${err}`));
+              .catch((err) => {
+                flog.error('UI',`[DASHBOARD] Resume error: ${err}`);
+                if (stoppedRef.current) setThinking(false);
+              });
           } else {
             console.log(chalk.red(`  Session ${resumeSessionId} non trouvee ou corrompue.`));
           }
@@ -512,6 +519,7 @@ export function Dashboard({
         const sm = orchestrator.getSessionManager();
         if (!sm) {
           console.log(chalk.dim('    Session manager not initialized yet.'));
+          setThinking(false);
           return;
         }
         (async () => {
@@ -634,15 +642,9 @@ export function Dashboard({
           const color =
             s === 'running' ? THEME[id] : s === 'error' ? 'red' : THEME.muted;
           const icon = s === 'running' ? '●' : s === 'error' ? '✖' : '○';
-          const displayName: Record<string, string> = {
-            opus: 'Opus',
-            claude: 'Sonnet',
-            codex: 'Codex',
-            gemini: 'Gemini',
-          };
           return (
             <Text key={id} color={color}>
-              {icon} {displayName[id]}
+              {icon} {agentDisplayName(id)}
             </Text>
           );
         })}

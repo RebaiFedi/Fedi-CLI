@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Text } from 'ink';
+import { THEME } from '../config/theme.js';
 
 const THINKING_VERBS = [
   'Thinking',
@@ -16,7 +17,7 @@ const THINKING_VERBS = [
   'Interpreting',
 ];
 
-export function randomVerb(): string {
+function randomVerb(): string {
   return THINKING_VERBS[Math.floor(Math.random() * THINKING_VERBS.length)];
 }
 
@@ -69,14 +70,14 @@ function ThinkingSpinnerComponent() {
 
   return (
     <Text>
-      <Text color="#e8912d">{`  ${SPINNER_FRAMES[frame]} `}</Text>
-      <Text color="#e8912d" italic>
+      <Text color={THEME.opus}>{`  ${SPINNER_FRAMES[frame]} `}</Text>
+      <Text color={THEME.opus} italic>
         {verb}
       </Text>
-      <Text color="#e8912d" dimColor>
+      <Text color={THEME.opus} dimColor>
         {'...'}
       </Text>
-      <Text color="#e8912d" dimColor>
+      <Text color={THEME.opus} dimColor>
         {` ${elapsed}`}
       </Text>
     </Text>

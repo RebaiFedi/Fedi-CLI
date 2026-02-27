@@ -9,6 +9,9 @@ const cfg = loadUserConfig();
 export class CodexAgent extends BaseExecAgent {
   readonly id = 'codex' as const;
 
+  /** Codex needs more time than other agents — use a dedicated, larger timeout */
+  protected static override readonly EXEC_TIMEOUT_MS = cfg.codexTimeoutMs;
+
   protected get logTag() { return '[CODEX]'; }
 
   protected getCliPath(config: SessionConfig): string {

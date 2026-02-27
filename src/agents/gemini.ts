@@ -9,6 +9,9 @@ const cfg = loadUserConfig();
 export class GeminiAgent extends BaseExecAgent {
   readonly id = 'gemini' as const;
 
+  /** Gemini needs more time than other agents — use a dedicated, larger timeout */
+  protected static override readonly EXEC_TIMEOUT_MS = cfg.geminiTimeoutMs;
+
   /** Last API error message — included in auto-relay placeholder so Opus knows why */
   lastError: string | null = null;
 

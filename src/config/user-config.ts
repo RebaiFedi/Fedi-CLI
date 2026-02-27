@@ -8,6 +8,10 @@ import { flog } from '../utils/log.js';
 export interface UserConfig {
   /** Max execution time per agent exec call (ms). Default: 120000 */
   execTimeoutMs: number;
+  /** Max execution time specifically for Codex (ms). Default: 360000 (3x execTimeoutMs) */
+  codexTimeoutMs: number;
+  /** Max execution time specifically for Gemini (ms). Default: 360000 (3x execTimeoutMs) */
+  geminiTimeoutMs: number;
   /** Max time to wait for all delegates before force-delivering (ms). Default: 180000 */
   delegateTimeoutMs: number;
   /** Max relays per time window. Default: 50 */
@@ -34,6 +38,8 @@ export interface UserConfig {
 
 const DEFAULTS: UserConfig = {
   execTimeoutMs: 120_000,
+  codexTimeoutMs: 360_000,
+  geminiTimeoutMs: 360_000,
   delegateTimeoutMs: 180_000,
   maxRelaysPerWindow: 50,
   relayWindowMs: 60_000,
@@ -69,6 +75,8 @@ export function loadUserConfig(): UserConfig {
     const parsed = JSON.parse(raw);
     cachedConfig = {
       execTimeoutMs: typeof parsed.execTimeoutMs === 'number' ? parsed.execTimeoutMs : DEFAULTS.execTimeoutMs,
+      codexTimeoutMs: typeof parsed.codexTimeoutMs === 'number' ? parsed.codexTimeoutMs : DEFAULTS.codexTimeoutMs,
+      geminiTimeoutMs: typeof parsed.geminiTimeoutMs === 'number' ? parsed.geminiTimeoutMs : DEFAULTS.geminiTimeoutMs,
       delegateTimeoutMs: typeof parsed.delegateTimeoutMs === 'number' ? parsed.delegateTimeoutMs : DEFAULTS.delegateTimeoutMs,
       maxRelaysPerWindow: typeof parsed.maxRelaysPerWindow === 'number' ? parsed.maxRelaysPerWindow : DEFAULTS.maxRelaysPerWindow,
       relayWindowMs: typeof parsed.relayWindowMs === 'number' ? parsed.relayWindowMs : DEFAULTS.relayWindowMs,

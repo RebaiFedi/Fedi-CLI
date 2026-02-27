@@ -6,6 +6,7 @@ import { MessageSchema, type AgentId, type Message, type SessionData } from '../
 import { flog } from './log.js';
 
 const SAVE_DEBOUNCE_MS = 2000;
+export const RESUME_CONTEXT_MESSAGES = 15;
 const SessionDataSchema = z.object({
   id: z.string(),
   version: z.literal(2),
@@ -21,6 +22,26 @@ const SessionDataSchema = z.object({
     gemini: z.string().optional(),
   }),
 });
+
+/** Build resume prompt with enough recent history for continuity. */
+export function buildResumePrompt(session: SessionData): string {
+  const agentMeta: Record<string, string> = {
+    opus: 'Opus',
+    claude: 'Sonnet',
+    codex: 'Codex',
+    gemini: 'Gemini',
+    user: 'User',
+  };
+
+  const contextLines = session.messages.slice(-RESUME_CONTEXT_MESSAGES).map((m) => {
+    const label = agentMeta[m.from] ?? m.from;
+    const target = agentMeta[m.to] ?? m.to;
+    const short = m.content.length > 150 ? m.content.slice(0, 150) + '...' : m.content;
+    return `[${label}->${target}] ${short}`;
+  });
+
+  return `SESSION REPRISE — Voici le contexte de la session precedente:\n\nTACHE ORIGINALE: ${session.task}\n\n--- HISTORIQUE ---\n${contextLines.join('\n')}\n--- FIN ---\n\nLa session reprend. Attends le prochain message du user.`;
+}
 
 export class SessionManager {
   private session: SessionData | null = null;

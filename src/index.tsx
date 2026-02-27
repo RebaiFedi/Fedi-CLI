@@ -254,7 +254,7 @@ export async function main() {
         orchestrator={orchestrator}
         projectDir={projectDir}
         claudePath={clis.claude.path!}
-        codexPath={clis.codex.path!}
+        codexPath={clis.codex.path ?? ''}
         geminiPath={clis.gemini.path ?? ''}
         resumeSessionId={resumeSessionId}
       />

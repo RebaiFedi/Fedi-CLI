@@ -53,21 +53,4 @@ export function printSessionResume(session: SessionData, matchId: string): void 
   console.log(lines.join('\n'));
 }
 
-export function buildResumePrompt(session: SessionData): string {
-  const agentMeta: Record<string, string> = {
-    opus: 'Opus',
-    claude: 'Sonnet',
-    codex: 'Codex',
-    gemini: 'Gemini',
-    user: 'User',
-  };
-
-  const contextLines = session.messages.slice(-5).map((m) => {
-    const label = agentMeta[m.from] ?? m.from;
-    const target = agentMeta[m.to] ?? m.to;
-    const short = m.content.length > 150 ? m.content.slice(0, 150) + '...' : m.content;
-    return `[${label}->${target}] ${short}`;
-  });
-
-  return `SESSION REPRISE \u2014 Voici le contexte de la session precedente:\n\nTACHE ORIGINALE: ${session.task}\n\n--- HISTORIQUE ---\n${contextLines.join('\n')}\n--- FIN ---\n\nLa session reprend. Attends le prochain message du user.`;
-}
+export { buildResumePrompt } from '../utils/session-manager.js';

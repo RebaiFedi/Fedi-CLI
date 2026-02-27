@@ -117,6 +117,9 @@ export class Orchestrator {
   /** Relay timeout follows the same timeout used for exec-based agents */
   private readonly RELAY_TIMEOUT_MS = _cfg.execTimeoutMs;
   private readonly MAX_OPUS_RESTARTS = 3;
+  /** Cooldown to avoid spamming Opus with repeated guard-rail reminders */
+  private readonly OPUS_TOOL_GUARD_COOLDOWN_MS = 3_000;
+  private opusToolGuardLastReminderAt = 0;
   /** Cross-talk message counter — reset each round, blocks after MAX */
   private crossTalkCount = 0;
   private readonly MAX_CROSS_TALK_PER_ROUND = _cfg.maxCrossTalkPerRound;
@@ -152,6 +155,19 @@ export class Orchestrator {
     this.opus.onOutput((line) => {
       flog.debug('AGENT', 'Output', { agent: 'opus', type: line.type, text: line.text.slice(0, 150) });
       this.detectRelayPatterns('opus', line.text);
+
+      // Hard guard-rail: Opus must not use file exploration tools directly.
+      // Block display of the tool action and inject a system reminder to delegate to Gemini.
+      if (line.type === 'system' && this.isBlockedOpusToolAction(line.text)) {
+        flog.warn('ORCH', `Blocked forbidden Opus tool action: ${line.text.slice(0, 120)}`);
+        this.maybeRemindOpusToDelegate();
+        cb.onAgentOutput('opus', {
+          text: '[Guard] Opus: Read/Glob/Grep bloque. Delegue a Gemini via [TO:GEMINI].',
+          timestamp: Date.now(),
+          type: 'info',
+        });
+        return;
+      }
 
       // When Opus has active delegates, buffer ALL stdout (not just long messages).
       // This prevents Opus from writing partial reports visible to the user before
@@ -498,6 +514,12 @@ export class Orchestrator {
     return this.started;
   }
 
+  /** True when Opus has delegated to agents and is still waiting for their reports.
+   *  Used by the UI to keep the spinner active even when no agent is 'running'. */
+  get hasPendingDelegates(): boolean {
+    return this.expectedDelegates.size > 0;
+  }
+
   /** Restart after stop — preserve agent sessions and conversation context */
   async restart(task: string) {
     // Build conversation summary BEFORE resetting bus history
@@ -687,6 +709,23 @@ export class Orchestrator {
     return (
       TO_CLAUDE_PATTERN.test(line) || TO_CODEX_PATTERN.test(line) || TO_OPUS_PATTERN.test(line) || TO_GEMINI_PATTERN.test(line)
     );
+  }
+
+  /** True when Opus emits a forbidden tool action (Read/Glob/Grep). */
+  private isBlockedOpusToolAction(text: string): boolean {
+    return /^▸\s*(read|search|grep)\b/i.test(text.trim());
+  }
+
+  /** Send a throttled reminder to Opus to delegate exploration to Gemini. */
+  private maybeRemindOpusToDelegate() {
+    const now = Date.now();
+    if (now - this.opusToolGuardLastReminderAt < this.OPUS_TOOL_GUARD_COOLDOWN_MS) return;
+    this.opusToolGuardLastReminderAt = now;
+    this.bus.send({
+      from: 'system',
+      to: 'opus',
+      content: 'RAPPEL SYSTEME: Tu ne dois pas utiliser Read/Glob/Grep. Delegue la lecture/analyse a Gemini via [TO:GEMINI].',
+    });
   }
 
   private matchRelayTag(
