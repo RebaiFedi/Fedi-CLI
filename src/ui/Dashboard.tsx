@@ -62,6 +62,7 @@ export function Dashboard({
   /** Track which agents have actually worked (been 'running' at least once) */
   const agentWasActive = useRef<Set<AgentId>>(new Set());
   const [stopped, setStopped] = useState(false);
+  const stoppedRef = useRef(false);
   const [todos, setTodos] = useState<TodoItem[]>([]);
   const [todosHiddenAt, setTodosHiddenAt] = useState<number>(0);
   const [thinking, setThinking] = useState<string | null>(null);
@@ -242,8 +243,20 @@ export function Dashboard({
   useInput((_input, key) => {
     if (key.escape && !stopped) {
       setStopped(true);
+      stoppedRef.current = true;
       setThinking(null);
-      orchestrator.stop();
+      // Clear any pending thinking timer
+      if (thinkingClearTimer.current) {
+        clearTimeout(thinkingClearTimer.current);
+        thinkingClearTimer.current = null;
+      }
+      // Flush any pending output
+      if (flushTimer.current) {
+        clearTimeout(flushTimer.current);
+        flushBuffer();
+      }
+      // Stop all agents — fire-and-forget but agents are killed immediately
+      orchestrator.stop().catch((err) => flog.error('UI', `Stop error: ${err}`));
       console.log('');
       console.log(
         chalk.dim('  Agents stoppes. Tapez un message pour relancer, ou Ctrl+C pour quitter.'),
@@ -293,10 +306,14 @@ export function Dashboard({
         enqueueOutput(agent, entries);
       },
       onAgentStatus: (agent: AgentId, status: AgentStatus) => {
+        // Update pill status even when stopped (so pills go grey)
         if (agent === 'opus') setOpusStatus(status);
         if (agent === 'claude') setClaudeStatus(status);
         if (agent === 'codex') setCodexStatus(status);
         if (agent === 'gemini') setGeminiStatus(status);
+
+        // Don't re-trigger spinner when we are stopped
+        if (stoppedRef.current) return;
 
         if (status === 'running') {
           agentWasActive.current.add(agent);
@@ -487,6 +504,7 @@ export function Dashboard({
         const allMessage = allMatch[2];
         if (!orchestrator.isStarted || stopped) {
           setStopped(false);
+          stoppedRef.current = false;
           setTodos([]);
           orchestrator
             .restart(`Le user parle a tous les agents directement. Attends.`)
@@ -517,6 +535,7 @@ export function Dashboard({
 
       if (!orchestrator.isStarted || stopped) {
         setStopped(false);
+        stoppedRef.current = false;
         setTodos([]);
         agentWasActive.current.clear();
         if (targetAgent && targetAgent !== 'opus') {
