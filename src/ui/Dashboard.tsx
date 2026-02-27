@@ -59,6 +59,8 @@ export function Dashboard({
   const [claudeStatus, setClaudeStatus] = useState<AgentStatus>('idle');
   const [codexStatus, setCodexStatus] = useState<AgentStatus>('idle');
   const [geminiStatus, setGeminiStatus] = useState<AgentStatus>('idle');
+  /** Track which agents have actually worked (been 'running' at least once) */
+  const agentWasActive = useRef<Set<AgentId>>(new Set());
   const [stopped, setStopped] = useState(false);
   const [todos, setTodos] = useState<TodoItem[]>([]);
   const [todosHiddenAt, setTodosHiddenAt] = useState<number>(0);
@@ -297,6 +299,7 @@ export function Dashboard({
         if (agent === 'gemini') setGeminiStatus(status);
 
         if (status === 'running') {
+          agentWasActive.current.add(agent);
           if (thinkingClearTimer.current) {
             clearTimeout(thinkingClearTimer.current);
             thinkingClearTimer.current = null;
@@ -515,6 +518,7 @@ export function Dashboard({
       if (!orchestrator.isStarted || stopped) {
         setStopped(false);
         setTodos([]);
+        agentWasActive.current.clear();
         if (targetAgent && targetAgent !== 'opus') {
           const agentNames: Record<string, string> = { claude: 'Sonnet', codex: 'Codex', gemini: 'Gemini' };
           orchestrator
@@ -548,7 +552,7 @@ export function Dashboard({
   const geminiRunning = geminiStatus === 'running';
   const anyRunning = opusRunning || claudeRunning || codexRunning || geminiRunning;
 
-  const agentPill = (name: string, status: AgentStatus, color: string) => {
+  const agentPill = (name: string, agentId: AgentId, status: AgentStatus, color: string) => {
     if (status === 'running') {
       return (
         <Text>
@@ -557,7 +561,8 @@ export function Dashboard({
         </Text>
       );
     }
-    if (status === 'waiting') {
+    // Show dim color only if the agent actually worked (was running at least once)
+    if (status === 'waiting' && agentWasActive.current.has(agentId)) {
       return (
         <Text>
           <Text color={color} dimColor>{DOT_ACTIVE}</Text>
@@ -601,13 +606,13 @@ export function Dashboard({
           <Text color={THEME.muted}>{'quit'}</Text>
         </Text>
         <Box>
-          {agentPill('Opus', opusStatus, THEME.opus)}
+          {agentPill('Opus', 'opus', opusStatus, THEME.opus)}
           <Text dimColor>{'  '}</Text>
-          {agentPill('Sonnet', claudeStatus, THEME.claude)}
+          {agentPill('Sonnet', 'claude', claudeStatus, THEME.claude)}
           <Text dimColor>{'  '}</Text>
-          {agentPill('Codex', codexStatus, THEME.codex)}
+          {agentPill('Codex', 'codex', codexStatus, THEME.codex)}
           <Text dimColor>{'  '}</Text>
-          {agentPill('Gemini', geminiStatus, THEME.gemini)}
+          {agentPill('Gemini', 'gemini', geminiStatus, THEME.gemini)}
         </Box>
       </Box>
     </Box>
