@@ -242,7 +242,7 @@ export function Dashboard({
       // Single console.log call — Ink erases+redraws its zone only once
       console.log(final);
     }
-  }, []);
+  }, [maxMessages]);
 
   const enqueueOutput = useCallback(
     (agent: AgentId, entries: DisplayEntry[]) => {

@@ -298,7 +298,6 @@ export abstract class BaseClaudeAgent implements AgentProcess {
   /** Remove unpaired Unicode surrogates that cause JSON encoding errors.
    *  Replaces lone surrogates (U+D800..U+DFFF) with the Unicode replacement character. */
   private sanitizeUnicode(text: string): string {
-    // eslint-disable-next-line no-control-regex
     return text.replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, '\uFFFD');
   }
 

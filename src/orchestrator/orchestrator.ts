@@ -118,8 +118,12 @@ export class Orchestrator {
   private readonly RELAY_TIMEOUT_MS = _cfg.execTimeoutMs;
   private readonly MAX_OPUS_RESTARTS = 3;
   /** Cooldown to avoid spamming Opus with repeated guard-rail reminders */
-  private readonly OPUS_TOOL_GUARD_COOLDOWN_MS = 3_000;
+  private readonly OPUS_TOOL_GUARD_COOLDOWN_MS = 10_000;
   private opusToolGuardLastReminderAt = 0;
+  /** Guard display throttle — only show [Guard] message once per cooldown window */
+  private opusToolGuardBlockCount = 0;
+  private opusToolGuardLastDisplayAt = 0;
+  private readonly OPUS_GUARD_DISPLAY_COOLDOWN_MS = 5_000;
   /** Cross-talk message counter — reset each round, blocks after MAX */
   private crossTalkCount = 0;
   private readonly MAX_CROSS_TALK_PER_ROUND = _cfg.maxCrossTalkPerRound;
@@ -160,12 +164,18 @@ export class Orchestrator {
       // Block display of the tool action and inject a system reminder to delegate to Gemini.
       if (line.type === 'system' && this.isBlockedOpusToolAction(line.text)) {
         flog.warn('ORCH', `Blocked forbidden Opus tool action: ${line.text.slice(0, 120)}`);
+        this.opusToolGuardBlockCount++;
         this.maybeRemindOpusToDelegate();
-        cb.onAgentOutput('opus', {
-          text: '[Guard] Opus: Read/Glob/Grep bloque. Delegue a Gemini via [TO:GEMINI].',
-          timestamp: Date.now(),
-          type: 'info',
-        });
+
+        const now = Date.now();
+        if (now - this.opusToolGuardLastDisplayAt >= this.OPUS_GUARD_DISPLAY_COOLDOWN_MS) {
+          this.opusToolGuardLastDisplayAt = now;
+          cb.onAgentOutput('opus', {
+            text: `[Guard] Opus: Read/Glob/Grep bloque (${this.opusToolGuardBlockCount}x). Delegue a Gemini via [TO:GEMINI].`,
+            timestamp: now,
+            type: 'info',
+          });
+        }
         return;
       }
 
@@ -686,6 +696,9 @@ export class Orchestrator {
     this.deliveredToOpus.clear();
     this.crossTalkCount = 0;
     this.lastDelegationContent.clear();
+    this.opusToolGuardBlockCount = 0;
+    this.opusToolGuardLastDisplayAt = 0;
+    this.opusToolGuardLastReminderAt = 0;
     for (const timer of this.safetyNetTimers.values()) clearTimeout(timer);
     this.safetyNetTimers.clear();
     if (this.delegateTimeoutTimer) {

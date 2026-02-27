@@ -49,7 +49,7 @@ function ThinkingSpinnerComponent() {
   const [frame, setFrame] = useState(0);
   const [verb, setVerb] = useState(randomVerb);
   const [elapsed, setElapsed] = useState('0s');
-  const startTime = useRef(Date.now());
+  const startTime = useRef(0);
   const tickCount = useRef(0);
 
   useEffect(() => {

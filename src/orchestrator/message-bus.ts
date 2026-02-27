@@ -4,16 +4,16 @@ import type { Message, AgentId } from '../agents/types.js';
 import { MAX_RELAY_DEPTH } from '../agents/types.js';
 import { flog } from '../utils/log.js';
 
-/** Event types emitted by MessageBus — for documentation only */
-interface MessageBusEvents {
-  message: [Message];
-  'message:claude': [Message];
-  'message:codex': [Message];
-  'message:opus': [Message];
-  'message:gemini': [Message];
-  relay: [Message];
-  'relay-blocked': [Message];
-}
+// /** Event types emitted by MessageBus — for documentation only */
+// interface MessageBusEvents {
+//   message: [Message];
+//   'message:claude': [Message];
+//   'message:codex': [Message];
+//   'message:opus': [Message];
+//   'message:gemini': [Message];
+//   relay: [Message];
+//   'relay-blocked': [Message];
+// }
 
 export class MessageBus extends EventEmitter {
   private history: Message[] = [];
