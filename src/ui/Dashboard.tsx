@@ -84,6 +84,8 @@ export function Dashboard({
   const pendingActions = useRef<Map<AgentId, string[]>>(new Map());
   /** Last time we printed an action summary for each agent — throttle to avoid spam */
   const lastActionPrint = useRef<Map<AgentId, number>>(new Map());
+  /** Debounce timer for clearing the thinking spinner (avoids flicker between agent transitions) */
+  const thinkingClearTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Print welcome banner once at mount
   useEffect(() => {
@@ -295,6 +297,10 @@ export function Dashboard({
         if (agent === 'gemini') setGeminiStatus(status);
 
         if (status === 'running') {
+          if (thinkingClearTimer.current) {
+            clearTimeout(thinkingClearTimer.current);
+            thinkingClearTimer.current = null;
+          }
           setThinking((prev) => prev ?? randomVerb());
         } else {
           const statuses = [
@@ -304,8 +310,11 @@ export function Dashboard({
             agent === 'gemini' ? status : orchestrator.gemini.status,
           ];
           const anyRunningNow = statuses.some((s) => s === 'running');
-          if (!anyRunningNow) {
-            setThinking(null);
+          if (!anyRunningNow && !thinkingClearTimer.current) {
+            thinkingClearTimer.current = setTimeout(() => {
+              thinkingClearTimer.current = null;
+              setThinking(null);
+            }, 300);
           }
         }
         if (
@@ -398,6 +407,7 @@ export function Dashboard({
       process.off('SIGINT', handleExit);
       process.off('SIGTERM', handleExit);
       if (flushTimer.current) clearTimeout(flushTimer.current);
+      if (thinkingClearTimer.current) clearTimeout(thinkingClearTimer.current);
     };
   }, [
     orchestrator,
@@ -538,12 +548,20 @@ export function Dashboard({
   const geminiRunning = geminiStatus === 'running';
   const anyRunning = opusRunning || claudeRunning || codexRunning || geminiRunning;
 
-  const agentPill = (name: string, running: boolean, color: string) => {
-    if (running) {
+  const agentPill = (name: string, status: AgentStatus, color: string) => {
+    if (status === 'running') {
       return (
         <Text>
           <Text color={color}>{DOT_ACTIVE}</Text>
           <Text color={color} bold>{` ${name} `}</Text>
+        </Text>
+      );
+    }
+    if (status === 'waiting') {
+      return (
+        <Text>
+          <Text color={color} dimColor>{DOT_ACTIVE}</Text>
+          <Text color={color} dimColor>{` ${name} `}</Text>
         </Text>
       );
     }
@@ -583,13 +601,13 @@ export function Dashboard({
           <Text color={THEME.muted}>{'quit'}</Text>
         </Text>
         <Box>
-          {agentPill('Opus', opusRunning, THEME.opus)}
+          {agentPill('Opus', opusStatus, THEME.opus)}
           <Text dimColor>{'  '}</Text>
-          {agentPill('Sonnet', claudeRunning, THEME.claude)}
+          {agentPill('Sonnet', claudeStatus, THEME.claude)}
           <Text dimColor>{'  '}</Text>
-          {agentPill('Codex', codexRunning, THEME.codex)}
+          {agentPill('Codex', codexStatus, THEME.codex)}
           <Text dimColor>{'  '}</Text>
-          {agentPill('Gemini', geminiRunning, THEME.gemini)}
+          {agentPill('Gemini', geminiStatus, THEME.gemini)}
         </Box>
       </Box>
     </Box>

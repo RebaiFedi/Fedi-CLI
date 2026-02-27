@@ -199,8 +199,8 @@ export class Orchestrator {
           return;
         }
       }
-      cb.onAgentOutput('claude', line);
-      this.detectRelayPatterns('claude', line.text);
+      const hasRelay = this.detectRelayPatterns('claude', line.text);
+      if (!hasRelay) cb.onAgentOutput('claude', line);
     });
     this.claude.onStatusChange((s) => {
       flog.info('AGENT', `claude: ${s}`, { agent: 'claude' });
@@ -292,8 +292,8 @@ export class Orchestrator {
           return;
         }
       }
-      cb.onAgentOutput('codex', line);
-      this.detectRelayPatterns('codex', line.text);
+      const hasRelay = this.detectRelayPatterns('codex', line.text);
+      if (!hasRelay) cb.onAgentOutput('codex', line);
     });
     this.codex.onStatusChange((s) => {
       flog.info('AGENT', `codex: ${s}`, { agent: 'codex' });
@@ -351,7 +351,7 @@ export class Orchestrator {
       cb.onAgentStatus('codex', s);
     });
 
-    // Gemini output & status — buffer text when on relay, NO cross-talk (Gemini ↔ Opus only)
+    // Gemini output & status — buffer text when on relay, cross-talk with all peers
     this.gemini.onOutput((line) => {
       flog.debug('AGENT', 'Output', { agent: 'gemini', type: line.type, text: line.text.slice(0, 150) });
       // Agent's report already delivered to Opus — mute ALL late output completely
@@ -364,6 +364,23 @@ export class Orchestrator {
         flog.debug('ORCH', `Gemini output MUTED (already reported to Opus): ${line.text.slice(0, 80)}`);
         this.detectRelayPatterns('gemini', line.text);
         return;
+      }
+      // Cross-talk mute — agent is responding to a peer message, suppress stdout
+      if (this.agentsOnCrossTalk.has('gemini')) {
+        const muteTime = this.agentsOnCrossTalk.get('gemini')!;
+        if (Date.now() - muteTime > 30_000) {
+          flog.warn('ORCH', 'Gemini cross-talk mute timeout (30s) — unmuting');
+          this.agentsOnCrossTalk.delete('gemini');
+        } else {
+          flog.debug('ORCH', `Gemini output MUTED (cross-talk): ${line.text.slice(0, 80)}`);
+          this.detectRelayPatterns('gemini', line.text);
+          if (this.agentsOnRelay.has('gemini') && line.type === 'stdout') {
+            flog.debug('BUFFER', 'On cross-talk + relay for opus', { agent: 'gemini' });
+            this.relayBuffer.get('gemini')!.push(line);
+          }
+          if (line.type !== 'stdout') cb.onAgentOutput('gemini', line);
+          return;
+        }
       }
       if (this.agentsOnRelay.has('gemini')) {
         const start = this.relayStartTime.get('gemini') ?? 0;
@@ -384,11 +401,26 @@ export class Orchestrator {
           return;
         }
       }
-      cb.onAgentOutput('gemini', line);
-      this.detectRelayPatterns('gemini', line.text);
+      const hasRelay = this.detectRelayPatterns('gemini', line.text);
+      if (!hasRelay) cb.onAgentOutput('gemini', line);
     });
     this.gemini.onStatusChange((s) => {
       flog.info('AGENT', `gemini: ${s}`, { agent: 'gemini' });
+      if (s === 'waiting' || s === 'stopped' || s === 'error') {
+        const muteTime = this.agentsOnCrossTalk.get('gemini');
+        if (muteTime !== undefined) {
+          const elapsed = Date.now() - muteTime;
+          if (elapsed > 2_000 || s === 'stopped' || s === 'error') {
+            flog.info('ORCH', `Cross-talk MUTE CLEARED for gemini (status=${s}, elapsed=${elapsed}ms)`);
+            this.agentsOnCrossTalk.delete('gemini');
+            if (this.pendingReportsForOpus.size >= this.expectedDelegates.size && this.expectedDelegates.size > 0) {
+              this.deliverCombinedReportsToOpus();
+            }
+          } else {
+            flog.info('ORCH', `Cross-talk mute kept for gemini (status=${s}, elapsed=${elapsed}ms — too soon, likely stale exec)`);
+          }
+        }
+      }
       if (s === 'stopped' || s === 'error') {
         flog.info('RELAY', 'gemini: end', { agent: 'gemini', detail: `status=${s}` });
         this.agentsOnRelay.delete('gemini');
@@ -407,7 +439,7 @@ export class Orchestrator {
       }
       // Safety net: Gemini proc.exit → schedule auto-relay with grace period.
       // Gemini uses spawn-per-exec like Codex, so 'waiting' fires after EACH exec.
-      if (s === 'waiting' && this.agentsOnRelay.has('gemini')) {
+      if (s === 'waiting' && this.agentsOnRelay.has('gemini') && !this.awaitingCrossTalkReply.has('gemini')) {
         const prevTimer = this.safetyNetTimers.get('gemini');
         if (prevTimer) clearTimeout(prevTimer);
 
@@ -500,12 +532,21 @@ export class Orchestrator {
       });
     });
 
-    // Route messages to Gemini (lazy start) — no cross-talk, Opus ↔ Gemini only
+    // Route messages to Gemini (lazy start) — cross-talk with all peers
     this.bus.on('message:gemini', (msg: Message) => {
       flog.debug('BUS', `${msg.from}->${msg.to}`, { preview: msg.content.slice(0, 100) });
       if (msg.from === 'gemini') return;
+      // If Gemini was awaiting a cross-talk reply and this is from a peer, clear the flag
+      if (msg.from !== 'opus' && msg.from !== 'user' && this.awaitingCrossTalkReply.has('gemini')) {
+        flog.info('ORCH', `Gemini received cross-talk reply from ${msg.from} — no longer awaiting`);
+        this.awaitingCrossTalkReply.delete('gemini');
+      }
       this.geminiQueue.add(async () => {
         await this.ensureGeminiStarted();
+        // Refresh cross-talk mute right before send
+        if (this.agentsOnCrossTalk.has('gemini')) {
+          this.agentsOnCrossTalk.set('gemini', Date.now());
+        }
         const prefix = `[FROM:${msg.from.toUpperCase()}]`;
         const payload = `${prefix} ${msg.content}`;
         this.gemini.send(payload);
@@ -813,14 +854,7 @@ export class Orchestrator {
     }
     if (from !== 'gemini') {
       const m = line.match(TO_GEMINI_PATTERN);
-      if (m) {
-        // Block cross-talk: only Opus can talk to Gemini
-        if (from !== 'opus') {
-          flog.warn('ORCH', `Cross-talk blocked: ${from}->gemini (only Opus can talk to Gemini)`);
-          return null;
-        }
-        return { target: 'gemini', firstLine: m[1].trim() };
-      }
+      if (m) return { target: 'gemini', firstLine: m[1].trim() };
     }
     return null;
   }
@@ -833,14 +867,17 @@ export class Orchestrator {
     return this.codex;
   }
 
-  private detectRelayPatterns(from: AgentId, text: string) {
+  /** Detect [TO:*] relay tags in agent output and route messages.
+   *  Returns true if at least one relay tag was found and processed. */
+  private detectRelayPatterns(from: AgentId, text: string): boolean {
     if (this.isRelayRateLimited()) {
       flog.warn('ORCH', `Relay rate limited — skipping from ${from}`);
-      return;
+      return false;
     }
 
     const lines = text.split('\n');
     let i = 0;
+    let foundRelay = false;
     while (i < lines.length) {
       if (this.isRelayRateLimited()) break;
       const line = lines[i];
@@ -851,6 +888,7 @@ export class Orchestrator {
         i++;
         continue;
       }
+      foundRelay = true;
 
       const { target, firstLine } = match;
 
@@ -868,16 +906,9 @@ export class Orchestrator {
       if (content) {
         flog.info('RELAY', `${from}->${target}: ${content.slice(0, 80)}`);
 
-        // ── Block Gemini cross-talk: Gemini can only talk to Opus ──
-        if (from === 'gemini' && target !== 'opus') {
-          flog.warn('ORCH', `Cross-talk blocked: gemini->${target} (Gemini can only talk to Opus)`);
-          i = j;
-          continue;
-        }
-
-        // ── Cross-talk: peer-to-peer between claude ↔ codex (not via Opus) ──
+        // ── Cross-talk: peer-to-peer between agents (not via Opus) ──
         const isPeerToPeer =
-          from !== 'opus' && target !== 'opus' && from !== target && from !== 'gemini' && target !== 'gemini';
+          from !== 'opus' && target !== 'opus' && from !== target;
 
         if (isPeerToPeer) {
           if (this.crossTalkCount >= this.MAX_CROSS_TALK_PER_ROUND) {
@@ -942,6 +973,7 @@ export class Orchestrator {
 
       i = j; // Skip consumed lines, continue to next potential relay
     }
+    return foundRelay;
   }
 
   /** Check if Opus is waiting for delegate reports */

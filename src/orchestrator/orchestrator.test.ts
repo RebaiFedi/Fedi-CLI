@@ -343,20 +343,20 @@ describe('Orchestrator', () => {
       assert.ok(report, 'Opus should receive Gemini report');
     });
 
-    it('blocks cross-talk: Gemini to Claude is blocked', async () => {
+    it('allows cross-talk: Gemini to Claude', async () => {
       h.gemini.emitText('[TO:CLAUDE] Hey Sonnet check this');
       await h.flush();
 
       const claudeRelays = h.log.relays.filter((r) => r.from === 'gemini' && r.to === 'claude');
-      assert.equal(claudeRelays.length, 0, 'Gemini should not be able to talk to Claude');
+      assert.equal(claudeRelays.length, 1, 'Gemini should be able to talk to Claude');
     });
 
-    it('blocks cross-talk: Claude to Gemini is blocked', async () => {
+    it('allows cross-talk: Claude to Gemini', async () => {
       h.claude.emitText('[TO:GEMINI] Hey Gemini read this file');
       await h.flush();
 
       const geminiRelays = h.log.relays.filter((r) => r.from === 'claude' && r.to === 'gemini');
-      assert.equal(geminiRelays.length, 0, 'Claude should not be able to talk to Gemini');
+      assert.equal(geminiRelays.length, 1, 'Claude should be able to talk to Gemini');
     });
 
     it('includes Gemini in combined delivery with other delegates', async () => {
