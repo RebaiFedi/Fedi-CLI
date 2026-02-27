@@ -2,8 +2,7 @@ import React from 'react';
 import { render } from 'ink';
 import chalk from 'chalk';
 import { detectAll } from './utils/detect.js';
-import { logger } from './utils/logger.js';
-import { initTrace } from './utils/trace.js';
+import { initLog, flog } from './utils/log.js';
 import { Orchestrator } from './orchestrator/orchestrator.js';
 import { Dashboard } from './ui/Dashboard.js';
 import { SessionManager } from './utils/session-manager.js';
@@ -121,7 +120,9 @@ async function viewSession(projectDir: string, sessionId: string) {
 }
 
 export async function main() {
-  logger.info('=== Fedi CLI starting ===');
+  // Initialize unified logging — writes to ~/.fedi-cli/logs/
+  initLog();
+  flog.info('SYSTEM', '=== Fedi CLI starting ===');
 
   const args = process.argv.slice(2);
 
@@ -169,10 +170,7 @@ export async function main() {
   const projectDir = process.cwd();
   const orchestrator = new Orchestrator();
 
-  // Initialize trace logging — writes to <projectDir>/fedi-trace.log
-  initTrace(projectDir);
-
-  logger.info(`[MAIN] Project: ${projectDir}`);
+  flog.info('SYSTEM', `Project: ${projectDir}`);
 
   const { waitUntilExit } = render(
     <Dashboard
@@ -185,7 +183,7 @@ export async function main() {
   );
 
   await waitUntilExit();
-  logger.info('=== Fedi CLI exiting ===');
+  flog.info('SYSTEM', '=== Fedi CLI exiting ===');
 }
 
 main().catch((err) => {

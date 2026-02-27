@@ -11,6 +11,8 @@ export class ClaudeAgent extends BaseClaudeAgent {
   }
 
   protected override getExtraArgs(systemPrompt: string): string[] {
+    // When resuming, the session already has its system prompt — don't override it
+    if (this.sessionId) return [];
     return ['--system-prompt', systemPrompt];
   }
 

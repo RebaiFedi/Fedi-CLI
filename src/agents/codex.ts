@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import type { AgentProcess, AgentStatus, OutputLine, SessionConfig } from './types.js';
-import { logger } from '../utils/logger.js';
+import { flog } from '../utils/log.js';
 import { formatAction } from '../utils/format-action.js';
 
 export class CodexAgent implements AgentProcess {
@@ -51,10 +51,20 @@ export class CodexAgent implements AgentProcess {
     this.muted = options?.muted ?? false;
     this.setStatus('running');
 
-    const suffix = options?.muted
-      ? "\n\nTu es en standby. Reponds UNIQUEMENT: \"Pret.\" — rien d'autre. N'execute AUCUNE commande, ne lis AUCUN fichier. Attends qu'on te donne une tache."
-      : '\n\nNow begin working on the task.';
-    await this.exec(`${systemPrompt}${suffix}`);
+    // When resuming a thread, skip the full system prompt — Codex already has context.
+    // Just send a short resume message instead of re-sending 600+ tokens of instructions.
+    if (this.sessionId) {
+      const resumeMsg = options?.muted
+        ? '[Session reprise] Tu es en standby. Attends une tache.'
+        : '[Session reprise] Continue ton travail.';
+      flog.info('AGENT', `Codex: Resuming thread ${this.sessionId}`);
+      await this.exec(resumeMsg);
+    } else {
+      const suffix = options?.muted
+        ? "\n\nTu es en standby. Reponds UNIQUEMENT: \"Pret.\" — rien d'autre. N'execute AUCUNE commande, ne lis AUCUN fichier. Attends qu'on te donne une tache."
+        : '\n\nNow begin working on the task.';
+      await this.exec(`${systemPrompt}${suffix}`);
+    }
     this.systemPromptSent = true;
     this.muted = false;
   }
@@ -67,7 +77,7 @@ export class CodexAgent implements AgentProcess {
    *  Codex spawns a new process per exec() so we cannot inject mid-execution. */
   sendUrgent(prompt: string) {
     this.urgentQueue.push(prompt);
-    logger.info(`[CODEX] Urgent queued (${this.urgentQueue.length} pending): ${prompt.slice(0, 80)}`);
+    flog.info('AGENT', `Codex: Urgent queued (${this.urgentQueue.length} pending): ${prompt.slice(0, 80)}`);
   }
 
   send(prompt: string) {
@@ -81,7 +91,7 @@ export class CodexAgent implements AgentProcess {
         .map((m) => `[LIVE MESSAGE DU USER] ${m}`)
         .join('\n\n');
       finalPrompt = `${urgentMessages}\n\n${prompt}`;
-      logger.info(`[CODEX] Drained ${this.urgentQueue.length} urgent messages`);
+      flog.info('AGENT', `Codex: Drained ${this.urgentQueue.length} urgent messages`);
       this.urgentQueue = [];
     }
 
@@ -89,10 +99,10 @@ export class CodexAgent implements AgentProcess {
     // prepend a compact reminder instead of the full 600-token prompt
     if (!this.sessionId && this.systemPromptSent && this.contextReminder) {
       finalPrompt = `${this.contextReminder}\n\n${finalPrompt}`;
-      logger.info('[CODEX] Session lost — prepending compact context reminder');
+      flog.info('AGENT', 'Codex: Session lost — prepending compact context reminder');
     }
     this.exec(finalPrompt).catch((err) => {
-      logger.error(`[CODEX] exec error: ${err}`);
+      flog.error('AGENT', `Codex: exec error: ${err}`);
       this.setStatus('error');
     });
   }
@@ -136,7 +146,7 @@ export class CodexAgent implements AgentProcess {
 
       args.push(prompt);
 
-      logger.info(
+      flog.info('AGENT',
         `[CODEX] Spawning: ${this.cliPath} ${args.slice(0, 3).join(' ')}... (prompt: ${prompt.slice(0, 80)})`,
       );
 
@@ -160,7 +170,7 @@ export class CodexAgent implements AgentProcess {
         } catch {
           // Filter out Codex CLI banner/noise lines
           if (this.isNoiseLine(line)) {
-            logger.debug(`[CODEX] Filtered noise: ${line.slice(0, 80)}`);
+            flog.debug('AGENT',`[CODEX] Filtered noise: ${line.slice(0, 80)}`);
             return;
           }
           // Non-JSON output, show as-is
@@ -171,11 +181,11 @@ export class CodexAgent implements AgentProcess {
       const stderrRl = createInterface({ input: proc.stderr! });
       stderrRl.on('line', (line) => {
         if (!line.trim()) return;
-        logger.debug(`[CODEX stderr] ${line}`);
+        flog.debug('AGENT',`[CODEX stderr] ${line}`);
       });
 
       proc.on('error', (err) => {
-        logger.error(`[CODEX] Process error: ${err.message}`);
+        flog.error('AGENT',`[CODEX] Process error: ${err.message}`);
         this.emit({ text: `Error: ${err.message}`, timestamp: Date.now(), type: 'system' });
         this.setStatus('error');
         this.activeProcess = null;
@@ -183,9 +193,9 @@ export class CodexAgent implements AgentProcess {
       });
 
       proc.on('exit', (code) => {
-        logger.info(`[CODEX] Process exited with code ${code}`);
+        flog.info('AGENT',`[CODEX] Process exited with code ${code}`);
         if (code !== null && code !== 0) {
-          logger.warn(`[CODEX] Non-zero exit code: ${code}`);
+          flog.warn('AGENT',`[CODEX] Non-zero exit code: ${code}`);
           this.emit({
             text: `Codex: processus termine avec code ${code}`,
             timestamp: Date.now(),
@@ -201,24 +211,24 @@ export class CodexAgent implements AgentProcess {
 
   private handleStreamEvent(event: Record<string, unknown>) {
     const eventType = event.type as string | undefined;
-    logger.debug(`[CODEX event] ${eventType}`);
+    flog.debug('AGENT',`[CODEX event] ${eventType}`);
 
     // Extract thread/session ID
     if (eventType === 'thread.started' && event.thread_id) {
       this.sessionId = event.thread_id as string;
-      logger.info(`[CODEX] Thread ID: ${this.sessionId}`);
+      flog.info('AGENT',`[CODEX] Thread ID: ${this.sessionId}`);
     }
 
     // Detect context/thread errors
     if (eventType === 'error') {
       const errorMsg = (event.message as string) || (event.error as string) || 'Unknown error';
-      logger.error(`[CODEX] Error event: ${errorMsg}`);
+      flog.error('AGENT',`[CODEX] Error event: ${errorMsg}`);
       this.emit({ text: `Codex error: ${errorMsg}`, timestamp: Date.now(), type: 'info' });
     }
 
     // Detect thread truncation / context limit
     if (eventType === 'thread.truncated' || eventType === 'context_limit_exceeded') {
-      logger.warn(`[CODEX] Context limit: ${eventType}`);
+      flog.warn('AGENT',`[CODEX] Context limit: ${eventType}`);
       this.emit({
         text: 'Codex: contexte tronque (limite atteinte)',
         timestamp: Date.now(),
@@ -235,7 +245,7 @@ export class CodexAgent implements AgentProcess {
       // Reasoning summary — log only, don't display
       if (itemType === 'reasoning') {
         const text = item.text as string | undefined;
-        if (text) logger.debug(`[CODEX reasoning] ${text.slice(0, 120)}`);
+        if (text) flog.debug('AGENT',`[CODEX reasoning] ${text.slice(0, 120)}`);
         return;
       }
 
@@ -332,7 +342,7 @@ export class CodexAgent implements AgentProcess {
       }
 
       // Catch-all: unknown item type with text content
-      logger.info(
+      flog.info('AGENT',
         `[CODEX] Unhandled item.completed type="${itemType}" — attempting text extraction`,
       );
       if (typeof item.text === 'string' && (item.text as string).trim()) {
@@ -351,7 +361,7 @@ export class CodexAgent implements AgentProcess {
         this.emit({ text: item.output as string, timestamp: Date.now(), type: 'stdout' });
         return;
       }
-      logger.warn(
+      flog.warn('AGENT',
         `[CODEX] item.completed type="${itemType}" — no text extracted. Keys: ${Object.keys(item).join(', ')}`,
       );
     }
@@ -369,7 +379,7 @@ export class CodexAgent implements AgentProcess {
         const input = usage.input_tokens as number | undefined;
         const output = usage.output_tokens as number | undefined;
         if (input || output) {
-          logger.info(`[CODEX] Usage: ${input ?? '?'} in / ${output ?? '?'} out tokens`);
+          flog.info('AGENT',`[CODEX] Usage: ${input ?? '?'} in / ${output ?? '?'} out tokens`);
         }
       }
       this.setStatus('waiting');
@@ -400,7 +410,7 @@ export class CodexAgent implements AgentProcess {
 
   async stop(): Promise<void> {
     if (this.activeProcess) {
-      logger.info('[CODEX] Stopping active process...');
+      flog.info('AGENT','[CODEX] Stopping active process...');
       this.activeProcess.kill('SIGTERM');
       await new Promise<void>((resolve) => {
         const timeout = setTimeout(() => {

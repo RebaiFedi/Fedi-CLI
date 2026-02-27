@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { extname } from 'node:path';
-import { logger } from './logger.js';
+import { flog } from './log.js';
 
 const IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp']);
 
@@ -48,7 +48,7 @@ export function parseMessageWithImages(text: string): ContentBlock[] | null {
 
     if (!IMAGE_EXTENSIONS.has(ext)) continue;
     if (!existsSync(filePath)) {
-      logger.debug(`[IMAGE] Path not found: ${filePath}`);
+      flog.debug('SYSTEM', `Image path not found: ${filePath}`);
       continue;
     }
 
@@ -56,15 +56,15 @@ export function parseMessageWithImages(text: string): ContentBlock[] | null {
       const buf = readFileSync(filePath);
       // Sanity check: file should be at least a few bytes and not too big (20MB)
       if (buf.length < 100 || buf.length > 20 * 1024 * 1024) {
-        logger.warn(`[IMAGE] File size invalid (${buf.length} bytes): ${filePath}`);
+        flog.warn('SYSTEM', `Image file size invalid (${buf.length} bytes): ${filePath}`);
         continue;
       }
       const data = buf.toString('base64');
       const mime = MIME_MAP[ext] || 'image/png';
       validImages.push({ path: filePath, data, mime });
-      logger.info(`[IMAGE] Encoded ${filePath} (${Math.round(buf.length / 1024)}KB)`);
+      flog.info('SYSTEM', `Image encoded ${filePath} (${Math.round(buf.length / 1024)}KB)`);
     } catch (err) {
-      logger.error(`[IMAGE] Failed to read ${filePath}: ${err}`);
+      flog.error('SYSTEM', `Image failed to read ${filePath}: ${err}`);
     }
   }
 

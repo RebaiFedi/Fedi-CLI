@@ -12,7 +12,7 @@ import type {
 } from '../agents/types.js';
 import type { Orchestrator } from '../orchestrator/orchestrator.js';
 import { InputBar } from './InputBar.js';
-import { logger } from '../utils/logger.js';
+import { flog } from '../utils/log.js';
 import { THEME, agentHex, agentDisplayName, agentChalkColor } from '../config/theme.js';
 import { MAX_MESSAGES, INDENT, FLUSH_INTERVAL, DOT_ACTIVE, DOT_IDLE } from '../config/constants.js';
 import { outputToEntries, extractTasks } from '../rendering/output-transform.js';
@@ -23,7 +23,7 @@ import { TodoPanel, type TodoItem } from './TodoPanel.js';
 import { printWelcomeBanner } from './WelcomeBanner.js';
 import { printSessionResume, buildResumePrompt } from './SessionResumeView.js';
 import { printUserBubble } from './UserBubble.js';
-import { traceUserInput, traceDisplayed } from '../utils/trace.js';
+// trace functions replaced by unified flog
 
 // ── Props ───────────────────────────────────────────────────────────────────
 
@@ -216,7 +216,7 @@ export function Dashboard({
 
     if (outputLines.length > 0) {
       const final = compactOutputLines(outputLines).join('\n');
-      traceDisplayed('opus', final);
+      flog.debug('UI', 'Output displayed', { preview: final.slice(0, 120) });
       // Single console.log call — Ink erases+redraws its zone only once
       console.log(final);
     }
@@ -339,7 +339,7 @@ export function Dashboard({
         }
       },
       onRelay: (msg: Message) => {
-        logger.info(`[DASHBOARD] Relay: ${msg.from} \u2192 ${msg.to}`);
+        flog.info('UI', `Relay: ${msg.from}->${msg.to}`);
         // Show cross-talk and delegation messages to the user
         const fromName = agentDisplayName(msg.from as AgentId);
         const toName = agentDisplayName(msg.to as AgentId);
@@ -354,7 +354,7 @@ export function Dashboard({
         console.log(relayLine);
       },
       onRelayBlocked: (msg: Message) => {
-        logger.info(`[DASHBOARD] Relay blocked: ${msg.from} \u2192 ${msg.to}`);
+        flog.info('UI', `Relay blocked: ${msg.from}->${msg.to}`);
       },
     });
 
@@ -373,7 +373,7 @@ export function Dashboard({
             setThinking(randomVerb());
             orchestrator
               .startWithTask(resumePrompt)
-              .catch((err) => logger.error(`[DASHBOARD] Resume error: ${err}`));
+              .catch((err) => flog.error('UI',`[DASHBOARD] Resume error: ${err}`));
           } else {
             console.log(chalk.red(`  Session ${resumeSessionId} non trouvee ou corrompue.`));
           }
@@ -381,7 +381,7 @@ export function Dashboard({
           console.log(chalk.red(`  Session ${resumeSessionId} non trouvee.`));
           console.log(chalk.dim('  Utilisez: fedi --sessions pour voir la liste.'));
         }
-      })().catch((err) => logger.error(`[DASHBOARD] Session resume error: ${err}`));
+      })().catch((err) => flog.error('UI',`[DASHBOARD] Session resume error: ${err}`));
     }
 
     const handleExit = () => {
@@ -408,7 +408,7 @@ export function Dashboard({
 
   const handleInput = useCallback(
     (text: string) => {
-      traceUserInput(text);
+      flog.info('UI', `User input: ${text.slice(0, 100)}`);
       printUserBubble(text);
       chatMessagesRef.current.push({
         id: randomUUID(),
@@ -458,7 +458,7 @@ export function Dashboard({
             console.log(chalk.dim('    Voir en detail: fedi --view <id>'));
             console.log('');
           }
-        })().catch((err) => logger.error(`[DASHBOARD] Sessions list error: ${err}`));
+        })().catch((err) => flog.error('UI',`[DASHBOARD] Sessions list error: ${err}`));
         return;
       }
 
@@ -472,7 +472,7 @@ export function Dashboard({
           orchestrator
             .restart(`Le user parle a tous les agents directement. Attends.`)
             .then(() => orchestrator.sendToAllDirect(allMessage))
-            .catch((err) => logger.error(`[DASHBOARD] Start error: ${err}`));
+            .catch((err) => flog.error('UI',`[DASHBOARD] Start error: ${err}`));
         } else {
           orchestrator.sendToAllDirect(allMessage);
         }
@@ -504,11 +504,11 @@ export function Dashboard({
             .then(() => {
               orchestrator.sendToAgent(targetAgent!, agentMessage);
             })
-            .catch((err) => logger.error(`[DASHBOARD] Start error: ${err}`));
+            .catch((err) => flog.error('UI',`[DASHBOARD] Start error: ${err}`));
         } else {
           orchestrator
             .restart(targetAgent === 'opus' ? agentMessage : text)
-            .catch((err) => logger.error(`[DASHBOARD] Start error: ${err}`));
+            .catch((err) => flog.error('UI',`[DASHBOARD] Start error: ${err}`));
         }
         return;
       }

@@ -1,7 +1,7 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import type { AgentProcess, AgentId, AgentStatus, OutputLine, SessionConfig } from './types.js';
-import { logger } from '../utils/logger.js';
+import { flog } from '../utils/log.js';
 import { formatAction } from '../utils/format-action.js';
 import { parseMessageWithImages, type ContentBlock } from '../utils/image-utils.js';
 
@@ -42,7 +42,7 @@ export abstract class BaseClaudeAgent implements AgentProcess {
 
   async start(config: SessionConfig, systemPrompt: string): Promise<void> {
     if (this.process) {
-      logger.warn(`[${this.logTag}] Already running, stopping first`);
+      flog.warn('AGENT', `${this.logTag}: Already running, stopping first`);
       await this.stop();
     }
 
@@ -58,10 +58,17 @@ export abstract class BaseClaudeAgent implements AgentProcess {
       'stream-json',
       '--verbose',
       '--dangerously-skip-permissions',
-      ...this.getExtraArgs(systemPrompt),
     ];
 
-    logger.info(`[${this.logTag}] Spawning: ${this.cliPath} ${args.join(' ')}`);
+    // Resume existing session if available (preserves conversation history)
+    if (this.sessionId) {
+      args.push('--resume', this.sessionId);
+      flog.info('AGENT', `${this.logTag}: Resuming session ${this.sessionId}`);
+    }
+
+    args.push(...this.getExtraArgs(systemPrompt));
+
+    flog.info('AGENT', `${this.logTag}: Spawning: ${this.cliPath} ${args.join(' ')}`);
 
     this.process = spawn(this.cliPath, args, {
       cwd: config.projectDir,
@@ -85,22 +92,28 @@ export abstract class BaseClaudeAgent implements AgentProcess {
     const stderrRl = createInterface({ input: this.process.stderr! });
     stderrRl.on('line', (line) => {
       if (!line.trim()) return;
-      logger.debug(`[${this.logTag} stderr] ${line}`);
+      flog.debug('AGENT', `${this.logTag} stderr: ${line}`);
     });
 
     this.process.on('exit', (code) => {
-      logger.info(`[${this.logTag}] Process exited with code ${code}`);
+      flog.info('AGENT', `${this.logTag}: Process exited with code ${code}`);
       this.setStatus('stopped');
       this.process = null;
     });
 
     this.process.on('error', (err) => {
-      logger.error(`[${this.logTag}] Process error: ${err.message}`);
+      flog.error('AGENT', `${this.logTag}: Process error: ${err.message}`);
       this.emit({ text: `Error: ${err.message}`, timestamp: Date.now(), type: 'system' });
       this.setStatus('error');
     });
 
-    this.sendInitialMessage(systemPrompt);
+    // When resuming a session, the CLI already has the conversation history.
+    // Don't re-send the system prompt — it would be redundant.
+    if (!this.sessionId) {
+      this.sendInitialMessage(systemPrompt);
+    } else {
+      flog.info('AGENT', `${this.logTag}: Skipping initial message (resumed session)`);
+    }
   }
 
   /** Send the first message after spawn. Override to customize (e.g., mute response). */
@@ -118,15 +131,15 @@ export abstract class BaseClaudeAgent implements AgentProcess {
   protected handleStreamMessage(msg: Record<string, unknown>) {
     const type = msg.type as string;
     const subtype = msg.subtype as string | undefined;
-    logger.debug(`[${this.logTag} event] ${type} ${subtype ?? ''}`);
+    flog.debug('AGENT', `${this.logTag} event: ${type} ${subtype ?? ''}`);
 
     if (type === 'system' && msg.session_id) {
       this.sessionId = msg.session_id as string;
-      logger.info(`[${this.logTag}] Session ID: ${this.sessionId}`);
+      flog.info('AGENT', `${this.logTag}: Session ID: ${this.sessionId}`);
     }
 
     if (type === 'system' && subtype === 'conversation_compacted') {
-      logger.warn(`[${this.logTag}] Context window compacted`);
+      flog.warn('AGENT', `${this.logTag}: Context window compacted`);
       this.emit({
         text: `${this.logTag}: contexte compacte (auto-compact)`,
         timestamp: Date.now(),
@@ -136,7 +149,7 @@ export abstract class BaseClaudeAgent implements AgentProcess {
 
     if (type === 'result' && msg.is_error) {
       const errorMsg = (msg.result as string) || 'Unknown error';
-      logger.error(`[${this.logTag}] Result error: ${errorMsg}`);
+      flog.error('AGENT', `${this.logTag}: Result error: ${errorMsg}`);
       this.emit({ text: `${this.logTag} error: ${errorMsg}`, timestamp: Date.now(), type: 'info' });
     }
 
@@ -199,7 +212,7 @@ export abstract class BaseClaudeAgent implements AgentProcess {
 
   send(prompt: string) {
     if (!this.process?.stdin?.writable) {
-      logger.error(`[${this.logTag}] Cannot send: process not running`);
+      flog.error('AGENT', `${this.logTag}: Cannot send: process not running`);
       return;
     }
     this.setStatus('running');
@@ -230,7 +243,7 @@ export abstract class BaseClaudeAgent implements AgentProcess {
   protected sendRaw(obj: Record<string, unknown>) {
     if (!this.process?.stdin?.writable) return;
     const json = JSON.stringify(obj);
-    logger.debug(`[${this.logTag}] Sending: ${json.slice(0, 200)}`);
+    flog.debug('AGENT', `${this.logTag}: Sending: ${json.slice(0, 200)}`);
     this.process.stdin.write(json + '\n');
   }
 
@@ -241,14 +254,14 @@ export abstract class BaseClaudeAgent implements AgentProcess {
   async stop(): Promise<void> {
     if (!this.process) return;
 
-    logger.info(`[${this.logTag}] Stopping...`);
+    flog.info('AGENT', `${this.logTag}: Stopping...`);
     this.process.stdin?.end();
     this.process.kill('SIGTERM');
 
     await new Promise<void>((resolve) => {
       const timeout = setTimeout(() => {
         if (this.process) {
-          logger.warn(`[${this.logTag}] Force killing after 3s`);
+          flog.warn('AGENT', `${this.logTag}: Force killing after 3s`);
           this.process.kill('SIGKILL');
         }
         resolve();

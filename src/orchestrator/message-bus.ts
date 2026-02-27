@@ -2,7 +2,7 @@ import { EventEmitter } from 'node:events';
 import { randomUUID } from 'node:crypto';
 import type { Message, AgentId } from '../agents/types.js';
 import { MAX_RELAY_DEPTH } from '../agents/types.js';
-import { logger } from '../utils/logger.js';
+import { flog } from '../utils/log.js';
 
 export interface MessageBusEvents {
   message: [Message];
@@ -33,7 +33,7 @@ export class MessageBus extends EventEmitter {
     if (this.history.length > 500) {
       this.history = this.history.slice(-500);
     }
-    logger.info(`[BUS] ${full.from} → ${full.to}: ${full.content.slice(0, 100)}`);
+    flog.info('BUS', `${full.from}->${full.to}: ${full.content.slice(0, 100)}`);
 
     this.emit('message', full);
 
@@ -64,7 +64,7 @@ export class MessageBus extends EventEmitter {
     if (this.history.length > 500) {
       this.history = this.history.slice(-500);
     }
-    logger.info(`[BUS] Record (LIVE): ${full.from} → ${full.to}: ${full.content.slice(0, 100)}`);
+    flog.info('BUS', `Record (LIVE): ${full.from}->${full.to}: ${full.content.slice(0, 100)}`);
     this.emit('message', full);
     return full;
   }
@@ -84,7 +84,7 @@ export class MessageBus extends EventEmitter {
         relayCount,
         timestamp: Date.now(),
       };
-      logger.warn(`[BUS] Relay blocked (depth ${relayCount}): ${content.slice(0, 80)}`);
+      flog.warn('BUS', `Relay blocked (depth ${relayCount}): ${content.slice(0, 80)}`);
       this.emit('relay-blocked', blocked);
       return false;
     }

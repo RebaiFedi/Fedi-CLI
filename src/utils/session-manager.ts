@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import { join } from 'node:path';
 import type { AgentId, Message, SessionData } from '../agents/types.js';
-import { logger } from './logger.js';
+import { flog } from './log.js';
 
 const SAVE_DEBOUNCE_MS = 2000;
 
@@ -32,7 +32,7 @@ export class SessionManager {
       agentSessions: {},
     };
 
-    logger.info(`[SESSION] Created session ${this.session.id}`);
+    flog.info('SESSION', `Created session ${this.session.id}`);
     this.scheduleSave();
     return this.session;
   }
@@ -57,9 +57,7 @@ export class SessionManager {
       this.saveTimer = null;
     }
     await this.saveToDisk();
-    logger.info(
-      `[SESSION] Finalized session ${this.session.id} (${this.session.messages.length} messages)`,
-    );
+    flog.info('SESSION', `Finalized session ${this.session.id} (${this.session.messages.length} messages)`);
   }
 
   getSession(): SessionData | null {
@@ -123,7 +121,7 @@ export class SessionManager {
     if (this.saveTimer) return;
     this.saveTimer = setTimeout(() => {
       this.saveTimer = null;
-      this.saveToDisk().catch((err) => logger.error(`[SESSION] Scheduled save failed: ${err}`));
+      this.saveToDisk().catch((err) => flog.error('SESSION', `Scheduled save failed: ${err}`));
     }, SAVE_DEBOUNCE_MS);
   }
 
@@ -139,9 +137,9 @@ export class SessionManager {
     const filePath = join(this.sessionsDir, `session-${this.session.id}.json`);
     try {
       await fs.writeFile(filePath, JSON.stringify(this.session, null, 2), 'utf-8');
-      logger.debug(`[SESSION] Saved to ${filePath}`);
+      flog.debug('SESSION', `Saved to ${filePath}`);
     } catch (err) {
-      logger.error(`[SESSION] Failed to save: ${err}`);
+      flog.error('SESSION', `Failed to save: ${err}`);
     }
   }
 }
