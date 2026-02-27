@@ -66,6 +66,7 @@ export interface AgentProcess {
   onStatusChange(handler: (status: AgentStatus) => void): void;
   getSessionId(): string | null;
   setContextReminder?(reminder: string): void;
+  mute?(): void;
 }
 
 // ── Session persistence (v2) ────────────────────────────────────────────────

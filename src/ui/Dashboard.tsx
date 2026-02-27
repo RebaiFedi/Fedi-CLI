@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useReducer, useEffect, useCallback, useRef } from 'react';
 import { Box, Text, useApp, useInput, useStdout } from 'ink';
 import chalk from 'chalk';
 import { randomUUID } from 'node:crypto';
@@ -18,7 +18,7 @@ import { MAX_MESSAGES, INDENT, FLUSH_INTERVAL } from '../config/constants.js';
 import { outputToEntries, extractTasks } from '../rendering/output-transform.js';
 import { entriesToAnsiOutputLines } from '../rendering/ansi-renderer.js';
 import { compactOutputLines } from '../rendering/compact.js';
-import { ThinkingSpinner, randomVerb } from './ThinkingSpinner.js';
+import { ThinkingSpinner } from './ThinkingSpinner.js';
 import { TodoPanel, type TodoItem } from './TodoPanel.js';
 import { printWelcomeBanner } from './WelcomeBanner.js';
 import { printSessionResume, buildResumePrompt } from './SessionResumeView.js';
@@ -55,15 +55,19 @@ export function Dashboard({
 }: DashboardProps) {
   const { exit } = useApp();
 
-  const [opusStatus, setOpusStatus] = useState<AgentStatus>('idle');
-  const [claudeStatus, setClaudeStatus] = useState<AgentStatus>('idle');
-  const [codexStatus, setCodexStatus] = useState<AgentStatus>('idle');
-  const [geminiStatus, setGeminiStatus] = useState<AgentStatus>('idle');
+  const [agentStatuses, dispatchStatus] = useReducer(
+    (state: Record<string, AgentStatus>, action: { agent: string; status: AgentStatus }) => ({
+      ...state,
+      [action.agent]: action.status,
+    }),
+    { opus: 'idle', claude: 'idle', codex: 'idle', gemini: 'idle' } as Record<string, AgentStatus>,
+  );
+  const [agentErrors, setAgentErrors] = useState<Partial<Record<string, string>>>({});
   const [stopped, setStopped] = useState(false);
   const stoppedRef = useRef(false);
   const [todos, setTodos] = useState<TodoItem[]>([]);
   const [todosHiddenAt, setTodosHiddenAt] = useState<number>(0);
-  const [thinking, setThinking] = useState<string | null>(null);
+  const [thinking, setThinking] = useState(false);
 
   // Schedule auto-hide when all todos are done; reset when new todos arrive
   const todosAllDone = todos.length > 0 && todos.every((t) => t.done);
@@ -232,8 +236,13 @@ export function Dashboard({
 
   const enqueueOutput = useCallback(
     (agent: AgentId, entries: DisplayEntry[]) => {
+      const isFirstChunk = !currentMsgRef.current.has(agent);
       outputBuffer.current.push({ agent, entries });
-      if (!flushTimer.current) {
+      if (isFirstChunk) {
+        // Flush immediately on first token for perceived speed
+        if (flushTimer.current) clearTimeout(flushTimer.current);
+        flushTimer.current = setTimeout(flushBuffer, 0);
+      } else if (!flushTimer.current) {
         flushTimer.current = setTimeout(flushBuffer, FLUSH_INTERVAL);
       }
     },
@@ -244,7 +253,7 @@ export function Dashboard({
     if (key.escape && !stopped) {
       setStopped(true);
       stoppedRef.current = true;
-      setThinking(null);
+      setThinking(false);
       // Clear any pending thinking timer
       if (thinkingClearTimer.current) {
         clearTimeout(thinkingClearTimer.current);
@@ -306,10 +315,18 @@ export function Dashboard({
       },
       onAgentStatus: (agent: AgentId, status: AgentStatus) => {
         // Update pill status even when stopped (so pills go grey)
-        if (agent === 'opus') setOpusStatus(status);
-        if (agent === 'claude') setClaudeStatus(status);
-        if (agent === 'codex') setCodexStatus(status);
-        if (agent === 'gemini') setGeminiStatus(status);
+        dispatchStatus({ agent, status });
+
+        // Update agentErrors
+        if (status === 'error') {
+          setAgentErrors((prev) => ({ ...prev, [agent]: 'error' }));
+        } else if (status === 'running' || status === 'idle') {
+          setAgentErrors((prev) => {
+            const n = { ...prev };
+            delete n[agent];
+            return n;
+          });
+        }
 
         // Don't re-trigger spinner when we are stopped
         if (stoppedRef.current) return;
@@ -319,7 +336,7 @@ export function Dashboard({
             clearTimeout(thinkingClearTimer.current);
             thinkingClearTimer.current = null;
           }
-          setThinking((prev) => prev ?? randomVerb());
+          setThinking(true);
         } else {
           const statuses = [
             agent === 'opus' ? status : orchestrator.opus.status,
@@ -331,7 +348,7 @@ export function Dashboard({
           if (!anyRunningNow && !thinkingClearTimer.current) {
             thinkingClearTimer.current = setTimeout(() => {
               thinkingClearTimer.current = null;
-              setThinking(null);
+              setThinking(false);
             }, 300);
           }
         }
@@ -407,7 +424,7 @@ export function Dashboard({
           if (session) {
             printSessionResume(session, match.id);
             const resumePrompt = buildResumePrompt(session);
-            setThinking(randomVerb());
+            setThinking(true);
             orchestrator
               .startWithTask(resumePrompt)
               .catch((err) => flog.error('UI',`[DASHBOARD] Resume error: ${err}`));
@@ -474,7 +491,7 @@ export function Dashboard({
         status: 'done',
       });
 
-      setThinking(randomVerb());
+      setThinking(true);
 
       // @sessions command
       if (text.trim() === '@sessions') {
@@ -585,16 +602,40 @@ export function Dashboard({
     [orchestrator, stopped],
   );
 
-  const anyRunning =
-    opusStatus === 'running' ||
-    claudeStatus === 'running' ||
-    codexStatus === 'running' ||
-    geminiStatus === 'running';
+  const anyRunning = Object.values(agentStatuses).some((s) => s === 'running');
 
   return (
     <Box flexDirection="column">
       <Text> </Text>
       {thinking ? <ThinkingSpinner /> : <Text> </Text>}
+      <Box paddingX={2} gap={2}>
+        {(['opus', 'claude', 'codex', 'gemini'] as const).map((id) => {
+          const s = agentStatuses[id];
+          const color =
+            s === 'running' ? THEME[id] : s === 'error' ? 'red' : THEME.muted;
+          const icon = s === 'running' ? '●' : s === 'error' ? '✖' : '○';
+          const displayName: Record<string, string> = {
+            opus: 'Opus',
+            claude: 'Sonnet',
+            codex: 'Codex',
+            gemini: 'Gemini',
+          };
+          return (
+            <Text key={id} color={color}>
+              {icon} {displayName[id]}
+            </Text>
+          );
+        })}
+      </Box>
+      {Object.keys(agentErrors).length > 0 && (
+        <Box paddingX={2} flexDirection="column">
+          {Object.entries(agentErrors).map(([agent]) => (
+            <Text key={agent} color="red">
+              {'  ⚠ '}{agent}{' en erreur'}
+            </Text>
+          ))}
+        </Box>
+      )}
       {todosVisible && <TodoPanel items={todos} />}
       <Box width="100%" flexGrow={1}>
         <Box

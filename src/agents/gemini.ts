@@ -13,6 +13,7 @@ export class GeminiAgent extends BaseExecAgent {
   private consecutiveFailures = 0;
   private static readonly MAX_RETRIES = 2;
   private static readonly BASE_BACKOFF_MS = 2_000;
+  private backoffTimer: ReturnType<typeof setTimeout> | null = null;
 
   protected get logTag() { return '[GEMINI]'; }
 
@@ -167,12 +168,21 @@ export class GeminiAgent extends BaseExecAgent {
         timestamp: Date.now(),
         type: 'info',
       });
-      setTimeout(() => {
+      this.backoffTimer = setTimeout(() => {
+        this.backoffTimer = null;
         super.send(prompt);
       }, cappedMs);
       return;
     }
     super.send(prompt);
+  }
+
+  override async stop(): Promise<void> {
+    if (this.backoffTimer) {
+      clearTimeout(this.backoffTimer);
+      this.backoffTimer = null;
+    }
+    await super.stop();
   }
 
 }

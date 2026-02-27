@@ -22,6 +22,12 @@ export interface UserConfig {
   maxCrossTalkPerRound: number;
   /** Max log files to keep. Default: 20 */
   maxLogFiles: number;
+  /** Claude model to use. Default: 'claude-sonnet-4-5' */
+  claudeModel: string;
+  /** Codex model to use. Default: 'gpt-5.3-codex' */
+  codexModel: string;
+  /** Gemini model to use. Default: 'gemini-2.5-pro' */
+  geminiModel: string;
 }
 
 const DEFAULTS: UserConfig = {
@@ -33,6 +39,9 @@ const DEFAULTS: UserConfig = {
   maxMessages: 200,
   maxCrossTalkPerRound: 20,
   maxLogFiles: 20,
+  claudeModel: 'claude-sonnet-4-5',
+  codexModel: 'gpt-5.3-codex',
+  geminiModel: 'gemini-2.5-pro',
 };
 
 let cachedConfig: UserConfig | null = null;
@@ -64,6 +73,9 @@ export function loadUserConfig(): UserConfig {
       maxMessages: typeof parsed.maxMessages === 'number' ? parsed.maxMessages : DEFAULTS.maxMessages,
       maxCrossTalkPerRound: typeof parsed.maxCrossTalkPerRound === 'number' ? parsed.maxCrossTalkPerRound : DEFAULTS.maxCrossTalkPerRound,
       maxLogFiles: typeof parsed.maxLogFiles === 'number' ? parsed.maxLogFiles : DEFAULTS.maxLogFiles,
+      claudeModel: typeof parsed.claudeModel === 'string' ? parsed.claudeModel : DEFAULTS.claudeModel,
+      codexModel: typeof parsed.codexModel === 'string' ? parsed.codexModel : DEFAULTS.codexModel,
+      geminiModel: typeof parsed.geminiModel === 'string' ? parsed.geminiModel : DEFAULTS.geminiModel,
     };
     flog.info('SYSTEM', `Loaded user config from ${configPath}`);
     return cachedConfig;

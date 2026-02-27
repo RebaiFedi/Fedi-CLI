@@ -38,6 +38,8 @@ export interface OrchestratorCallbacks {
   onRelayBlocked: (msg: Message) => void;
 }
 
+type WorkerAgentId = 'claude' | 'codex' | 'gemini';
+
 export class Orchestrator {
   readonly opus: AgentProcess;
   readonly claude: AgentProcess;
@@ -58,12 +60,17 @@ export class Orchestrator {
   private geminiQueue = new PQueue({ concurrency: 1 });
   private callbacks: OrchestratorCallbacks | null = null;
   private started = false;
-  private claudeStarted = false;
-  private codexStarted = false;
-  private geminiStarted = false;
-  private codexReady: Promise<void> = Promise.resolve();
-  private claudeReady: Promise<void> = Promise.resolve();
-  private geminiReady: Promise<void> = Promise.resolve();
+  private workerStarted: Map<WorkerAgentId, boolean> = new Map([
+    ['claude', false],
+    ['codex', false],
+    ['gemini', false],
+  ]);
+  private workerReady: Map<WorkerAgentId, Promise<void>> = new Map([
+    ['claude', Promise.resolve()],
+    ['codex', Promise.resolve()],
+    ['gemini', Promise.resolve()],
+  ]);
+  private opusRestartPending = false;
   private config: Omit<SessionConfig, 'task'> | null = null;
   private relayTimestamps: number[] = [];
   private sessionMessageHandler: ((msg: Message) => void) | null = null;
@@ -156,6 +163,26 @@ export class Orchestrator {
     this.opus.onStatusChange((s) => {
       flog.info('AGENT', `opus: ${s}`, { agent: 'opus' });
       cb.onAgentStatus('opus', s);
+      if ((s === 'error' || s === 'stopped') && this.started && !this.opusRestartPending) {
+        this.opusRestartPending = true;
+        setTimeout(async () => {
+          this.opusRestartPending = false;
+          flog.warn('ORCH', 'Opus crashed — auto-restarting...');
+          cb.onAgentOutput('opus', {
+            text: 'Opus redémarrage en cours...',
+            timestamp: Date.now(),
+            type: 'info',
+          });
+          try {
+            await this.opus.start(
+              { ...this.config!, task: '' },
+              getOpusSystemPrompt(this.config!.projectDir),
+            );
+          } catch (e) {
+            flog.error('ORCH', `Opus restart failed: ${e}`);
+          }
+        }, 2_000);
+      }
     });
 
     // Bind worker agents (Claude, Codex, Gemini) — shared output/status handlers
@@ -188,83 +215,55 @@ export class Orchestrator {
       });
     });
 
-    // Route messages to Claude (lazy start) — inject cross-agent context
-    this.bus.on('message:claude', (msg: Message) => {
-      flog.debug('BUS', `${msg.from}->${msg.to}`, { preview: msg.content.slice(0, 100) });
-      if (msg.from === 'claude') return;
-      // If Claude was awaiting a cross-talk reply and this is from a peer, clear the flag
-      if (msg.from !== 'opus' && msg.from !== 'user' && this.awaitingCrossTalkReply.has('claude')) {
-        flog.info('ORCH', `Claude received cross-talk reply from ${msg.from} — no longer awaiting`);
-        this.awaitingCrossTalkReply.delete('claude');
-      }
-      this.claudeQueue.add(async () => {
-        await this.ensureClaudeStarted();
-        await this.claudeReady; // Wait for start() to fully complete before sending
-        // Refresh cross-talk mute right before send — prevents stale status
-        // transitions from clearing the mute during the async queue wait
-        if (this.agentsOnCrossTalk.has('claude')) {
-          this.agentsOnCrossTalk.set('claude', Date.now());
-        }
-        const prefix = `[FROM:${msg.from.toUpperCase()}]`;
-        const context = this.getNewContext('claude');
-        let payload = `${prefix} ${msg.content}`;
-        if (context) {
-          payload += `\n\n--- CONTEXTE ---\n${context}\n--- FIN ---`;
-        }
-        this.claude.send(payload);
-      });
-    });
+    // Route messages to workers (lazy start) — inject cross-agent context
+    this.bindWorkerRoute(
+      'claude',
+      this.claudeQueue,
+      () => this.ensureWorkerStarted('claude'),
+      () => this.workerReady.get('claude') ?? Promise.resolve(),
+    );
+    this.bindWorkerRoute(
+      'codex',
+      this.codexQueue,
+      () => this.ensureWorkerStarted('codex'),
+      () => this.workerReady.get('codex') ?? Promise.resolve(),
+    );
+    this.bindWorkerRoute(
+      'gemini',
+      this.geminiQueue,
+      () => this.ensureWorkerStarted('gemini'),
+      () => this.workerReady.get('gemini') ?? Promise.resolve(),
+    );
+  }
 
-    // Route messages to Codex (lazy start) — inject cross-agent context
-    this.bus.on('message:codex', (msg: Message) => {
+  private bindWorkerRoute(
+    agentId: WorkerAgentId,
+    queue: PQueue,
+    ensureStarted: () => Promise<void>,
+    readyPromise: () => Promise<void>,
+  ) {
+    this.bus.on(`message:${agentId}`, (msg: Message) => {
       flog.debug('BUS', `${msg.from}->${msg.to}`, { preview: msg.content.slice(0, 100) });
-      if (msg.from === 'codex') return;
-      // If Codex was awaiting a cross-talk reply and this is from a peer, clear the flag
-      if (msg.from !== 'opus' && msg.from !== 'user' && this.awaitingCrossTalkReply.has('codex')) {
-        flog.info('ORCH', `Codex received cross-talk reply from ${msg.from} — no longer awaiting`);
-        this.awaitingCrossTalkReply.delete('codex');
+      if (msg.from === agentId) return;
+      if (msg.from !== 'opus' && msg.from !== 'user' && this.awaitingCrossTalkReply.has(agentId)) {
+        flog.info('ORCH', `${agentId} received cross-talk reply from ${msg.from} — no longer awaiting`);
+        this.awaitingCrossTalkReply.delete(agentId);
       }
-      this.codexQueue.add(async () => {
-        await this.ensureCodexStarted();
-        await this.codexReady; // Wait for start() to fully complete before sending
+      queue.add(async () => {
+        await ensureStarted();
+        void readyPromise();
         // Refresh cross-talk mute right before send — prevents stale status
-        // transitions from clearing the mute during the async queue wait
-        if (this.agentsOnCrossTalk.has('codex')) {
-          this.agentsOnCrossTalk.set('codex', Date.now());
+        // transitions from clearing the mute during the async queue wait.
+        if (this.agentsOnCrossTalk.has(agentId)) {
+          this.agentsOnCrossTalk.set(agentId, Date.now());
         }
         const prefix = `[FROM:${msg.from.toUpperCase()}]`;
-        const context = this.getNewContext('codex');
+        const context = this.getNewContext(agentId);
         let payload = `${prefix} ${msg.content}`;
         if (context) {
           payload += `\n\n--- CONTEXTE ---\n${context}\n--- FIN ---`;
         }
-        this.codex.send(payload);
-      });
-    });
-
-    // Route messages to Gemini (lazy start) — cross-talk with all peers
-    this.bus.on('message:gemini', (msg: Message) => {
-      flog.debug('BUS', `${msg.from}->${msg.to}`, { preview: msg.content.slice(0, 100) });
-      if (msg.from === 'gemini') return;
-      // If Gemini was awaiting a cross-talk reply and this is from a peer, clear the flag
-      if (msg.from !== 'opus' && msg.from !== 'user' && this.awaitingCrossTalkReply.has('gemini')) {
-        flog.info('ORCH', `Gemini received cross-talk reply from ${msg.from} — no longer awaiting`);
-        this.awaitingCrossTalkReply.delete('gemini');
-      }
-      this.geminiQueue.add(async () => {
-        await this.ensureGeminiStarted();
-        await this.geminiReady; // Wait for start() to fully complete before sending
-        // Refresh cross-talk mute right before send
-        if (this.agentsOnCrossTalk.has('gemini')) {
-          this.agentsOnCrossTalk.set('gemini', Date.now());
-        }
-        const prefix = `[FROM:${msg.from.toUpperCase()}]`;
-        const context = this.getNewContext('gemini');
-        let payload = `${prefix} ${msg.content}`;
-        if (context) {
-          payload += `\n\n--- CONTEXTE ---\n${context}\n--- FIN ---`;
-        }
-        this.gemini.send(payload);
+        this.getAgent(agentId).send(payload);
       });
     });
   }
@@ -382,59 +381,45 @@ export class Orchestrator {
     });
   }
 
-  /** Start Claude on first message to it — includes recent bus history */
-  private async ensureClaudeStarted() {
-    if (this.claudeStarted || !this.config) return;
-    this.claudeStarted = true;
-    const config = this.config;
-    flog.info('ORCH', 'Lazy-starting Claude...');
-    let prompt = getClaudeSystemPrompt(config.projectDir);
-    // Inject recent history so Sonnet knows why it's being called
-    const { summary, newIndex } = this.bus.getContextSummary('claude', 0, 5);
-    this.agentLastContextIndex.set('claude', newIndex);
-    if (summary) {
-      prompt += `\n\n--- HISTORIQUE ---\n${summary}\n--- FIN ---`;
-    }
-    this.claudeReady = this.claude.start({ ...config, task: '' }, prompt);
-    await this.claudeReady;
-  }
+  private async ensureWorkerStarted(agentId: WorkerAgentId) {
+    if (!this.config) return;
 
-  /** Start Codex on first message to it — includes recent bus history */
-  private async ensureCodexStarted() {
-    if (this.codexStarted || !this.config) return;
-    this.codexStarted = true;
-    const config = this.config;
-    flog.info('ORCH', 'Lazy-starting Codex...');
-    let prompt = getCodexSystemPrompt(config.projectDir);
-    // Inject recent history so Codex knows why it's being called
-    const { summary, newIndex } = this.bus.getContextSummary('codex', 0, 5);
-    this.agentLastContextIndex.set('codex', newIndex);
-    if (summary) {
-      prompt += `\n\n--- HISTORIQUE ---\n${summary}\n--- FIN ---`;
+    const existing = this.workerReady.get(agentId) ?? Promise.resolve();
+    if (this.workerStarted.get(agentId)) {
+      await existing;
+      return;
     }
-    // Set compact reminder for session loss recovery
-    this.codex.setContextReminder?.(getCodexContextReminder(config.projectDir));
-    this.codexReady = this.codex.start({ ...config, task: '' }, prompt);
-    await this.codexReady;
-  }
 
-  /** Start Gemini on first message to it — includes recent bus history */
-  private async ensureGeminiStarted() {
-    if (this.geminiStarted || !this.config) return;
-    this.geminiStarted = true;
+    this.workerStarted.set(agentId, true);
     const config = this.config;
-    flog.info('ORCH', 'Lazy-starting Gemini...');
-    let prompt = getGeminiSystemPrompt(config.projectDir);
-    // Inject recent history so Gemini knows why it's being called
-    const { summary, newIndex } = this.bus.getContextSummary('gemini', 0, 5);
-    this.agentLastContextIndex.set('gemini', newIndex);
+
+    let prompt = '';
+    let agent: AgentProcess;
+    if (agentId === 'claude') {
+      flog.info('ORCH', 'Lazy-starting Claude...');
+      prompt = getClaudeSystemPrompt(config.projectDir);
+      agent = this.claude;
+    } else if (agentId === 'codex') {
+      flog.info('ORCH', 'Lazy-starting Codex...');
+      prompt = getCodexSystemPrompt(config.projectDir);
+      this.codex.setContextReminder?.(getCodexContextReminder(config.projectDir));
+      agent = this.codex;
+    } else {
+      flog.info('ORCH', 'Lazy-starting Gemini...');
+      prompt = getGeminiSystemPrompt(config.projectDir);
+      this.gemini.setContextReminder?.(getGeminiContextReminder(config.projectDir));
+      agent = this.gemini;
+    }
+
+    const { summary, newIndex } = this.bus.getContextSummary(agentId, 0, 5);
+    this.agentLastContextIndex.set(agentId, newIndex);
     if (summary) {
       prompt += `\n\n--- HISTORIQUE ---\n${summary}\n--- FIN ---`;
     }
-    // Set compact reminder for session loss recovery
-    this.gemini.setContextReminder?.(getGeminiContextReminder(config.projectDir));
-    this.geminiReady = this.gemini.start({ ...config, task: '' }, prompt);
-    await this.geminiReady;
+
+    const ready = agent.start({ ...config, task: '' }, prompt);
+    this.workerReady.set(agentId, ready);
+    await ready;
   }
 
   /** Start with first user message. Only Opus starts immediately. */
@@ -494,12 +479,17 @@ export class Orchestrator {
 
     // Reset internal orchestration state (but NOT agent sessionIds — they're preserved)
     this.started = false;
-    this.claudeStarted = false;
-    this.codexStarted = false;
-    this.geminiStarted = false;
-    this.codexReady = Promise.resolve();
-    this.claudeReady = Promise.resolve();
-    this.geminiReady = Promise.resolve();
+    this.opusRestartPending = false;
+    this.workerStarted = new Map([
+      ['claude', false],
+      ['codex', false],
+      ['gemini', false],
+    ]);
+    this.workerReady = new Map([
+      ['claude', Promise.resolve()],
+      ['codex', Promise.resolve()],
+      ['gemini', Promise.resolve()],
+    ]);
     this.agentLastContextIndex = new Map([
       ['opus', 0],
       ['claude', 0],
@@ -700,6 +690,11 @@ export class Orchestrator {
   private detectRelayPatterns(from: AgentId, text: string): boolean {
     if (this.isRelayRateLimited()) {
       flog.warn('ORCH', `Relay rate limited — skipping from ${from}`);
+      this.callbacks?.onAgentOutput(from, {
+        text: '[Rate limit] Trop de relays — patientez quelques secondes.',
+        timestamp: Date.now(),
+        type: 'info',
+      });
       return false;
     }
 
@@ -729,7 +724,14 @@ export class Orchestrator {
     let i = 0;
     let foundRelay = false;
     while (i < lines.length) {
-      if (this.isRelayRateLimited()) break;
+      if (this.isRelayRateLimited()) {
+        this.callbacks?.onAgentOutput(from, {
+          text: '[Rate limit] Trop de relays — patientez quelques secondes.',
+          timestamp: Date.now(),
+          type: 'info',
+        });
+        break;
+      }
       const line = lines[i];
 
       // Try to match a [TO:*] relay tag on this line
@@ -1002,8 +1004,8 @@ export class Orchestrator {
     for (const delegate of this.expectedDelegates) {
       this.deliveredToOpus.add(delegate);
       const agent = this.getAgent(delegate);
-      if ('muted' in agent) {
-        (agent as { muted: boolean }).muted = true;
+      if (agent.mute) {
+        agent.mute();
         flog.info('ORCH', `Muted ${delegate} after combined delivery (save compute)`);
       }
     }

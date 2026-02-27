@@ -34,6 +34,9 @@ export abstract class BaseExecAgent implements AgentProcess {
   /** Max execution time per exec call */
   protected static readonly EXEC_TIMEOUT_MS = loadUserConfig().execTimeoutMs;
 
+  private static readonly MAX_EXEC_RETRIES = 2;
+  private static readonly RETRY_BACKOFF_MS = 5_000;
+
   /** Human-readable tag for log messages */
   protected abstract get logTag(): string;
 
@@ -75,6 +78,10 @@ export abstract class BaseExecAgent implements AgentProcess {
 
   onStatusChange(handler: (status: AgentStatus) => void) {
     this.statusHandlers.push(handler);
+  }
+
+  mute(): void {
+    this.muted = true;
   }
 
   // ── Lifecycle ─────────────────────────────────────────────────────────
@@ -171,13 +178,38 @@ export abstract class BaseExecAgent implements AgentProcess {
       await this.execLock;
     }
 
-    const promise = this._doExec(prompt);
+    const promise = this._execWithRetry(prompt);
     this.execLock = promise;
     try {
       return await promise;
     } finally {
       if (this.execLock === promise) this.execLock = null;
     }
+  }
+
+  private async _execWithRetry(prompt: string): Promise<string> {
+    const maxRetries = (this.constructor as typeof BaseExecAgent).MAX_EXEC_RETRIES;
+    const backoffMs = (this.constructor as typeof BaseExecAgent).RETRY_BACKOFF_MS;
+
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      try {
+        return await this._doExec(prompt);
+      } catch (err) {
+        if (attempt >= maxRetries) throw err;
+        const waitMs = backoffMs * Math.pow(3, attempt); // 5s, 15s
+        flog.warn(
+          'AGENT',
+          `${this.logTag}: Exec failed (attempt ${attempt + 1}/${maxRetries + 1}) — retrying in ${waitMs / 1000}s: ${String(err).slice(0, 100)}`,
+        );
+        this.emit({
+          text: `${this.logTag}: echec execution — retry dans ${Math.round(waitMs / 1000)}s...`,
+          timestamp: Date.now(),
+          type: 'info',
+        });
+        await new Promise<void>((resolve) => setTimeout(resolve, waitMs));
+      }
+    }
+    throw new Error(`${this.logTag}: exec failed after retries`);
   }
 
   private _doExec(prompt: string): Promise<string> {

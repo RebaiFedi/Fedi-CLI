@@ -21,11 +21,14 @@ const AGENT_HEX: Record<AgentId, string> = {
   gemini: THEME.gemini,
 };
 
+// Chalk named colors aligned to match the THEME hex values visually:
+// opus #F59E0B (amber) → yellow, claude #38BDF8 (sky blue) → cyan,
+// codex #22C55E (green) → green, gemini #A78BFA (violet) → magenta
 const AGENT_CHALK_COLOR: Record<AgentId, 'green' | 'yellow' | 'magenta' | 'cyan'> = {
-  opus: 'magenta',
-  claude: 'green',
-  codex: 'yellow',
-  gemini: 'cyan',
+  opus: 'yellow',
+  claude: 'cyan',
+  codex: 'green',
+  gemini: 'magenta',
 };
 
 export function agentHex(agent: AgentId): string {
