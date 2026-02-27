@@ -41,7 +41,7 @@ export function printWelcomeBanner(projectDir: string): void {
   console.log(chalk.hex(THEME.border)('  \u2570' + '\u2500'.repeat(inner) + '\u256F'));
   console.log('');
   console.log(
-    `  ${chalk.white.bold('Tip:')} ${chalk.dim.italic('Type @opus, @claude, or @codex to speak directly to an agent.')}`,
+    `  ${chalk.white.bold('Tip:')} ${chalk.dim.italic('Type @opus, @sonnet, or @codex to speak directly to an agent.')}`,
   );
   console.log('');
 }

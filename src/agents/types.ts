@@ -145,6 +145,12 @@ export interface ChatMessage {
 
 // Relay directives must be standalone command lines to avoid false positives
 // from explanatory text that merely mentions "[TO:*]" patterns.
-export const TO_CLAUDE_PATTERN = /^\s*\[TO:CLAUDE\]\s+(\S(?:.*\S)?)\s*$/;
-export const TO_CODEX_PATTERN = /^\s*\[TO:CODEX\]\s+(\S(?:.*\S)?)\s*$/;
-export const TO_OPUS_PATTERN = /^\s*\[TO:OPUS\]\s+(\S(?:.*\S)?)\s*$/;
+// Content can follow on the same line OR on subsequent lines (Codex puts content on next line).
+export const TO_CLAUDE_PATTERN = /^\s*\[TO:CLAUDE\]\s*(.*?)\s*$/;
+export const TO_CODEX_PATTERN = /^\s*\[TO:CODEX\]\s*(.*?)\s*$/;
+export const TO_OPUS_PATTERN = /^\s*\[TO:OPUS\]\s*(.*?)\s*$/;
+
+// Strict patterns that require content on the same line — used for false positive filtering
+export const TO_CLAUDE_STRICT = /^\s*\[TO:CLAUDE\]\s+\S/;
+export const TO_CODEX_STRICT = /^\s*\[TO:CODEX\]\s+\S/;
+export const TO_OPUS_STRICT = /^\s*\[TO:OPUS\]\s+\S/;

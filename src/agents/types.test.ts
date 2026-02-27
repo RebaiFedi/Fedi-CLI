@@ -23,9 +23,17 @@ test('relay patterns ignore mentions inside normal sentences', () => {
   assert.equal(mentionToCodex.match(TO_CODEX_PATTERN), null);
 });
 
-test('relay patterns require non-empty content and exact tag casing', () => {
-  assert.equal('[TO:CLAUDE]'.match(TO_CLAUDE_PATTERN), null);
-  assert.equal('[TO:CODEX]   '.match(TO_CODEX_PATTERN), null);
+test('relay patterns allow empty content (Codex puts content on next line) and require exact casing', () => {
+  // Tag alone on a line is valid — content comes from subsequent lines
+  const claudeAlone = '[TO:CLAUDE]'.match(TO_CLAUDE_PATTERN);
+  assert.ok(claudeAlone, '[TO:CLAUDE] alone should match');
+  assert.equal(claudeAlone![1], '', 'captured content should be empty');
+
+  const codexSpaces = '[TO:CODEX]   '.match(TO_CODEX_PATTERN);
+  assert.ok(codexSpaces, '[TO:CODEX] with trailing spaces should match');
+  assert.equal(codexSpaces![1], '', 'captured content should be empty');
+
+  // Wrong casing should NOT match
   assert.equal('[to:claude] hello'.match(TO_CLAUDE_PATTERN), null);
   assert.equal('[to:codex] hello'.match(TO_CODEX_PATTERN), null);
 });

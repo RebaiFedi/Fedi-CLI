@@ -322,23 +322,23 @@ describe('Orchestrator', () => {
   // ── Rate limiting ───────────────────────────────────────────────────────
 
   describe('rate limiting', () => {
-    it('blocks relay after 12 relays per window', async () => {
-      // Emit 12 relay tags from opus — should all work
-      for (let i = 0; i < 12; i++) {
+    it('blocks relay after 25 relays per window', async () => {
+      // Emit 25 relay tags from opus — should all work
+      for (let i = 0; i < 25; i++) {
         h.opus.emitText(`[TO:CLAUDE] Task ${i + 1}`);
       }
       await h.flush();
 
       const relaysBefore = h.log.relays.length;
 
-      // 13th should be rate limited
-      h.opus.emitText('[TO:CLAUDE] Task 13 should be blocked');
+      // 26th should be rate limited
+      h.opus.emitText('[TO:CLAUDE] Task 26 should be blocked');
       await h.flush();
 
       assert.equal(
         h.log.relays.length,
         relaysBefore,
-        '13th relay should be blocked by rate limiting',
+        '26th relay should be blocked by rate limiting',
       );
     });
   });
