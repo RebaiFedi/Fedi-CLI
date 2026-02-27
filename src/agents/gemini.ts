@@ -19,6 +19,8 @@ export class GeminiAgent implements AgentProcess {
   private execLock: Promise<string> | null = null;
   /** Queued urgent messages — drained at the start of the next send() call */
   private urgentQueue: string[] = [];
+  /** Last API error message — included in auto-relay placeholder so Opus knows why */
+  lastError: string | null = null;
 
   private setStatus(s: AgentStatus) {
     this.status = s;
@@ -172,6 +174,16 @@ export class GeminiAgent implements AgentProcess {
       stderrRl.on('line', (line) => {
         if (!line.trim()) return;
         flog.debug('AGENT', `[GEMINI stderr] ${line}`);
+        // Surface critical errors to the user
+        if (line.includes('Max attempts reached') || line.includes('Error when talking to Gemini API')) {
+          const short = line.includes('No capacity')
+            ? 'Gemini API: pas de capacite disponible (429)'
+            : line.includes('Error when talking')
+              ? 'Gemini API: erreur de connexion'
+              : `Gemini: ${line.slice(0, 80)}`;
+          this.lastError = short;
+          this.emit({ text: short, timestamp: Date.now(), type: 'info' });
+        }
       });
 
       proc.on('error', (err) => {
@@ -232,10 +244,13 @@ export class GeminiAgent implements AgentProcess {
       return;
     }
 
-    // ── toolCall event → show action ──
-    if (eventType === 'toolCall') {
-      const name = event.name as string | undefined;
-      const args = event.args as Record<string, unknown> | undefined;
+    // ── toolCall / tool_use event → show action ──
+    if (eventType === 'toolCall' || eventType === 'tool_use') {
+      // Gemini CLI may nest tool info under different keys
+      const name = (event.name ?? event.tool_name ?? (event.tool as Record<string, unknown>)?.name) as string | undefined;
+      const args = (event.args ?? event.input ?? (event.tool as Record<string, unknown>)?.args) as Record<string, unknown> | undefined;
+      flog.debug('AGENT', `[GEMINI tool] name=${name}, keys=${Object.keys(event).join(',')}`);
+
       if (name) {
         // Map Gemini tool calls to display-friendly actions
         let actionText: string | null = null;

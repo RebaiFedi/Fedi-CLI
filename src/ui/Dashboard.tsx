@@ -561,8 +561,8 @@ export function Dashboard({
         </Text>
       );
     }
-    // Show dim color only if the agent actually worked (was running at least once)
-    if (status === 'waiting' && agentWasActive.current.has(agentId)) {
+    // Dim color = agent is waiting AND someone else is still running (work in progress)
+    if (status === 'waiting' && anyRunning && agentWasActive.current.has(agentId)) {
       return (
         <Text>
           <Text color={color} dimColor>{DOT_ACTIVE}</Text>

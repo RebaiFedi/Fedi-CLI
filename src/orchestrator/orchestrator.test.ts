@@ -92,23 +92,23 @@ describe('Orchestrator', () => {
       assert.equal(codexTextOutputs.length, 0, 'codex stdout should be muted during cross-talk');
     });
 
-    it('blocks 11th cross-talk when limit is 10 per round', async () => {
-      // Send 10 cross-talk messages (the max)
-      for (let i = 0; i < 10; i++) {
+    it('blocks 21st cross-talk when limit is 20 per round', async () => {
+      // Send 20 cross-talk messages (the max)
+      for (let i = 0; i < 20; i++) {
         h.claude.emitText(`[TO:CODEX] Cross-talk message ${i + 1}`);
       }
       await h.flush();
 
       const relaysBefore = h.log.relays.length;
 
-      // 11th should be blocked
-      h.claude.emitText('[TO:CODEX] Cross-talk message 11 should be blocked');
+      // 21st should be blocked
+      h.claude.emitText('[TO:CODEX] Cross-talk message 21 should be blocked');
       await h.flush();
 
       assert.equal(
         h.log.relays.length,
         relaysBefore,
-        '11th cross-talk should not produce a relay',
+        '21st cross-talk should not produce a relay',
       );
     });
   });
@@ -390,23 +390,23 @@ describe('Orchestrator', () => {
   // ── Rate limiting ───────────────────────────────────────────────────────
 
   describe('rate limiting', () => {
-    it('blocks relay after 25 relays per window', async () => {
-      // Emit 25 relay tags from opus — should all work
-      for (let i = 0; i < 25; i++) {
+    it('blocks relay after 50 relays per window', async () => {
+      // Emit 50 relay tags from opus — should all work
+      for (let i = 0; i < 50; i++) {
         h.opus.emitText(`[TO:CLAUDE] Task ${i + 1}`);
       }
       await h.flush();
 
       const relaysBefore = h.log.relays.length;
 
-      // 26th should be rate limited
-      h.opus.emitText('[TO:CLAUDE] Task 26 should be blocked');
+      // 51st should be rate limited
+      h.opus.emitText('[TO:CLAUDE] Task 51 should be blocked');
       await h.flush();
 
       assert.equal(
         h.log.relays.length,
         relaysBefore,
-        '26th relay should be blocked by rate limiting',
+        '51st relay should be blocked by rate limiting',
       );
     });
   });

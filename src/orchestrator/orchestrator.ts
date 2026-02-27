@@ -28,7 +28,7 @@ export interface OrchestratorDeps {
 
 /** Max relays within a time window before blocking */
 const RELAY_WINDOW_MS = 60_000;
-const MAX_RELAYS_PER_WINDOW = 25;
+const MAX_RELAYS_PER_WINDOW = 50;
 
 export interface OrchestratorCallbacks {
   onAgentOutput: (agent: AgentId, line: OutputLine) => void;
@@ -94,7 +94,7 @@ export class Orchestrator {
   private readonly SAFETY_NET_GRACE_MS = 3_000;
   /** Cross-talk message counter — reset each round, blocks after MAX */
   private crossTalkCount = 0;
-  private readonly MAX_CROSS_TALK_PER_ROUND = 10;
+  private readonly MAX_CROSS_TALK_PER_ROUND = 20;
   /** Agents responding to a cross-talk message — stdout muted until timeout or next user interaction */
   private agentsOnCrossTalk: Map<AgentId, number> = new Map(); // agentId → timestamp when set
   /** Agents that INITIATED a cross-talk and are waiting for a peer response.
@@ -875,7 +875,29 @@ export class Orchestrator {
       return false;
     }
 
-    const lines = text.split('\n');
+    // Pre-process: split lines that contain multiple [TO:*] tags on the same line
+    // e.g. "[TO:GEMINI] [TO:CODEX] Hello" → "[TO:GEMINI]" and "[TO:CODEX] Hello"
+    const rawLines = text.split('\n');
+    const lines: string[] = [];
+    const multiTagRe = /(\[TO:(?:CLAUDE|CODEX|OPUS|GEMINI)\])/g;
+    for (const raw of rawLines) {
+      const tags: { idx: number; len: number }[] = [];
+      let m: RegExpExecArray | null;
+      while ((m = multiTagRe.exec(raw)) !== null) {
+        tags.push({ idx: m.index, len: m[0].length });
+      }
+      if (tags.length <= 1) {
+        lines.push(raw);
+      } else {
+        // Split at each tag boundary
+        for (let t = 0; t < tags.length; t++) {
+          const start = tags[t].idx;
+          const end = t + 1 < tags.length ? tags[t + 1].idx : raw.length;
+          lines.push(raw.slice(start, end).trimEnd());
+        }
+      }
+    }
+
     let i = 0;
     let foundRelay = false;
     while (i < lines.length) {
@@ -1027,9 +1049,15 @@ export class Orchestrator {
         this.bus.relay(agent, 'opus', textLines);
       }
     } else {
-      flog.warn('ORCH', `${agent} finished on relay — no buffered text to relay`);
+      // Check if the agent had an API error
+      const agentInstance = this.getAgent(agent);
+      const lastErr = ('lastError' in agentInstance) ? (agentInstance as { lastError: string | null }).lastError : null;
+      const placeholder = lastErr
+        ? `(erreur: ${lastErr})`
+        : '(pas de rapport)';
+      flog.warn('ORCH', `${agent} finished on relay — no buffered text to relay (${placeholder})`);
       if (this.expectedDelegates.has(agent)) {
-        this.pendingReportsForOpus.set(agent, '(pas de rapport)');
+        this.pendingReportsForOpus.set(agent, placeholder);
         if (this.pendingReportsForOpus.size >= this.expectedDelegates.size) {
           this.deliverCombinedReportsToOpus();
         }
