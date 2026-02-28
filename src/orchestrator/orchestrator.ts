@@ -393,6 +393,15 @@ export class Orchestrator {
       flog.info('AGENT', `${agentId}: ${s}`, { agent: agentId });
       // Keep heartbeat alive — agent status changed
       this.recordDelegateActivity(agentId);
+      // Cancel safety-net timer when agent starts a new exec — it's still working
+      if (s === 'running' && usesTimerSafetyNet) {
+        const prevSafetyNet = this.safetyNetTimers.get(agentId);
+        if (prevSafetyNet) {
+          clearTimeout(prevSafetyNet);
+          this.safetyNetTimers.delete(agentId);
+          flog.info('ORCH', `Safety-net cancelled for ${agentId} — agent resumed running`);
+        }
+      }
       if (s === 'waiting' || s === 'stopped' || s === 'error') {
         this.flushRelayDraft(agentId);
       }
@@ -482,6 +491,24 @@ export class Orchestrator {
           const timer = setTimeout(() => {
             this.safetyNetTimers.delete(agentId);
             if (!this.agentsOnRelay.has(agentId) || this.pendingReportsForOpus.has(agentId)) return;
+            // If the agent is still running (new exec started), do NOT flush yet —
+            // reschedule the safety-net so we wait for the agent to truly finish.
+            const agentInstance = this.getAgent(agentId);
+            if (agentInstance.status === 'running') {
+              flog.info('ORCH', `Safety-net deferred for ${agentId} — agent still running (new exec in progress)`);
+              const retryTimer = setTimeout(() => {
+                this.safetyNetTimers.delete(agentId);
+                if (!this.agentsOnRelay.has(agentId) || this.pendingReportsForOpus.has(agentId)) return;
+                // Re-check: if STILL running, let the onStatusChange handler re-trigger later
+                if (agentInstance.status === 'running') {
+                  flog.info('ORCH', `Safety-net deferred again for ${agentId} — still running`);
+                  return;
+                }
+                this.autoRelayBuffer(agentId);
+              }, this.SAFETY_NET_GRACE_MS);
+              this.safetyNetTimers.set(agentId, retryTimer);
+              return;
+            }
             this.autoRelayBuffer(agentId);
           }, this.SAFETY_NET_GRACE_MS);
           this.safetyNetTimers.set(agentId, timer);
