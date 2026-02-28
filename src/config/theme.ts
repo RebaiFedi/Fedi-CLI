@@ -7,7 +7,7 @@ export const THEME = {
   panelBorder: '#334155',
   info: '#FBBF24',
   opus: '#F59E0B',
-  claude: '#38BDF8',
+  sonnet: '#38BDF8',
   codex: '#22C55E',
   userPrefix: '#CBD5E1',
   userBubbleBg: '#1F2937',
@@ -15,16 +15,16 @@ export const THEME = {
 
 const AGENT_HEX: Record<AgentId, string> = {
   opus: THEME.opus,
-  claude: THEME.claude,
+  sonnet: THEME.sonnet,
   codex: THEME.codex,
 };
 
 // Chalk named colors aligned to match the THEME hex values visually:
-// opus #F59E0B (amber) → yellow, claude #38BDF8 (sky blue) → cyan,
+// opus #F59E0B (amber) → yellow, sonnet #38BDF8 (sky blue) → cyan,
 // codex #22C55E (green) → green
 const AGENT_CHALK_COLOR: Record<AgentId, 'green' | 'yellow' | 'magenta' | 'cyan'> = {
   opus: 'yellow',
-  claude: 'cyan',
+  sonnet: 'cyan',
   codex: 'green',
 };
 

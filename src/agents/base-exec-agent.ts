@@ -32,6 +32,8 @@ export abstract class BaseExecAgent implements AgentProcess {
   private execLock: Promise<string> | null = null;
   private urgentQueue: string[] = [];
   private abortController: AbortController = new AbortController();
+  /** When true, all new exec() calls are rejected immediately. Set by stop(). */
+  private stopped = false;
 
   /** Max execution time per exec call */
   protected static readonly EXEC_TIMEOUT_MS = loadUserConfig().execTimeoutMs;
@@ -100,12 +102,15 @@ export abstract class BaseExecAgent implements AgentProcess {
   protected setStatus(s: AgentStatus) {
     this.status = s;
     if (s !== 'error') this.lastError = null;
+    // When stopped, only emit the 'stopped' status itself — suppress all other
+    // status transitions to prevent the orchestrator from triggering fallback logic
+    if (this.stopped && s !== 'stopped') return;
     if (this.muted && s !== 'waiting' && s !== 'stopped' && s !== 'error') return;
     this.statusHandlers.forEach((h) => h(s));
   }
 
   protected emit(line: OutputLine) {
-    if (this.muted) return;
+    if (this.muted || this.stopped) return;
     this.outputHandlers.forEach((h) => h(line));
   }
 
@@ -128,6 +133,7 @@ export abstract class BaseExecAgent implements AgentProcess {
     systemPrompt: string,
     options?: { muted?: boolean },
   ): Promise<void> {
+    this.stopped = false;
     this.ensureAbortController();
     this.projectDir = config.projectDir;
     this.cliPath = this.getCliPath(config);
@@ -161,6 +167,7 @@ export abstract class BaseExecAgent implements AgentProcess {
   }
 
   send(prompt: string) {
+    this.stopped = false;
     this.ensureAbortController();
     this.muted = false;
     this.setStatus('running');
@@ -192,27 +199,44 @@ export abstract class BaseExecAgent implements AgentProcess {
   }
 
   async stop(): Promise<void> {
+    // Mark as stopped FIRST — prevents any new exec() from spawning processes
+    this.stopped = true;
     this.abortController.abort();
-    this.abortController = new AbortController();
+
+    // Clear the exec lock chain so no queued exec can run after stop
+    this.execLock = null;
+    // Clear urgent queue so no buffered messages survive the stop
+    this.urgentQueue = [];
 
     const proc = this.activeProcess;
-    if (proc) {
-      flog.info('AGENT', `${this.logTag}: Stopping active process...`);
-      proc.kill('SIGTERM');
+    if (proc && proc.pid) {
+      flog.info('AGENT', `${this.logTag}: Stopping active process (pid=${proc.pid})...`);
+      // Kill the entire process group (negative PID) so child processes are also terminated.
+      // The process was spawned with detached:true to create a separate process group.
+      try {
+        process.kill(-proc.pid, 'SIGTERM');
+      } catch {
+        // Fallback to direct kill if process group kill fails
+        try { proc.kill('SIGTERM'); } catch { /* ignore */ }
+      }
       await new Promise<void>((resolve) => {
         const timeout = setTimeout(() => {
           try {
-            proc.kill('SIGKILL');
-          } catch (err) {
-            flog.debug('AGENT', `${this.logTag}: SIGKILL ignored in stop(): ${String(err).slice(0, 120)}`);
+            process.kill(-proc.pid!, 'SIGKILL');
+          } catch {
+            try { proc.kill('SIGKILL'); } catch { /* ignore */ }
           }
           resolve();
-        }, 3000);
+        }, 2000);
         proc.once('exit', () => {
           clearTimeout(timeout);
           resolve();
         });
       });
+      this.activeProcess = null;
+    } else if (proc) {
+      // No PID available — fallback to direct kill
+      try { proc.kill('SIGTERM'); } catch { /* ignore */ }
       this.activeProcess = null;
     }
     this.setStatus('stopped');
@@ -221,10 +245,19 @@ export abstract class BaseExecAgent implements AgentProcess {
   // ── Exec serialization ────────────────────────────────────────────────
 
   protected async exec(prompt: string): Promise<string> {
+    if (this.stopped) {
+      throw new Error(`${this.logTag}: stopped — exec rejected`);
+    }
     const previous = this.execLock ?? Promise.resolve('');
     const next = previous.then(
-      () => this._execWithRetry(prompt),
-      () => this._execWithRetry(prompt),
+      () => {
+        if (this.stopped) throw new Error(`${this.logTag}: stopped — exec rejected`);
+        return this._execWithRetry(prompt);
+      },
+      () => {
+        if (this.stopped) throw new Error(`${this.logTag}: stopped — exec rejected`);
+        return this._execWithRetry(prompt);
+      },
     );
     this.execLock = next.then(() => '', () => '');
     return next;
@@ -282,6 +315,8 @@ export abstract class BaseExecAgent implements AgentProcess {
         cwd: this.projectDir,
         env: { ...process.env },
         stdio: ['pipe', 'pipe', 'pipe'],
+        // Create a new process group so we can kill the entire tree on stop()
+        detached: true,
       });
 
       this.activeProcess = proc;
@@ -340,10 +375,16 @@ export abstract class BaseExecAgent implements AgentProcess {
         settled = true;
         if (execTimeout) clearTimeout(execTimeout);
         closeReadlines();
+        this.activeProcess = null;
+        // If agent was stopped by user (Esc), don't emit error — just reject silently
+        if (this.stopped) {
+          flog.info('AGENT', `${this.logTag}: Process error during stop (ignored): ${err.message}`);
+          reject(err);
+          return;
+        }
         flog.error('AGENT', `${this.logTag}: Process error: ${err.message}`);
         this.emit({ text: `Error: ${err.message}`, timestamp: Date.now(), type: 'system' });
         this.setStatus('error');
-        this.activeProcess = null;
         this.emitExecFailed(err);
         reject(err);
       });
@@ -356,6 +397,15 @@ export abstract class BaseExecAgent implements AgentProcess {
         flog.info('AGENT', `${this.logTag}: Process exited with code ${code}, signal ${signal}`);
         this.activeProcess = null;
         if (signal) {
+          // If agent was stopped by user (Esc), don't set 'error' status — the
+          // orchestrator already set 'stopped' and we must not override it.
+          // Setting 'error' here was causing the orchestrator to trigger fallback
+          // logic (re-delegation) even after the user pressed Escape.
+          if (this.stopped) {
+            flog.info('AGENT', `${this.logTag}: Killed by ${signal} during stop (expected)`);
+            reject(new Error(`${this.logTag}: stopped`));
+            return;
+          }
           flog.warn('AGENT', `${this.logTag}: Killed by signal: ${signal}`);
           this.emit({
             text: `${this.logTag}: processus tue par ${signal}`,

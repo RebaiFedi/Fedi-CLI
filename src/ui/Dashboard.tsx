@@ -33,6 +33,7 @@ interface DashboardProps {
   claudePath: string;
   codexPath: string;
   resumeSessionId?: string;
+  enabledAgents?: AgentId[];
 }
 
 // ── Buffered entry ──────────────────────────────────────────────────────────
@@ -44,8 +45,8 @@ interface BufferedEntry {
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
-const AGENT_IDS = ['opus', 'claude', 'codex'] as const;
-const VALID_AGENT_IDS = new Set<string>(['opus', 'claude', 'codex']);
+const AGENT_IDS = ['opus', 'sonnet', 'codex'] as const;
+const VALID_AGENT_IDS = new Set<string>(['opus', 'sonnet', 'codex']);
 
 // ── Dashboard ───────────────────────────────────────────────────────────────
 
@@ -55,6 +56,7 @@ export function Dashboard({
   claudePath,
   codexPath,
   resumeSessionId,
+  enabledAgents,
 }: DashboardProps) {
   const { exit } = useApp();
   const maxMessagesRef = useRef(getMaxMessages());
@@ -74,6 +76,19 @@ export function Dashboard({
   const [todos, setTodos] = useState<TodoItem[]>([]);
   const [todosHiddenAt, setTodosHiddenAt] = useState<number>(0);
   const [thinking, setThinking] = useState(false);
+  const enabledAgentSet = useMemo(() => {
+    const set = new Set<AgentId>();
+    const source = enabledAgents ?? (AGENT_IDS as readonly AgentId[]);
+    for (const agent of source) {
+      if (agent === 'opus' || agent === 'sonnet' || agent === 'codex') set.add(agent);
+    }
+    set.add('opus');
+    return set;
+  }, [enabledAgents]);
+  const visibleAgents = useMemo(
+    () => AGENT_IDS.filter((id) => enabledAgentSet.has(id)),
+    [enabledAgentSet],
+  );
 
   // Schedule auto-hide when all todos are done; reset when new todos arrive
   const todosAllDone = useMemo(() => todos.length > 0 && todos.every((t) => t.done), [todos]);
@@ -351,7 +366,7 @@ export function Dashboard({
 
     // ── Dones: batch for sub-agents (claude/codex), immediate for opus/user ──
     if (dones.length > 0) {
-      if (agent === 'claude' || agent === 'codex') {
+      if (agent === 'sonnet' || agent === 'codex') {
         // Accumulate — will be flushed as a single update when agent finishes
         const existing = pendingAgentDones.current.get(agent) ?? [];
         pendingAgentDones.current.set(agent, [...existing, ...dones]);
@@ -364,6 +379,7 @@ export function Dashboard({
 
   useEffect(() => {
     orchestrator.setConfig({ projectDir, claudePath, codexPath });
+    orchestrator.setEnabledAgents(enabledAgentSet);
     orchestrator.bind({
       onAgentOutput: (agent: AgentId, line: OutputLine) => {
         if (line.type === 'stdout') processTaskTags(agent, line.text);
@@ -422,7 +438,7 @@ export function Dashboard({
           // ── Flush batched [TASK:done] for sub-agents (claude/codex) ─────────
           // Apply all accumulated completions in a single setState call so the
           // progress bar jumps from 0/N straight to N/N (no intermediate steps).
-          if (agent === 'claude' || agent === 'codex') {
+          if (agent === 'sonnet' || agent === 'codex') {
             const buffered = pendingAgentDones.current.get(agent);
             if (buffered && buffered.length > 0) {
               pendingAgentDones.current.set(agent, []);
@@ -461,6 +477,12 @@ export function Dashboard({
       },
       onRelay: (msg: Message) => {
         flog.info('UI', `Relay: ${msg.from}->${msg.to}`);
+        // Skip displaying relay messages with empty/garbage content
+        const trimmedContent = msg.content.trim();
+        if (!trimmedContent || trimmedContent.replace(/[`'".,;:\-–—\s]/g, '').length < 3) {
+          flog.debug('UI', `Relay display skipped (empty/fragment): ${msg.from}->${msg.to}`);
+          return;
+        }
         // Show cross-talk and delegation messages to the user
         const fromId = msg.from as string;
         const toId = msg.to as string;
@@ -557,6 +579,7 @@ export function Dashboard({
     claudePath,
     codexPath,
     resumeSessionId,
+    enabledAgentSet,
     processTaskTags,
     enqueueOutput,
     flushBuffer,
@@ -579,7 +602,7 @@ export function Dashboard({
       setThinking(true);
 
       // @sessions command
-      if (text.trim() === '@sessions') {
+      if (/^@sessions\s*$/i.test(text.trim())) {
         const sm = orchestrator.getSessionManager();
         if (!sm) {
           console.log(chalk.dim('    Session manager not initialized yet.'));
@@ -612,7 +635,7 @@ export function Dashboard({
               const task = s.task.length > 40 ? s.task.slice(0, 40) + '...' : s.task;
               const shortId = s.id.slice(0, 8);
               sessionLines.push(
-                `    ${chalk.dim(dateStr)} ${chalk.dim(timeStr)}  ${chalk.hex(THEME.claude)(shortId)}  ${status}  ${chalk.hex(THEME.text)(task)}`,
+                `    ${chalk.dim(dateStr)} ${chalk.dim(timeStr)}  ${chalk.hex(THEME.sonnet)(shortId)}  ${status}  ${chalk.hex(THEME.text)(task)}`,
               );
             }
             sessionLines.push('', chalk.dim('    Voir en detail: fedi --view <id>'), '');
@@ -633,13 +656,10 @@ export function Dashboard({
           setTodos([]);
           pendingAgentDones.current.clear();
           if (isRestart) console.log('Redemarrage...');
-          // Pass the real message as Opus startup task so Opus also participates
           orchestrator
-            .restart(`[FROM:USER] @tous ${allMessage}`)
+            .restart(allMessage)
             .then(() => {
-              // Also send directly to claude and codex
-              orchestrator.sendToAgent('claude', allMessage);
-              orchestrator.sendToAgent('codex', allMessage);
+              orchestrator.sendToAllDirect(allMessage);
             })
             .catch((err) => flog.error('UI',`[DASHBOARD] Start error: ${err}`));
         } else {
@@ -654,8 +674,8 @@ export function Dashboard({
       const agentPrefixes: { prefix: string; agent: AgentId }[] = [
         { prefix: '@opus ', agent: 'opus' },
         { prefix: '@codex ', agent: 'codex' },
-        { prefix: '@claude ', agent: 'claude' },
-        { prefix: '@sonnet ', agent: 'claude' },
+        { prefix: '@sonnet ', agent: 'sonnet' },
+        { prefix: '@claude ', agent: 'sonnet' }, // alias retrocompat
       ];
       for (const { prefix, agent } of agentPrefixes) {
         if (text.toLowerCase().startsWith(prefix)) {
@@ -663,6 +683,36 @@ export function Dashboard({
           agentMessage = text.slice(prefix.length);
           break;
         }
+      }
+
+      // Block commands to disabled agents
+      if (targetAgent && !enabledAgentSet.has(targetAgent)) {
+        console.log(
+          chalk.yellow(`  Agent @${targetAgent} est desactive. Agents actifs: ${[...enabledAgentSet].join(', ')}`),
+        );
+        setThinking(false);
+        return;
+      }
+
+      // Detect unknown @commands and show error + suggestion
+      const unknownAtMatch = text.match(/^@(\S+)/);
+      if (unknownAtMatch && !targetAgent) {
+        const typed = unknownAtMatch[1].toLowerCase();
+        const knownCommands = ['opus', 'codex', 'sonnet', 'claude', 'tous', 'all', 'sessions'];
+        const suggestion = knownCommands.find(
+          (cmd) =>
+            cmd.startsWith(typed.slice(0, 2)) ||
+            typed.startsWith(cmd.slice(0, 2)),
+        );
+        const suggestionText = suggestion ? ` Vous vouliez dire ${chalk.white(`@${suggestion}`)} ?` : '';
+        console.log(
+          chalk.yellow(`  Commande inconnue: @${typed}.${suggestionText}`),
+        );
+        console.log(
+          chalk.dim('  Commandes disponibles: @opus, @codex, @claude, @sonnet, @tous, @all, @sessions'),
+        );
+        setThinking(false);
+        return;
       }
 
       if (!orchestrator.isStarted || stopped) {
@@ -697,9 +747,10 @@ export function Dashboard({
         orchestrator.sendToAgent(targetAgent, agentMessage);
         return;
       }
+
       orchestrator.sendUserMessage(text);
     },
-    [orchestrator, stopped],
+    [orchestrator, stopped, enabledAgentSet],
   );
 
   const anyRunning = useMemo(
@@ -712,7 +763,7 @@ export function Dashboard({
       <Text> </Text>
       {thinking ? <ThinkingSpinner /> : <Text> </Text>}
       <Box paddingX={2} gap={2}>
-        {AGENT_IDS.map((id) => {
+        {visibleAgents.map((id) => {
           const s = agentStatuses[id];
           const color =
             s === 'running' ? THEME[id] : s === 'error' ? 'red' : THEME.muted;
@@ -744,7 +795,11 @@ export function Dashboard({
         >
           <Text color={THEME.text}>{' \u276F '}</Text>
           <Box flexGrow={1}>
-            <InputBar onSubmit={handleInput} placeholder={stopped ? "Tapez pour relancer les agents..." : "Message or @agent command"} />
+            <InputBar
+              onSubmit={handleInput}
+              projectDir={projectDir}
+              placeholder={stopped ? 'Tapez pour relancer les agents...' : 'Message ou commande @agent'}
+            />
           </Box>
         </Box>
       </Box>

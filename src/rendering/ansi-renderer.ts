@@ -79,7 +79,7 @@ export function entryToAnsiLines(
   }
 
   if (e.kind === 'heading') {
-    const col = e.color === 'cyan' ? chalk.hex(THEME.claude) : chalk.hex(THEME.text);
+    const col = e.color === 'cyan' ? chalk.hex(THEME.sonnet) : chalk.hex(THEME.text);
     const raw = col.bold(e.text);
     return wordWrap(raw, maxW, INDENT).map((l, i) => (i === 0 ? `${INDENT}${l}` : l));
   }

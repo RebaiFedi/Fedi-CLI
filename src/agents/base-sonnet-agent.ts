@@ -5,7 +5,7 @@ import { flog } from '../utils/log.js';
 import { formatAction } from '../utils/format-action.js';
 import { parseMessageWithImages, type ContentBlock } from '../utils/image-utils.js';
 
-export abstract class BaseClaudeAgent implements AgentProcess {
+export abstract class BaseSonnetAgent implements AgentProcess {
   abstract readonly id: AgentId;
   status: AgentStatus = 'idle';
   lastError: string | null = null;

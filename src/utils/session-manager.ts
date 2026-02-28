@@ -17,7 +17,7 @@ const SessionDataSchema = z.object({
   messages: z.array(MessageSchema),
   agentSessions: z.object({
     opus: z.string().optional(),
-    claude: z.string().optional(),
+    sonnet: z.string().optional(),
     codex: z.string().optional(),
   }),
 });
@@ -26,7 +26,7 @@ const SessionDataSchema = z.object({
 export function buildResumePrompt(session: SessionData): string {
   const agentMeta: Record<string, string> = {
     opus: 'Opus',
-    claude: 'Sonnet',
+    sonnet: 'Sonnet',
     codex: 'Codex',
     user: 'User',
   };

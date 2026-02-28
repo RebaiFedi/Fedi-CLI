@@ -1,10 +1,10 @@
 import type { AgentId } from './types.js';
-import { BaseClaudeAgent } from './base-claude-agent.js';
+import { BaseSonnetAgent } from './base-sonnet-agent.js';
 import { loadUserConfig } from '../config/user-config.js';
 
 const cfg = loadUserConfig();
 
-export class OpusAgent extends BaseClaudeAgent {
+export class OpusAgent extends BaseSonnetAgent {
   readonly id: AgentId = 'opus';
 
   protected get logTag() {

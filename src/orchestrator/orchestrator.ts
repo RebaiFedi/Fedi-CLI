@@ -1,12 +1,13 @@
 import PQueue from 'p-queue';
-import { ClaudeAgent } from '../agents/claude.js';
+import { randomUUID } from 'node:crypto';
+import { SonnetAgent } from '../agents/sonnet.js';
 import { CodexAgent } from '../agents/codex.js';
 import { OpusAgent } from '../agents/opus.js';
 import type { AgentProcess, AgentId, AgentStatus, Message, OutputLine, SessionConfig } from '../agents/types.js';
-import { TO_CLAUDE_PATTERN, TO_CODEX_PATTERN, TO_OPUS_PATTERN } from '../agents/types.js';
+import { TO_SONNET_PATTERN, TO_CODEX_PATTERN, TO_OPUS_PATTERN } from '../agents/types.js';
 import { MessageBus } from './message-bus.js';
 import {
-  getClaudeSystemPrompt,
+  getSonnetSystemPrompt,
   getCodexSystemPrompt,
   getOpusSystemPrompt,
   getCodexContextReminder,
@@ -18,7 +19,7 @@ import { loadUserConfig } from '../config/user-config.js';
 
 export interface OrchestratorDeps {
   opus?: AgentProcess;
-  claude?: AgentProcess;
+  sonnet?: AgentProcess;
   codex?: AgentProcess;
   bus?: MessageBus;
 }
@@ -35,37 +36,38 @@ export interface OrchestratorCallbacks {
   onRelayBlocked: (msg: Message) => void;
 }
 
-type WorkerAgentId = 'claude' | 'codex';
+type WorkerAgentId = 'sonnet' | 'codex';
 
 export class Orchestrator {
   readonly opus: AgentProcess;
-  readonly claude: AgentProcess;
+  readonly sonnet: AgentProcess;
   readonly codex: AgentProcess;
   readonly bus: MessageBus;
   private readonly agents: Record<AgentId, AgentProcess>;
+  private enabledAgents: Set<AgentId> = new Set(['opus', 'sonnet', 'codex']);
 
   constructor(deps?: OrchestratorDeps) {
     this.opus = deps?.opus ?? new OpusAgent();
-    this.claude = deps?.claude ?? new ClaudeAgent();
+    this.sonnet = deps?.sonnet ?? new SonnetAgent();
     this.codex = deps?.codex ?? new CodexAgent();
     this.bus = deps?.bus ?? new MessageBus();
     this.agents = {
       opus: this.opus,
-      claude: this.claude,
+      sonnet: this.sonnet,
       codex: this.codex,
     };
   }
   private opusQueue = new PQueue({ concurrency: 1 });
-  private claudeQueue = new PQueue({ concurrency: 1 });
+  private sonnetQueue = new PQueue({ concurrency: 1 });
   private codexQueue = new PQueue({ concurrency: 1 });
   private callbacks: OrchestratorCallbacks | null = null;
   private started = false;
   private workerStarted: Map<WorkerAgentId, boolean> = new Map([
-    ['claude', false],
+    ['sonnet', false],
     ['codex', false],
   ]);
   private workerReady: Map<WorkerAgentId, Promise<void>> = new Map([
-    ['claude', Promise.resolve()],
+    ['sonnet', Promise.resolve()],
     ['codex', Promise.resolve()],
   ]);
   private opusRestartPending = false;
@@ -76,7 +78,7 @@ export class Orchestrator {
   private sessionMessageHandler: ((msg: Message) => void) | null = null;
   private agentLastContextIndex: Map<AgentId, number> = new Map([
     ['opus', 0],
-    ['claude', 0],
+    ['sonnet', 0],
     ['codex', 0],
   ]);
   private sessionManager: SessionManager | null = null;
@@ -84,7 +86,7 @@ export class Orchestrator {
   private agentsOnRelay: Set<AgentId> = new Set();
   /** Buffer stdout while agent works on relay — flushed when relay ends */
   private relayBuffer: Map<AgentId, OutputLine[]> = new Map([
-    ['claude', []],
+    ['sonnet', []],
     ['codex', []],
     ['opus', []],
   ]);
@@ -133,7 +135,7 @@ export class Orchestrator {
   /** When true, Opus stdout is NOT buffered even when delegates are pending.
    *  Set by sendToAllDirect so the user sees Opus working in real-time (@tous mode). */
   private opusAllMode = false;
-  /** Agents the user is talking to directly (@codex, @claude).
+  /** Agents the user is talking to directly (@codex, @sonnet).
    *  While set, relays FROM Opus TO this agent are BLOCKED — the user's direct
    *  message takes priority and Opus should not interfere. Cleared on next user
    *  message or sendToAllDirect. */
@@ -144,8 +146,23 @@ export class Orchestrator {
     this.sessionManager = new SessionManager(config.projectDir);
   }
 
+  setEnabledAgents(agents: Iterable<AgentId>) {
+    const next = new Set<AgentId>(['opus']);
+    for (const agent of agents) {
+      if (agent === 'opus' || agent === 'sonnet' || agent === 'codex') {
+        next.add(agent);
+      }
+    }
+    this.enabledAgents = next;
+    flog.info('ORCH', `Enabled agents: ${[...this.enabledAgents].join(', ')}`);
+  }
+
   getSessionManager(): SessionManager | null {
     return this.sessionManager;
+  }
+
+  private isAgentEnabled(agentId: AgentId): boolean {
+    return this.enabledAgents.has(agentId);
   }
 
   /** Get new context that `agent` hasn't seen yet from the message bus */
@@ -177,8 +194,8 @@ export class Orchestrator {
         }
         // Allow only lines that are purely delegation tags or task tags to pass through
         const stripped = line.text
-          .replace(/\[TO:(CLAUDE|CODEX|OPUS)\][^\n]*/gi, '')
-          .replace(/\[FROM:(CLAUDE|CODEX|OPUS)\][^\n]*/gi, '')
+          .replace(/\[TO:(SONNET|CODEX|OPUS)\][^\n]*/gi, '')
+          .replace(/\[FROM:(SONNET|CODEX|OPUS)\][^\n]*/gi, '')
           .replace(/\[TASK:(add|done)\][^\n]*/gi, '')
           .trim();
         if (stripped.length > 0) {
@@ -246,8 +263,8 @@ export class Orchestrator {
       }
     });
 
-    // Bind worker agents (Claude, Codex) — shared output/status handlers
-    this.bindWorkerAgent('claude', this.claude, cb);
+    // Bind worker agents (Sonnet, Codex) — shared output/status handlers
+    this.bindWorkerAgent('sonnet', this.sonnet, cb);
     this.bindWorkerAgent('codex', this.codex, cb);
 
     this.bus.on('relay', (msg: Message) => {
@@ -264,6 +281,11 @@ export class Orchestrator {
       flog.debug('BUS', `${msg.from}->${msg.to}`, { preview: msg.content.slice(0, 100) });
       if (msg.from === 'opus') return;
       this.opusQueue.add(() => {
+        // Abort if orchestrator was stopped while this task was queued
+        if (!this.started) {
+          flog.info('ORCH', 'Queue task for opus aborted — orchestrator stopped');
+          return Promise.resolve();
+        }
         const prefix = `[FROM:${msg.from.toUpperCase()}]`;
         const context = this.getNewContext('opus');
         let payload = `${prefix} ${msg.content}`;
@@ -277,10 +299,10 @@ export class Orchestrator {
 
     // Route messages to workers (lazy start) — inject cross-agent context
     this.bindWorkerRoute(
-      'claude',
-      this.claudeQueue,
-      () => this.ensureWorkerStarted('claude'),
-      () => this.workerReady.get('claude') ?? Promise.resolve(),
+      'sonnet',
+      this.sonnetQueue,
+      () => this.ensureWorkerStarted('sonnet'),
+      () => this.workerReady.get('sonnet') ?? Promise.resolve(),
     );
     this.bindWorkerRoute(
       'codex',
@@ -297,6 +319,10 @@ export class Orchestrator {
     readyPromise: () => Promise<void>,
   ) {
     this.bus.on(`message:${agentId}`, (msg: Message) => {
+      if (!this.isAgentEnabled(agentId)) {
+        flog.info('ORCH', `Skipping message for disabled agent ${agentId}`);
+        return;
+      }
       flog.debug('BUS', `${msg.from}->${msg.to}`, { preview: msg.content.slice(0, 100) });
       if (msg.from === agentId) return;
       if (msg.from !== 'opus' && msg.from !== 'user' && this.awaitingCrossTalkReply.has(agentId)) {
@@ -304,8 +330,18 @@ export class Orchestrator {
         this.awaitingCrossTalkReply.delete(agentId);
       }
       queue.add(async () => {
+        // Abort if orchestrator was stopped while this task was queued
+        if (!this.started) {
+          flog.info('ORCH', `Queue task for ${agentId} aborted — orchestrator stopped`);
+          return;
+        }
         await ensureStarted();
         void readyPromise();
+        // Double-check after async wait — stop() may have been called during ensureStarted()
+        if (!this.started) {
+          flog.info('ORCH', `Queue task for ${agentId} aborted after start — orchestrator stopped`);
+          return;
+        }
         // Refresh cross-talk mute right before send — prevents stale status
         // transitions from clearing the mute during the async queue wait.
         if (this.agentsOnCrossTalk.has(agentId)) {
@@ -323,7 +359,7 @@ export class Orchestrator {
   }
 
   /** Bind output and status handlers for a worker agent.
-   *  Claude uses immediate auto-relay (stream-based); Codex uses timer-based safety-net. */
+   *  Sonnet uses immediate auto-relay (stream-based); Codex uses timer-based safety-net. */
   private bindWorkerAgent(agentId: AgentId, agent: AgentProcess, cb: OrchestratorCallbacks) {
     const label = agentId.charAt(0).toUpperCase() + agentId.slice(1);
     // true for spawn-per-exec agents — they fire 'waiting' after EACH exec
@@ -395,11 +431,9 @@ export class Orchestrator {
       this.recordDelegateActivity(agentId);
       // Cancel safety-net timer when agent starts a new exec — it's still working
       if (s === 'running' && usesTimerSafetyNet) {
-        const prevSafetyNet = this.safetyNetTimers.get(agentId);
-        if (prevSafetyNet) {
-          clearTimeout(prevSafetyNet);
-          this.safetyNetTimers.delete(agentId);
+        if (this.safetyNetTimers.has(agentId)) {
           flog.info('ORCH', `Safety-net cancelled for ${agentId} — agent resumed running`);
+          this.clearSafetyNetTimer(agentId);
         }
       }
       if (s === 'waiting' || s === 'stopped' || s === 'error') {
@@ -485,35 +519,25 @@ export class Orchestrator {
       // Safety net: auto-relay buffer when agent finishes relay without [TO:OPUS]
       if (s === 'waiting' && this.agentsOnRelay.has(agentId) && !this.awaitingCrossTalkReply.has(agentId)) {
         if (usesTimerSafetyNet) {
-          // Spawn-per-exec: use timer with grace period (agent may fire 'waiting' multiple times)
-          const prevTimer = this.safetyNetTimers.get(agentId);
-          if (prevTimer) clearTimeout(prevTimer);
+          // Spawn-per-exec: use timer with grace period (agent may fire 'waiting' multiple times).
+          // Always clear any previous timer (including retry timers) to prevent duplicates.
+          this.clearSafetyNetTimer(agentId);
           const timer = setTimeout(() => {
             this.safetyNetTimers.delete(agentId);
             if (!this.agentsOnRelay.has(agentId) || this.pendingReportsForOpus.has(agentId)) return;
             // If the agent is still running (new exec started), do NOT flush yet —
-            // reschedule the safety-net so we wait for the agent to truly finish.
+            // re-schedule so we wait for the agent to truly finish.
             const agentInstance = this.getAgent(agentId);
             if (agentInstance.status === 'running') {
               flog.info('ORCH', `Safety-net deferred for ${agentId} — agent still running (new exec in progress)`);
-              const retryTimer = setTimeout(() => {
-                this.safetyNetTimers.delete(agentId);
-                if (!this.agentsOnRelay.has(agentId) || this.pendingReportsForOpus.has(agentId)) return;
-                // Re-check: if STILL running, let the onStatusChange handler re-trigger later
-                if (agentInstance.status === 'running') {
-                  flog.info('ORCH', `Safety-net deferred again for ${agentId} — still running`);
-                  return;
-                }
-                this.autoRelayBuffer(agentId);
-              }, this.SAFETY_NET_GRACE_MS);
-              this.safetyNetTimers.set(agentId, retryTimer);
+              // Don't create nested timers — let the next 'waiting' status re-trigger this block
               return;
             }
             this.autoRelayBuffer(agentId);
           }, this.SAFETY_NET_GRACE_MS);
           this.safetyNetTimers.set(agentId, timer);
         } else {
-          // Stream-based (Claude): immediate auto-relay is safe
+          // Stream-based (Sonnet): immediate auto-relay is safe
           this.autoRelayBuffer(agentId);
         }
       }
@@ -523,6 +547,7 @@ export class Orchestrator {
 
   private async ensureWorkerStarted(agentId: WorkerAgentId) {
     if (!this.config) return;
+    if (!this.isAgentEnabled(agentId)) return;
 
     const existing = this.workerReady.get(agentId) ?? Promise.resolve();
     if (this.workerStarted.get(agentId)) {
@@ -535,10 +560,10 @@ export class Orchestrator {
 
     let prompt = '';
     let agent: AgentProcess;
-    if (agentId === 'claude') {
-      flog.info('ORCH', 'Lazy-starting Claude...');
-      prompt = getClaudeSystemPrompt(config.projectDir);
-      agent = this.claude;
+    if (agentId === 'sonnet') {
+      flog.info('ORCH', 'Lazy-starting Sonnet...');
+      prompt = getSonnetSystemPrompt(config.projectDir);
+      agent = this.sonnet;
     } else if (agentId === 'codex') {
       flog.info('ORCH', 'Lazy-starting Codex...');
       prompt = getCodexSystemPrompt(config.projectDir);
@@ -584,9 +609,14 @@ export class Orchestrator {
     }
     opusPrompt += `\n\nMESSAGE DU USER: ${task}`;
 
-    // Only Opus starts immediately — Claude starts lazily when Opus delegates
+    // Only Opus starts immediately — Sonnet starts lazily when Opus delegates
     // If Opus has a sessionId from the previous run, --resume will be used
     // and the initial message will be skipped (session already has context)
+    // Resume queues (they may have been paused by stop())
+    this.opusQueue.start();
+    this.sonnetQueue.start();
+    this.codexQueue.start();
+
     await this.opus.start({ ...config, task }, opusPrompt);
     this.started = true; // Set AFTER start succeeds — allows retry on failure
 
@@ -663,6 +693,11 @@ export class Orchestrator {
     // Normal user message to Opus — exit @tous mode and direct mode
     this.opusAllMode = false;
     this.directModeAgents.clear();
+    // Flush any buffered Opus output — user is sending a new message,
+    // they should see any pending Opus text before Opus processes the new input.
+    if (this.callbacks) {
+      this.flushOpusBuffer(this.callbacks);
+    }
     // If Opus is actively running, inject LIVE instead of queuing behind PQueue
     if (this.opus.status === 'running') {
       this.sendUserMessageLive(text, 'opus');
@@ -692,6 +727,14 @@ export class Orchestrator {
   }
 
   sendToAgent(agent: AgentId, text: string) {
+    if (!this.isAgentEnabled(agent)) {
+      this.callbacks?.onAgentOutput(agent, {
+        text: `Agent desactive: ${agent}`,
+        timestamp: Date.now(),
+        type: 'info',
+      });
+      return;
+    }
     // User speaking directly to agent — clear relay mute and flush buffer
     this.agentsOnRelay.delete(agent);
     this.agentsOnCrossTalk.delete(agent);
@@ -699,13 +742,16 @@ export class Orchestrator {
     this.expectedDelegates.delete(agent);
     this.pendingReportsForOpus.delete(agent);
     this.deliveredToOpus.delete(agent);
+    // If removing this delegate unblocks a pending combined delivery, trigger it now.
+    if (this.pendingReportsForOpus.size >= this.expectedDelegates.size && this.expectedDelegates.size > 0) {
+      this.deliverCombinedReportsToOpus();
+    }
     // Block Opus from relaying TO this agent — user has priority
     if (agent !== 'opus') {
       this.directModeAgents.add(agent);
     }
     // Cancel safety-net timer
-    const timer = this.safetyNetTimers.get(agent);
-    if (timer) { clearTimeout(timer); this.safetyNetTimers.delete(agent); }
+    this.clearSafetyNetTimer(agent);
     if (this.callbacks) {
       for (const buffered of this.relayBuffer.get(agent) ?? []) {
         this.callbacks.onAgentOutput(agent, buffered);
@@ -739,7 +785,7 @@ export class Orchestrator {
     for (const timer of this.safetyNetTimers.values()) clearTimeout(timer);
     this.safetyNetTimers.clear();
 
-    for (const agent of ['claude', 'codex', 'opus'] as AgentId[]) {
+    for (const agent of ['sonnet', 'codex', 'opus'] as AgentId[]) {
       if (this.callbacks) {
         for (const buffered of this.relayBuffer.get(agent) ?? []) {
           this.callbacks.onAgentOutput(agent, buffered);
@@ -752,7 +798,8 @@ export class Orchestrator {
     this.opusAllMode = true;
 
     // Send LIVE to running agents, normal bus.send to idle ones
-    for (const agentId of ['opus', 'claude', 'codex'] as AgentId[]) {
+    for (const agentId of ['opus', 'sonnet', 'codex'] as AgentId[]) {
+      if (!this.isAgentEnabled(agentId)) continue;
       const payload = agentId === 'opus' ? opusAllModeMessage : text;
       const agent = this.getAgent(agentId);
       if (agent.status === 'running') {
@@ -774,23 +821,23 @@ export class Orchestrator {
     this.opusRestartPending = false;
     this.opusRestartCount = 0;
     this.workerStarted = new Map([
-      ['claude', false],
+      ['sonnet', false],
       ['codex', false],
     ]);
     this.workerReady = new Map([
-      ['claude', Promise.resolve()],
+      ['sonnet', Promise.resolve()],
       ['codex', Promise.resolve()],
     ]);
     this.agentLastContextIndex = new Map([
       ['opus', 0],
-      ['claude', 0],
+      ['sonnet', 0],
       ['codex', 0],
     ]);
     this.agentsOnRelay.clear();
     this.agentsOnCrossTalk.clear();
     this.awaitingCrossTalkReply.clear();
     this.relayBuffer = new Map([
-      ['claude', []],
+      ['sonnet', []],
       ['codex', []],
       ['opus', []],
     ]);
@@ -826,17 +873,20 @@ export class Orchestrator {
 
   private isRelayTag(line: string): boolean {
     return (
-      TO_CLAUDE_PATTERN.test(line) || TO_CODEX_PATTERN.test(line) || TO_OPUS_PATTERN.test(line)
+      TO_SONNET_PATTERN.test(line) || TO_CODEX_PATTERN.test(line) || TO_OPUS_PATTERN.test(line)
     );
   }
 
   private matchRelayTag(
     line: string,
-    from: AgentId,
+    from: Message['from'],
   ): { target: AgentId; firstLine: string } | null {
-    if (from !== 'claude') {
-      const m = line.match(TO_CLAUDE_PATTERN);
-      if (m) return { target: 'claude', firstLine: m[1].trim() };
+    if (from !== 'sonnet' && from !== 'codex' && from !== 'opus') {
+      return null;
+    }
+    if (from !== 'sonnet') {
+      const m = line.match(TO_SONNET_PATTERN);
+      if (m) return { target: 'sonnet', firstLine: m[1].trim() };
     }
     if (from !== 'codex') {
       const m = line.match(TO_CODEX_PATTERN);
@@ -858,9 +908,26 @@ export class Orchestrator {
   private routeRelayMessage(from: AgentId, target: AgentId, rawContent: string) {
     const content = rawContent.trim();
     if (!content) return;
+    // Filter out garbage fragments (backticks, punctuation-only) from streaming artifacts
+    if (content.replace(/[`'".,;:\-–—\s]/g, '').length < 3) {
+      flog.debug('RELAY', `Dropping fragment relay ${from}->${target}: "${content}"`);
+      return;
+    }
+
+    if (!this.isAgentEnabled(target)) {
+      if (from === 'opus') {
+        this.callbacks?.onAgentOutput('opus', {
+          text: `Delegation ignoree: ${target} est desactive`,
+          timestamp: Date.now(),
+          type: 'info',
+        });
+      }
+      flog.info('RELAY', `BLOCKED ${from}->${target} (agent disabled): ${content.slice(0, 80)}`);
+      return;
+    }
 
     // Block Opus→agent relays when the user is speaking directly to that agent.
-    // This prevents Opus from interfering with @codex / @claude direct messages.
+    // This prevents Opus from interfering with @codex / @sonnet direct messages.
     if (from === 'opus' && this.directModeAgents.has(target)) {
       flog.info('RELAY', `BLOCKED ${from}->${target} (user speaking directly to ${target}): ${content.slice(0, 80)}`);
       return;
@@ -904,6 +971,14 @@ export class Orchestrator {
 
     // ── Standard delegation / report flow ──
     if (from === 'opus' && target !== 'opus') {
+      // Block duplicate delegation: if Opus already delegated to this agent in this
+      // round and the agent is still working (on relay), skip the duplicate.
+      // This happens when Opus mentions [TO:SONNET] twice in the same response
+      // (e.g. first the real delegation, then a re-statement of it later in the text).
+      if (this.agentsOnRelay.has(target) && this.expectedDelegates.has(target)) {
+        flog.info('RELAY', `BLOCKED duplicate delegation opus->${target} (agent already on relay): ${content.slice(0, 80)}`);
+        return;
+      }
       // New delegation — clear delivered tracking for this agent (fresh round)
       this.deliveredToOpus.delete(target);
       this.agentsOnRelay.add(target);
@@ -928,11 +1003,7 @@ export class Orchestrator {
       this.relayStartTime.delete(from);
       this.awaitingCrossTalkReply.delete(from);
       // Cancel any pending safety-net timer (agent reported explicitly)
-      const pendingTimer = this.safetyNetTimers.get(from);
-      if (pendingTimer) {
-        clearTimeout(pendingTimer);
-        this.safetyNetTimers.delete(from);
-      }
+      this.clearSafetyNetTimer(from);
       // Delegate reported to Opus — clear cross-talk mute if active (work is done)
       if (this.agentsOnCrossTalk.has(from)) {
         flog.info('ORCH', `Clearing cross-talk mute for ${from} (reported to Opus)`);
@@ -972,18 +1043,18 @@ export class Orchestrator {
     const content = draft.parts.join('\n').trim();
 
     if (!content) {
-      // Empty content — more data may still be arriving (especially for API-based
-      // agents like Codex that can have large gaps between stream chunks).
-      // Re-schedule instead of dropping, up to a maximum retry count.
+      // Empty draft — re-schedule up to max retries regardless of force flag.
+      // Previously, force=true (new tag or status change) would drop the draft
+      // immediately, causing empty relay messages when streaming chunks arrive
+      // slowly (e.g. Opus emits [TO:SONNET] and [TO:CODEX] in rapid succession).
       const retries = this.relayDraftEmptyRetries.get(from) ?? 0;
       if (retries < this.RELAY_DRAFT_MAX_EMPTY_RETRIES) {
         this.relayDraftEmptyRetries.set(from, retries + 1);
-        flog.debug('RELAY', `Draft for ${from}->${draft.target} still empty, retry ${retries + 1}/${this.RELAY_DRAFT_MAX_EMPTY_RETRIES} (force=${force})`);
+        flog.debug('RELAY', `Draft for ${from}->${draft.target} still empty (force=${force}), retry ${retries + 1}/${this.RELAY_DRAFT_MAX_EMPTY_RETRIES}`);
         this.scheduleRelayDraftFlush(from);
         return false;
       }
       flog.debug('RELAY', `Draft for ${from}->${draft.target} empty after max retries, dropping`);
-      // Max retries reached — discard the empty draft.
       this.relayDrafts.delete(from);
       this.relayDraftEmptyRetries.delete(from);
       return false;
@@ -1006,14 +1077,41 @@ export class Orchestrator {
     this.relayDraftTimers.set(from, timer);
   }
 
+  /** Check if a line appears to be in a markdown code/quote context (false positive). */
+  private isMarkdownContext(line: string): boolean {
+    const trimmed = line.trim();
+    // Lines inside code blocks (backticks), blockquotes, or indented code
+    if (trimmed.startsWith('```')) return true;
+    if (trimmed.startsWith('> ')) return true;
+    if (trimmed.startsWith('    ')) return true; // indented code block
+    // Lines that contain backtick-wrapped tags: `[TO:SONNET]`
+    if (/`[^`]*\[TO:(?:SONNET|CODEX|OPUS)\][^`]*`/.test(line)) return true;
+    // Lines that look like "Exemple:", "Example:", "Format:", bullet descriptions of syntax
+    if (/^\s*[-*]\s.*\[TO:(?:SONNET|CODEX|OPUS)\].*:/.test(line)) return true;
+    // Lines with markdown formatting around the tag (bold, italic, etc.)
+    if (/[*_]{1,2}\[TO:(?:SONNET|CODEX|OPUS)\][*_]{1,2}/.test(line)) return true;
+    return false;
+  }
+
   /** Detect [TO:*] relay tags in streamed output with stateful parsing across chunks. */
   private detectRelayPatterns(from: AgentId, text: string): boolean {
     // Pre-process: split lines that contain multiple [TO:*] tags on the same line
-    // e.g. "[TO:CLAUDE] [TO:CODEX] Hello" → "[TO:CLAUDE]" and "[TO:CODEX] Hello"
+    // e.g. "[TO:SONNET] [TO:CODEX] Hello" → "[TO:SONNET]" and "[TO:CODEX] Hello"
     const rawLines = text.split('\n');
     const lines: string[] = [];
-    const multiTagRe = /(\[TO:(?:CLAUDE|CODEX|OPUS)\])/g;
+    const multiTagRe = /(\[TO:(?:SONNET|CODEX|OPUS)\])/g;
     for (const raw of rawLines) {
+      // Skip lines in markdown code/quote context — these are NOT real relay commands
+      if (this.isMarkdownContext(raw)) {
+        flog.debug('RELAY', `Skipping markdown context line: ${raw.slice(0, 80)}`);
+        // Still append to current draft if one is open (might be part of a message body)
+        const draft = this.relayDrafts.get(from);
+        if (draft && raw.trim()) {
+          draft.parts.push(raw);
+          this.scheduleRelayDraftFlush(from);
+        }
+        continue;
+      }
       const tags: { idx: number }[] = [];
       let m: RegExpExecArray | null;
       while ((m = multiTagRe.exec(raw)) !== null) {
@@ -1037,7 +1135,29 @@ export class Orchestrator {
       if (match) {
         foundRelayTag = true;
         // A new tag closes the previous draft from the same sender.
-        this.flushRelayDraft(from);
+        // Save the previous draft before overwriting — flushRelayDraft will
+        // re-schedule it if still empty instead of dropping it.
+        const prevDraft = this.relayDrafts.get(from);
+        if (prevDraft) {
+          const prevContent = prevDraft.parts.join('\n').trim();
+          if (prevContent) {
+            // Previous draft has content — deliver it now
+            this.relayDrafts.delete(from);
+            this.relayDraftEmptyRetries.delete(from);
+            this.routeRelayMessage(from, prevDraft.target, prevContent);
+          } else {
+            // Previous draft is empty — clear it (the new tag takes priority,
+            // and the previous tag had no content to deliver)
+            const prevTimer = this.relayDraftTimers.get(from);
+            if (prevTimer) {
+              clearTimeout(prevTimer);
+              this.relayDraftTimers.delete(from);
+            }
+            this.relayDrafts.delete(from);
+            this.relayDraftEmptyRetries.delete(from);
+            flog.debug('RELAY', `Discarded empty draft ${from}->${prevDraft.target} (superseded by new tag ->${match.target})`);
+          }
+        }
         const draft = {
           target: match.target,
           parts: [] as string[],
@@ -1046,14 +1166,22 @@ export class Orchestrator {
           draft.parts.push(match.firstLine);
         }
         this.relayDrafts.set(from, draft);
+        this.relayDraftEmptyRetries.delete(from);
         this.scheduleRelayDraftFlush(from);
         continue;
       }
 
       // No new tag on this line: append to current draft, if one is open.
+      // Filter out noise lines that must not reach the target agent.
       const draft = this.relayDrafts.get(from);
       if (draft) {
-        draft.parts.push(line);
+        const isNoise =
+          !line.trim() ||
+          /^\s*---+\s*$/.test(line) ||
+          /^\s*\[TASK:(add|done)\]/i.test(line);
+        if (!isNoise) {
+          draft.parts.push(line);
+        }
         this.scheduleRelayDraftFlush(from);
       }
     }
@@ -1222,6 +1350,15 @@ export class Orchestrator {
     return false;
   }
 
+  /** Clear and cancel the safety-net timer for a given agent */
+  private clearSafetyNetTimer(agentId: AgentId) {
+    const prevTimer = this.safetyNetTimers.get(agentId);
+    if (prevTimer) {
+      clearTimeout(prevTimer);
+      this.safetyNetTimers.delete(agentId);
+    }
+  }
+
   /** Extract buffered text for an agent and handle auto-relay or combined delivery */
   private autoRelayBuffer(agent: AgentId) {
     const buffer = this.relayBuffer.get(agent) ?? [];
@@ -1276,15 +1413,20 @@ export class Orchestrator {
         }
       } else if (fallback && fallback !== 'opus' && originalTask && hadExpected) {
         flog.info('ORCH', `Auto-fallback: ${agent} failed → redelegating to ${fallback}`);
-        this.expectedDelegates.add(fallback);
-        this.deliveredToOpus.delete(fallback);
-        this.agentsOnRelay.add(fallback);
-        this.relayStartTime.set(fallback, Date.now());
+        const fallbackAgent = fallback;
+        const content = `[FALLBACK — ${agent} a echoue] ${originalTask}`;
+        this.expectedDelegates.add(fallbackAgent);
+        this.deliveredToOpus.delete(fallbackAgent);
+        this.agentsOnRelay.add(fallbackAgent);
+        this.relayStartTime.set(fallbackAgent, Date.now());
         this.recordRelay();
-        this.bus.relay('opus', fallback, `[FALLBACK — ${agent} a echoue] ${originalTask}`);
+        this.bus.relay('opus', fallbackAgent, content);
+        this.delegateLastActivity.set(fallbackAgent, Date.now());
+        this.lastDelegationContent.set(fallbackAgent, content);
+        this.resetDelegateTimeout();
         if (this.callbacks) {
           this.callbacks.onAgentOutput(agent, {
-            text: `${agent} indisponible — tache transferee a ${fallback}`,
+            text: `${agent} indisponible — tache transferee a ${fallbackAgent}`,
             timestamp: Date.now(),
             type: 'info',
           });
@@ -1312,8 +1454,8 @@ export class Orchestrator {
     // Sonnet failed → Codex can do both front and back
     // Codex failed → Sonnet can do both front and back
     const fallbackMap: Record<string, AgentId[]> = {
-      claude: ['codex'],
-      codex: ['claude'],
+      sonnet: ['codex'],
+      codex: ['sonnet'],
     };
 
     // Remove the failed agent from expectedDelegates so the fallback candidate
@@ -1322,6 +1464,7 @@ export class Orchestrator {
 
     const candidates = fallbackMap[failedAgent] ?? [];
     for (const candidate of candidates) {
+      if (!this.isAgentEnabled(candidate)) continue;
       // Don't pick an agent that's already an expected delegate for this round
       if (this.expectedDelegates.has(candidate)) continue;
       // Don't pick an agent that is in error/stopped state
@@ -1374,11 +1517,7 @@ export class Orchestrator {
       this.relayBuffer.set(delegate, []);
       this.relayStartTime.delete(delegate);
       // Cancel any pending safety-net timer
-      const timer = this.safetyNetTimers.get(delegate);
-      if (timer) {
-        clearTimeout(timer);
-        this.safetyNetTimers.delete(delegate);
-      }
+      this.clearSafetyNetTimer(delegate);
     }
     // Capture agents before clearing, for relay events below
     const deliveredAgents = [...this.pendingReportsForOpus.keys()];
@@ -1393,7 +1532,14 @@ export class Orchestrator {
 
     // Emit synthetic relay events for each agent so the UI shows "Agent → Opus"
     for (const agent of deliveredAgents) {
-      this.bus.emit('relay', { from: agent, to: 'opus', content: '', id: '', timestamp: Date.now(), relayCount: 0 });
+      this.bus.emit('relay', {
+        from: agent,
+        to: 'opus',
+        content: ' ',
+        id: randomUUID(),
+        timestamp: Date.now(),
+        relayCount: 0,
+      });
     }
 
     // Deliver as a single message via the bus
@@ -1413,9 +1559,15 @@ export class Orchestrator {
     //    scheduling a new restart timer when agents emit 'stopped' during shutdown
     this.started = false;
 
-    // 1. Clear all queues FIRST — prevent new messages from being sent to agents
+    // 1. Pause and clear all queues FIRST — prevent new messages from being sent to agents.
+    //    pause() stops dequeuing; clear() drops pending items.
+    //    Together with the !this.started check in queue callbacks, this ensures
+    //    no agent.send() can happen after stop() begins.
+    this.opusQueue.pause();
+    this.sonnetQueue.pause();
+    this.codexQueue.pause();
     this.opusQueue.clear();
-    this.claudeQueue.clear();
+    this.sonnetQueue.clear();
     this.codexQueue.clear();
 
     // 2. Cancel all safety-net, delegate, and restart timers
@@ -1443,14 +1595,14 @@ export class Orchestrator {
 
     // 4. Capture agent session IDs before stopping
     const opusSid = this.opus.getSessionId();
-    const claudeSid = this.claude.getSessionId();
+    const sonnetSid = this.sonnet.getSessionId();
     const codexSid = this.codex.getSessionId();
     if (opusSid) this.sessionManager?.setAgentSession('opus', opusSid);
-    if (claudeSid) this.sessionManager?.setAgentSession('claude', claudeSid);
+    if (sonnetSid) this.sessionManager?.setAgentSession('sonnet', sonnetSid);
     if (codexSid) this.sessionManager?.setAgentSession('codex', codexSid);
 
     // 5. Kill all agents IMMEDIATELY — don't wait for session finalize first
-    await Promise.allSettled([this.opus.stop(), this.claude.stop(), this.codex.stop()]);
+    await Promise.allSettled([this.opus.stop(), this.sonnet.stop(), this.codex.stop()]);
     flog.info('ORCH', 'All agents stopped');
 
     // 6. Finalize session AFTER agents are dead

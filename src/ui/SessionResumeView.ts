@@ -6,10 +6,10 @@ import { INDENT, DOT_ACTIVE } from '../config/constants.js';
 export function printSessionResume(session: SessionData, matchId: string): void {
   const agentMeta: Record<string, { label: string; color: (s: string) => string; dot: string }> = {
     opus: { label: 'Opus', color: chalk.hex(THEME.opus), dot: chalk.hex(THEME.opus)(DOT_ACTIVE) },
-    claude: {
+    sonnet: {
       label: 'Sonnet',
-      color: chalk.hex(THEME.claude),
-      dot: chalk.hex(THEME.claude)(DOT_ACTIVE),
+      color: chalk.hex(THEME.sonnet),
+      dot: chalk.hex(THEME.sonnet)(DOT_ACTIVE),
     },
     codex: {
       label: 'Codex',
@@ -22,7 +22,7 @@ export function printSessionResume(session: SessionData, matchId: string): void 
   // Single console.log to avoid Ink ghost lines
   const lines: string[] = [
     chalk.dim('  \u2500\u2500\u2500 Session reprise: ') +
-      chalk.hex(THEME.claude)(matchId.slice(0, 8)) +
+      chalk.hex(THEME.sonnet)(matchId.slice(0, 8)) +
       chalk.dim(' \u2500\u2500\u2500'),
     chalk.dim(`  Tache: ${session.task}`),
     '',

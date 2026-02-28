@@ -122,6 +122,29 @@ export class CodexAgent extends BaseExecAgent {
           }
           return;
         }
+        // Codex CLI sends file_change with a "changes" array instead of top-level filename/action
+        if (Array.isArray(item.changes)) {
+          flog.debug('AGENT', `[CODEX] file_change changes: ${JSON.stringify(item.changes).slice(0, 300)}`);
+          for (const change of item.changes as Array<Record<string, unknown>>) {
+            const file = typeof change.filename === 'string' ? change.filename
+              : typeof change.file === 'string' ? change.file
+              : typeof change.path === 'string' ? change.path : undefined;
+            const act = typeof change.action === 'string' ? change.action
+              : typeof change.type === 'string' ? change.type : undefined;
+            if (file) {
+              const label = act === 'create' ? 'create' : act === 'delete' ? 'delete' : 'edit';
+              const formatted = formatAction(label, file);
+              if (formatted) {
+                const suffix = itemStatus && itemStatus !== 'completed' ? ` (${itemStatus})` : '';
+                this.emit({ text: `${formatted}${suffix}`, timestamp: Date.now(), type: 'system' });
+              }
+            } else {
+              flog.warn('AGENT', `[CODEX] file_change entry — no file found. Keys: ${Object.keys(change).join(', ')}`);
+            }
+          }
+          // Even if no files extracted, don't fall through — it was handled
+          return;
+        }
       }
 
       // Command execution — show command + exit code

@@ -7,7 +7,7 @@ import { flog } from '../utils/log.js';
 // /** Event types emitted by MessageBus — for documentation only */
 // interface MessageBusEvents {
 //   message: [Message];
-//   'message:claude': [Message];
+//   'message:sonnet': [Message];
 //   'message:codex': [Message];
 //   'message:opus': [Message];
 //   relay: [Message];
@@ -50,14 +50,14 @@ export class MessageBus extends EventEmitter {
 
     this.emit('message', full);
 
-    if (full.to === 'claude') {
-      this.emit('message:claude', full);
+    if (full.to === 'sonnet') {
+      this.emit('message:sonnet', full);
     } else if (full.to === 'codex') {
       this.emit('message:codex', full);
     } else if (full.to === 'opus') {
       this.emit('message:opus', full);
     } else if (full.to === 'all') {
-      this.emit('message:claude', full);
+      this.emit('message:sonnet', full);
       this.emit('message:codex', full);
       this.emit('message:opus', full);
     }
@@ -130,7 +130,7 @@ export class MessageBus extends EventEmitter {
     this.correlationCounts.clear();
     this.correlationTimestamps.clear();
     // NOTE: Do NOT call removeAllListeners() here — bind() registers
-    // persistent handlers (message:opus, message:claude, etc.) that must
+    // persistent handlers (message:opus, message:sonnet, etc.) that must
     // survive a restart. Only clear the message history.
   }
 

@@ -18,40 +18,40 @@ describe('Orchestrator', () => {
   // ── Relay detection ─────────────────────────────────────────────────────
 
   describe('relay detection', () => {
-    it('detects [TO:CLAUDE] delegation from Opus', async () => {
+    it('detects [TO:SONNET] delegation from Opus', async () => {
       // Opus emits a relay tag → should be detected and relayed
-      h.opus.emitText('[TO:CLAUDE] Analyse le fichier index.ts');
+      h.opus.emitText('[TO:SONNET] Analyse le fichier index.ts');
       h.opus.setStatus('waiting');
       await h.flush();
 
       assert.ok(h.log.relays.length >= 1, 'should emit at least 1 relay');
-      const relay = h.log.relays.find((r) => r.to === 'claude');
-      assert.ok(relay, 'relay should target claude');
+      const relay = h.log.relays.find((r) => r.to === 'sonnet');
+      assert.ok(relay, 'relay should target sonnet');
       assert.ok(relay.content.includes('Analyse le fichier index.ts'));
     });
 
-    it('detects multi-delegation [TO:CLAUDE] + [TO:CODEX] in one text block', async () => {
+    it('detects multi-delegation [TO:SONNET] + [TO:CODEX] in one text block', async () => {
       h.opus.emitText(
-        '[TO:CLAUDE] Corrige le frontend\n[TO:CODEX] Corrige le backend',
+        '[TO:SONNET] Corrige le frontend\n[TO:CODEX] Corrige le backend',
       );
       h.opus.setStatus('waiting');
       await h.flush();
 
-      const claudeRelay = h.log.relays.find((r) => r.to === 'claude');
+      const claudeRelay = h.log.relays.find((r) => r.to === 'sonnet');
       const codexRelay = h.log.relays.find((r) => r.to === 'codex');
-      assert.ok(claudeRelay, 'should relay to claude');
+      assert.ok(claudeRelay, 'should relay to sonnet');
       assert.ok(codexRelay, 'should relay to codex');
     });
 
-    it('ignores [TO:CLAUDE] mentioned inside a sentence (not standalone)', async () => {
-      h.opus.emitText('The pattern [TO:CLAUDE] is used for delegation');
+    it('ignores [TO:SONNET] mentioned inside a sentence (not standalone)', async () => {
+      h.opus.emitText('The pattern [TO:SONNET] is used for delegation');
       await h.flush();
 
       // The pattern requires the tag at start of line — this is embedded in text
-      // so it should NOT match (the regex requires ^\s*\[TO:CLAUDE\])
-      // Actually the regex DOES match if the text starts with [TO:CLAUDE]
-      // But "The pattern [TO:CLAUDE]..." does NOT start with [TO:CLAUDE]
-      const claudeRelays = h.log.relays.filter((r) => r.to === 'claude');
+      // so it should NOT match (the regex requires ^\s*\[TO:SONNET\])
+      // Actually the regex DOES match if the text starts with [TO:SONNET]
+      // But "The pattern [TO:SONNET]..." does NOT start with [TO:SONNET]
+      const claudeRelays = h.log.relays.filter((r) => r.to === 'sonnet');
       assert.equal(claudeRelays.length, 0, 'should not detect relay tag inside sentence');
     });
 
@@ -74,23 +74,23 @@ describe('Orchestrator', () => {
   describe('relay buffering', () => {
     it('buffers stdout during relay, passes actions through', async () => {
       // Opus delegates to Claude
-      h.opus.emitText('[TO:CLAUDE] Do the work');
+      h.opus.emitText('[TO:SONNET] Do the work');
       h.opus.setStatus('waiting');
       await h.flush();
 
       // Claude is now on relay — stdout should be buffered
       h.log.outputs = [];
-      h.claude.emitText('Working on it...');
+      h.sonnet.emitText('Working on it...');
 
       const textOutputs = h.log.outputs.filter(
-        (o) => o.agent === 'claude' && o.line.type === 'stdout',
+        (o) => o.agent === 'sonnet' && o.line.type === 'stdout',
       );
       assert.equal(textOutputs.length, 0, 'stdout should be buffered during relay');
 
       // Actions (system type) should pass through
-      h.claude.emitAction('Read src/index.ts');
+      h.sonnet.emitAction('Read src/index.ts');
       const actionOutputs = h.log.outputs.filter(
-        (o) => o.agent === 'claude' && o.line.type === 'system',
+        (o) => o.agent === 'sonnet' && o.line.type === 'system',
       );
       assert.ok(actionOutputs.length > 0, 'actions should pass through during relay');
     });
@@ -101,8 +101,8 @@ describe('Orchestrator', () => {
   describe('cross-talk mute', () => {
     it('mutes target agent stdout on cross-talk', async () => {
       // Claude sends cross-talk to Codex
-      h.claude.emitText('[TO:CODEX] Check the API endpoint');
-      h.claude.setStatus('waiting');
+      h.sonnet.emitText('[TO:CODEX] Check the API endpoint');
+      h.sonnet.setStatus('waiting');
       await h.flush();
 
       // Codex is now on cross-talk mute — stdout should be suppressed
@@ -118,16 +118,16 @@ describe('Orchestrator', () => {
     it('blocks 21st cross-talk when limit is 20 per round', async () => {
       // Send 20 cross-talk messages (the max)
       for (let i = 0; i < 20; i++) {
-        h.claude.emitText(`[TO:CODEX] Cross-talk message ${i + 1}`);
+        h.sonnet.emitText(`[TO:CODEX] Cross-talk message ${i + 1}`);
       }
-      h.claude.setStatus('waiting');
+      h.sonnet.setStatus('waiting');
       await h.flush();
 
       const relaysBefore = h.log.relays.length;
 
       // 21st should be blocked
-      h.claude.emitText('[TO:CODEX] Cross-talk message 21 should be blocked');
-      h.claude.setStatus('waiting');
+      h.sonnet.emitText('[TO:CODEX] Cross-talk message 21 should be blocked');
+      h.sonnet.setStatus('waiting');
       await h.flush();
 
       assert.equal(
@@ -143,19 +143,19 @@ describe('Orchestrator', () => {
   describe('combined delivery', () => {
     it('delivers combined report only when ALL delegates have reported', async () => {
       // Opus delegates to both Claude and Codex
-      h.opus.emitText('[TO:CLAUDE] Frontend task\n[TO:CODEX] Backend task');
+      h.opus.emitText('[TO:SONNET] Frontend task\n[TO:CODEX] Backend task');
       h.opus.setStatus('waiting');
       await h.flush();
 
       // Claude reports back
-      h.claude.emitText('[TO:OPUS] Frontend done');
-      h.claude.setStatus('waiting');
+      h.sonnet.emitText('[TO:OPUS] Frontend done');
+      h.sonnet.setStatus('waiting');
       await h.flush();
 
       // At this point, only Claude reported — Opus should NOT have received the combined message yet
       const opusMessagesAfterClaude = h.opus.getSentMessages();
       const combinedAfterClaude = opusMessagesAfterClaude.filter((m) =>
-        m.includes('[FROM:CLAUDE]') && m.includes('[FROM:CODEX]'),
+        m.includes('[FROM:SONNET]') && m.includes('[FROM:CODEX]'),
       );
       assert.equal(combinedAfterClaude.length, 0, 'should not deliver until both report');
 
@@ -167,7 +167,7 @@ describe('Orchestrator', () => {
       // Now both reported — combined message should be delivered to Opus
       const opusMessagesAfterBoth = h.opus.getSentMessages();
       const combined = opusMessagesAfterBoth.find(
-        (m) => m.includes('[FROM:CLAUDE]') && m.includes('[FROM:CODEX]'),
+        (m) => m.includes('[FROM:SONNET]') && m.includes('[FROM:CODEX]'),
       );
       assert.ok(combined, 'should deliver combined report when all delegates finish');
       assert.ok(combined!.includes('Frontend done'), 'combined should include Claude report');
@@ -180,15 +180,15 @@ describe('Orchestrator', () => {
   describe('safety-net auto-relay', () => {
     it('auto-relays buffer when agent goes waiting without [TO:OPUS]', async () => {
       // Opus delegates to Claude
-      h.opus.emitText('[TO:CLAUDE] Do the task');
+      h.opus.emitText('[TO:SONNET] Do the task');
       h.opus.setStatus('waiting');
       await h.flush();
 
       // Claude produces output but never sends [TO:OPUS]
-      h.claude.emitText('Here is my analysis of the code...');
+      h.sonnet.emitText('Here is my analysis of the code...');
 
       // Claude finishes (status → waiting) without explicit [TO:OPUS]
-      h.claude.setStatus('waiting');
+      h.sonnet.setStatus('waiting');
       await h.flush();
 
       // The buffered text should have been auto-relayed to Opus
@@ -201,12 +201,12 @@ describe('Orchestrator', () => {
 
     it('sends placeholder when buffer is empty on auto-relay', async () => {
       // Opus delegates to Claude
-      h.opus.emitText('[TO:CLAUDE] Do the task');
+      h.opus.emitText('[TO:SONNET] Do the task');
       h.opus.setStatus('waiting');
       await h.flush();
 
       // Claude finishes immediately without producing any output
-      h.claude.setStatus('waiting');
+      h.sonnet.setStatus('waiting');
       await h.flush();
 
       // The orchestrator should register a placeholder report
@@ -222,22 +222,22 @@ describe('Orchestrator', () => {
   describe('cross-talk + relay simultaneous', () => {
     it('captures stdout in relay buffer during cross-talk + relay', async () => {
       // Opus delegates to both
-      h.opus.emitText('[TO:CLAUDE] Frontend\n[TO:CODEX] Backend');
+      h.opus.emitText('[TO:SONNET] Frontend\n[TO:CODEX] Backend');
       h.opus.setStatus('waiting');
       await h.flush();
 
       // Codex sends cross-talk to Claude while Claude is on relay
-      h.codex.emitText('[TO:CLAUDE] Hey check this API');
+      h.codex.emitText('[TO:SONNET] Hey check this API');
       h.codex.setStatus('waiting');
       await h.flush();
 
       // Claude is now on BOTH relay and cross-talk
       // Claude produces output — it should be captured in relay buffer (not lost)
-      h.claude.emitText('Response to codex and my work output');
+      h.sonnet.emitText('Response to codex and my work output');
 
       // Claude reports to Opus
-      h.claude.emitText('[TO:OPUS] Frontend work complete');
-      h.claude.setStatus('waiting');
+      h.sonnet.emitText('[TO:OPUS] Frontend work complete');
+      h.sonnet.setStatus('waiting');
       await h.flush();
 
       // Codex reports too
@@ -248,7 +248,7 @@ describe('Orchestrator', () => {
       // Combined delivery should happen with both reports
       const opusMessages = h.opus.getSentMessages();
       const combined = opusMessages.find(
-        (m) => m.includes('[FROM:CLAUDE]') && m.includes('[FROM:CODEX]'),
+        (m) => m.includes('[FROM:SONNET]') && m.includes('[FROM:CODEX]'),
       );
       assert.ok(combined, 'combined report should be delivered even with cross-talk active');
     });
@@ -259,34 +259,34 @@ describe('Orchestrator', () => {
   describe('user direct message', () => {
     it('sendToAgent clears relay state for that agent', async () => {
       // Opus delegates to Claude
-      h.opus.emitText('[TO:CLAUDE] Do something');
+      h.opus.emitText('[TO:SONNET] Do something');
       h.opus.setStatus('waiting');
       await h.flush();
 
       // Claude is now on relay
-      h.claude.emitText('Working...');
+      h.sonnet.emitText('Working...');
       const outputsDuringRelay = h.log.outputs.filter(
-        (o) => o.agent === 'claude' && o.line.type === 'stdout',
+        (o) => o.agent === 'sonnet' && o.line.type === 'stdout',
       );
       assert.equal(outputsDuringRelay.length, 0, 'should buffer during relay');
 
       // User sends directly to Claude — should clear relay state
       h.log.outputs = [];
-      h.orchestrator.sendToAgent('claude', 'Hey Claude, stop that');
+      h.orchestrator.sendToAgent('sonnet', 'Hey Claude, stop that');
       await h.flush();
 
       // After clearing, Claude's stdout should pass through
       h.log.outputs = [];
-      h.claude.emitText('Direct response to user');
+      h.sonnet.emitText('Direct response to user');
       const outputsAfterClear = h.log.outputs.filter(
-        (o) => o.agent === 'claude' && o.line.type === 'stdout',
+        (o) => o.agent === 'sonnet' && o.line.type === 'stdout',
       );
       assert.ok(outputsAfterClear.length > 0, 'stdout should pass through after relay cleared');
     });
 
     it('sendToAllDirect clears all relay state', async () => {
       // Opus delegates to both
-      h.opus.emitText('[TO:CLAUDE] Frontend\n[TO:CODEX] Backend');
+      h.opus.emitText('[TO:SONNET] Frontend\n[TO:CODEX] Backend');
       h.opus.setStatus('waiting');
       await h.flush();
 
@@ -296,16 +296,16 @@ describe('Orchestrator', () => {
 
       // Both agents should now output freely
       h.log.outputs = [];
-      h.claude.emitText('Claude free output');
+      h.sonnet.emitText('Claude free output');
       h.codex.emitText('Codex free output');
 
       const claudeOut = h.log.outputs.filter(
-        (o) => o.agent === 'claude' && o.line.type === 'stdout',
+        (o) => o.agent === 'sonnet' && o.line.type === 'stdout',
       );
       const codexOut = h.log.outputs.filter(
         (o) => o.agent === 'codex' && o.line.type === 'stdout',
       );
-      assert.ok(claudeOut.length > 0, 'claude stdout should pass through');
+      assert.ok(claudeOut.length > 0, 'sonnet stdout should pass through');
       assert.ok(codexOut.length > 0, 'codex stdout should pass through');
     });
 
@@ -329,14 +329,14 @@ describe('Orchestrator', () => {
 
     it('sendToAllDirect uses urgent path and keeps @tous instruction for running Opus', async () => {
       h.opus.setStatus('running');
-      h.claude.setStatus('running');
+      h.sonnet.setStatus('running');
       h.codex.setStatus('running');
 
       h.orchestrator.sendToAllDirect('Urgent all-mode task');
       await h.flush();
 
       const opusUrgent = h.opus.getUrgentMessages();
-      const claudeUrgent = h.claude.getUrgentMessages();
+      const claudeUrgent = h.sonnet.getUrgentMessages();
       const codexUrgent = h.codex.getUrgentMessages();
 
       assert.ok(opusUrgent.length > 0, 'Opus should receive urgent message');
@@ -363,12 +363,12 @@ describe('Orchestrator', () => {
   describe('agent crash', () => {
     it('handles delegate crash with placeholder and triggers combined delivery', async () => {
       // Opus delegates to both
-      h.opus.emitText('[TO:CLAUDE] Frontend\n[TO:CODEX] Backend');
+      h.opus.emitText('[TO:SONNET] Frontend\n[TO:CODEX] Backend');
       h.opus.setStatus('waiting');
       await h.flush();
 
       // Claude crashes
-      h.claude.setStatus('error');
+      h.sonnet.setStatus('error');
       await h.flush();
 
       // Codex reports normally
@@ -384,9 +384,9 @@ describe('Orchestrator', () => {
       assert.ok(combined, 'should deliver combined report even with crashed agent');
     });
 
-    it('crashed delegate gets placeholder text in combined report', async () => {
+    it('crashed delegate falls back to Opus when no worker fallback is available', async () => {
       // Opus delegates to both
-      h.opus.emitText('[TO:CLAUDE] Frontend\n[TO:CODEX] Backend');
+      h.opus.emitText('[TO:SONNET] Frontend\n[TO:CODEX] Backend');
       h.opus.setStatus('waiting');
       await h.flush();
 
@@ -395,15 +395,21 @@ describe('Orchestrator', () => {
       h.codex.setStatus('waiting');
       await h.flush();
 
-      // Claude crashes — should generate placeholder and trigger delivery
-      h.claude.setStatus('error');
+      // Sonnet crashes after Codex already reported — no worker fallback available
+      h.sonnet.setStatus('error');
       await h.flush();
 
       const opusMessages = h.opus.getSentMessages();
-      const combined = opusMessages.find(
-        (m) => m.includes('[FROM:CLAUDE]') && m.includes('pas de rapport'),
+      const fallbackMessage = opusMessages.find(
+        (m) =>
+          m.includes('[FROM:SYSTEM]') &&
+          m.includes('[FALLBACK — sonnet error, aucun agent disponible]') &&
+          m.includes('Fais le travail toi-meme: Frontend'),
       );
-      assert.ok(combined, 'crashed agent should get placeholder in combined report');
+      assert.ok(
+        fallbackMessage,
+        'crashed delegate should trigger fallback to Opus when no worker fallback is available',
+      );
     });
   });
 
@@ -413,7 +419,7 @@ describe('Orchestrator', () => {
     it('blocks relay after 50 relays per window', async () => {
       // Emit 50 relay tags from opus — should all work
       for (let i = 0; i < 50; i++) {
-        h.opus.emitText(`[TO:CLAUDE] Task ${i + 1}`);
+        h.opus.emitText(`[TO:SONNET] Task ${i + 1}`);
       }
       h.opus.setStatus('waiting');
       await h.flush();
@@ -421,7 +427,7 @@ describe('Orchestrator', () => {
       const relaysBefore = h.log.relays.length;
 
       // 51st should be rate limited
-      h.opus.emitText('[TO:CLAUDE] Task 51 should be blocked');
+      h.opus.emitText('[TO:SONNET] Task 51 should be blocked');
       h.opus.setStatus('waiting');
       await h.flush();
 

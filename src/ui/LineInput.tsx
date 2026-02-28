@@ -17,6 +17,8 @@ interface LineInputProps {
   onHistoryPrev?: () => void;
   /** Called when down arrow is pressed on the last line (for history navigation) */
   onHistoryNext?: () => void;
+  /** Called when Tab/Shift+Tab is pressed — reserved for autocompletion */
+  onTab?: () => void;
   /** Called when Escape or Ctrl+L is pressed — clear input and paste */
   onClear?: () => void;
 }
@@ -120,6 +122,7 @@ export function LineInput({
   onSubmit,
   onHistoryPrev,
   onHistoryNext,
+  onTab,
   onClear,
 }: LineInputProps) {
   const { stdout } = useStdout();
@@ -148,7 +151,11 @@ export function LineInput({
     useCallback(
       (input: string, key: Key) => {
         // Let Ink / app handle these globally
-        if ((key.ctrl && input === 'c') || key.tab || (key.shift && key.tab)) return;
+        if (key.tab || (key.shift && key.tab)) {
+          onTab?.();
+          return;
+        }
+        if (key.ctrl && input === 'c') return;
 
         // ── Clear all (Escape or Ctrl+L) ──
         if (key.escape || (key.ctrl && input === 'l')) {
@@ -295,7 +302,7 @@ export function LineInput({
           return top;
         });
       },
-      [value, safeOffset, wrapWidth, multiline, maxVisibleLines, onChange, onSubmit, onHistoryPrev, onHistoryNext, onClear],
+      [value, safeOffset, wrapWidth, multiline, maxVisibleLines, onChange, onSubmit, onHistoryPrev, onHistoryNext, onTab, onClear],
     ),
     { isActive: focus },
   );

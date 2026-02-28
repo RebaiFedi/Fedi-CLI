@@ -38,7 +38,7 @@ async function printSessionList(projectDir: string) {
     const shortId = s.id.slice(0, 8);
 
     console.log(
-      `  ${chalk.dim(dateStr)} ${chalk.dim(timeStr)}  ${chalk.hex(THEME.claude)(shortId)}  ${status}  ${chalk.hex(THEME.text)(task)}`,
+      `  ${chalk.dim(dateStr)} ${chalk.dim(timeStr)}  ${chalk.hex(THEME.sonnet)(shortId)}  ${status}  ${chalk.hex(THEME.text)(task)}`,
     );
   }
 
@@ -77,7 +77,7 @@ async function viewSession(projectDir: string, sessionId: string) {
 
   const agentLabels: Record<string, { label: string; color: (s: string) => string }> = {
     opus: { label: 'Opus', color: chalk.hex(THEME.opus) },
-    claude: { label: 'Sonnet', color: chalk.hex(THEME.claude) },
+    claude: { label: 'Sonnet', color: chalk.hex(THEME.sonnet) },
     codex: { label: 'Codex', color: chalk.hex(THEME.codex) },
     user: { label: 'User', color: chalk.hex(THEME.text) },
     system: { label: 'System', color: chalk.dim },
@@ -140,7 +140,7 @@ ${chalk.white.bold('OPTIONS')}
 
 ${chalk.white.bold('COMMANDES INTERACTIVES')}
   @opus <message>              Parler directement a Opus (directeur)
-  @claude <message>            Parler directement a Claude/Sonnet (frontend)
+  @sonnet <message>            Parler directement a Claude/Sonnet (frontend)
   @codex <message>             Parler directement a Codex (backend)
   @tous <message>              Envoyer a tous les agents
   @sessions                    Lister les sessions
@@ -151,7 +151,7 @@ ${chalk.white.bold('RACCOURCIS')}
 
 ${chalk.white.bold('AGENTS')}
   ${chalk.hex(THEME.opus)('Opus')}     Claude Opus 4.6     Directeur / orchestrateur
-  ${chalk.hex(THEME.claude)('Sonnet')}   Claude Sonnet 4.6   Specialiste frontend
+  ${chalk.hex(THEME.sonnet)('Sonnet')}   Claude Sonnet 4.6   Specialiste frontend
   ${chalk.hex(THEME.codex)('Codex')}    GPT-5.3 Codex       Specialiste backend
 
 
@@ -204,7 +204,7 @@ export async function main() {
 
   // Handle --agents flag: restrict which agents are enabled
   const agentsIdx = args.indexOf('--agents');
-  const enabledAgents = new Set<string>(['opus', 'claude', 'codex']);
+  const enabledAgents = new Set<string>(['opus', 'sonnet', 'codex']);
   if (agentsIdx !== -1) {
     const agentList = args[agentsIdx + 1];
     if (!agentList) {
@@ -213,8 +213,8 @@ export async function main() {
     }
     enabledAgents.clear();
     for (const a of agentList.split(',').map((s) => s.trim().toLowerCase())) {
-      if (['opus', 'claude', 'codex', 'sonnet'].includes(a)) {
-        enabledAgents.add(a === 'sonnet' ? 'claude' : a);
+      if (['opus', 'sonnet', 'codex', 'sonnet'].includes(a)) {
+        enabledAgents.add(a === 'sonnet' ? 'sonnet' : a);
       } else {
         console.warn(chalk.yellow(`  Agent inconnu: ${a} (ignoring)`));
       }
@@ -238,6 +238,10 @@ export async function main() {
 
   const projectDir = process.cwd();
   const orchestrator = new Orchestrator();
+  const enabledAgentList = [...enabledAgents].filter(
+    (a): a is 'opus' | 'sonnet' | 'codex' => a === 'opus' || a === 'sonnet' || a === 'codex',
+  );
+  orchestrator.setEnabledAgents(enabledAgentList);
 
   flog.info('SYSTEM', `Project: ${projectDir}`);
 
@@ -249,6 +253,7 @@ export async function main() {
         claudePath={clis.claude.path!}
         codexPath={clis.codex.path ?? ''}
         resumeSessionId={resumeSessionId}
+        enabledAgents={enabledAgentList}
       />
     </ErrorBoundary>,
   );

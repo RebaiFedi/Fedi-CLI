@@ -13,7 +13,7 @@ export interface HarnessCallbackLog {
 export interface TestHarness {
   orchestrator: Orchestrator;
   opus: MockAgent;
-  claude: MockAgent;
+  sonnet: MockAgent;
   codex: MockAgent;
   bus: MessageBus;
   log: HarnessCallbackLog;
@@ -27,11 +27,11 @@ export interface TestHarness {
  */
 export function createTestOrchestrator(): TestHarness {
   const opus = new MockAgent('opus');
-  const claude = new MockAgent('claude');
+  const sonnet = new MockAgent('sonnet');
   const codex = new MockAgent('codex');
   const bus = new MessageBus();
 
-  const orchestrator = new Orchestrator({ opus, claude, codex, bus });
+  const orchestrator = new Orchestrator({ opus, sonnet, codex, bus });
 
   const log: HarnessCallbackLog = {
     outputs: [],
@@ -67,5 +67,5 @@ export function createTestOrchestrator(): TestHarness {
     await new Promise((r) => setTimeout(r, 40));
   }
 
-  return { orchestrator, opus, claude, codex, bus, log, flush };
+  return { orchestrator, opus, sonnet, codex, bus, log, flush };
 }

@@ -1,13 +1,13 @@
 import type { AgentId, SessionConfig } from './types.js';
-import { BaseClaudeAgent } from './base-claude-agent.js';
+import { BaseSonnetAgent } from './base-sonnet-agent.js';
 import { loadUserConfig } from '../config/user-config.js';
 
 const cfg = loadUserConfig();
 
-export class ClaudeAgent extends BaseClaudeAgent {
-  readonly id: AgentId = 'claude';
+export class SonnetAgent extends BaseSonnetAgent {
+  readonly id: AgentId = 'sonnet';
   protected get logTag() {
-    return 'CLAUDE';
+    return 'SONNET';
   }
   protected get model() {
     return cfg.claudeModel;
@@ -21,7 +21,7 @@ export class ClaudeAgent extends BaseClaudeAgent {
 
   /**
    * Override: don't send any initial message at start.
-   * Claude is lazy-started — the first real task from the orchestrator
+   * Sonnet is lazy-started — the first real task from the orchestrator
    * queue will be sent via send() right after start() resolves.
    * This avoids the mute/unmute complexity entirely.
    */

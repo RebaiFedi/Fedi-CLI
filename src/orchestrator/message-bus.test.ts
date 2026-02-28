@@ -11,12 +11,12 @@ test('send emits global and targeted events', () => {
   const codexMessages: Message[] = [];
 
   bus.on('message', (msg) => allMessages.push(msg));
-  bus.on('message:claude', (msg) => claudeMessages.push(msg));
+  bus.on('message:sonnet', (msg) => claudeMessages.push(msg));
   bus.on('message:codex', (msg) => codexMessages.push(msg));
 
   const sent = bus.send({
     from: 'user',
-    to: 'claude',
+    to: 'sonnet',
     content: 'Need API contract',
   });
 
@@ -33,12 +33,12 @@ test('relay emits relay event and increments relay count', () => {
 
   bus.on('relay', (msg) => relayEvents.push(msg));
 
-  const ok = bus.relay('codex', 'claude', 'Endpoint ready');
+  const ok = bus.relay('codex', 'sonnet', 'Endpoint ready');
 
   assert.equal(ok, true);
   assert.equal(relayEvents.length, 1);
   assert.equal(relayEvents[0].from, 'codex');
-  assert.equal(relayEvents[0].to, 'claude');
+  assert.equal(relayEvents[0].to, 'sonnet');
   assert.equal(relayEvents[0].relayCount, 1);
   assert.ok(relayEvents[0].correlationId);
   assert.equal(bus.getRelayHistory().length, 1);
@@ -52,11 +52,11 @@ test('relay blocks once correlation chain reaches MAX_RELAY_DEPTH', () => {
   bus.on('relay-blocked', (msg) => blocked.push(msg));
 
   for (let i = 0; i < MAX_RELAY_DEPTH; i += 1) {
-    const ok = bus.relay('claude', 'codex', `hop-${i + 1}`, correlationId);
+    const ok = bus.relay('sonnet', 'codex', `hop-${i + 1}`, correlationId);
     assert.equal(ok, true);
   }
 
-  const finalAttempt = bus.relay('claude', 'codex', 'hop-blocked', correlationId);
+  const finalAttempt = bus.relay('sonnet', 'codex', 'hop-blocked', correlationId);
 
   assert.equal(finalAttempt, false);
   assert.equal(blocked.length, 1);

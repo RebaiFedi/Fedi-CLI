@@ -1,10 +1,13 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
+import { promises as fs } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { Box, Text, useStdin } from 'ink';
 import { LineInput } from './LineInput.js';
 
 interface InputBarProps {
   onSubmit: (text: string) => void;
   placeholder?: string;
+  projectDir?: string;
 }
 
 // A paste is detected when a chunk arrives on stdin that:
@@ -14,8 +17,9 @@ const PASTE_MIN_LINES = 3;
 const PASTE_MIN_CHARS = 40;
 const PASTE_TIMING_MS = 20; // chars arriving faster than this = paste burst
 const MAX_HISTORY = 50;
+const HISTORY_FILE_NAME = 'input-history.json';
 
-function InputBarComponent({ onSubmit, placeholder }: InputBarProps) {
+function InputBarComponent({ onSubmit, placeholder, projectDir }: InputBarProps) {
   const [value, setValue] = useState('');
   const [pastedLabel, setPastedLabel] = useState<string | null>(null);
   const fullText = useRef<string>('');
@@ -28,6 +32,53 @@ function InputBarComponent({ onSubmit, placeholder }: InputBarProps) {
   const history = useRef<string[]>([]);
   const historyIndex = useRef(-1);
   const savedDraft = useRef('');
+  const historyFilePath = React.useMemo(
+    () => join(projectDir ?? process.cwd(), 'sessions', HISTORY_FILE_NAME),
+    [projectDir],
+  );
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const raw = await fs.readFile(historyFilePath, 'utf-8');
+        const parsed = JSON.parse(raw);
+        const arr =
+          Array.isArray(parsed) ? parsed :
+          parsed && typeof parsed === 'object' && Array.isArray((parsed as { history?: unknown }).history)
+            ? (parsed as { history: unknown[] }).history
+            : [];
+        const loaded = arr
+          .filter((v): v is string => typeof v === 'string')
+          .map((s) => s.trim())
+          .filter((s) => s.length > 0)
+          .slice(-MAX_HISTORY);
+        if (!cancelled) {
+          history.current = loaded;
+        }
+      } catch {
+        // No persisted history yet (or unreadable file) — ignore silently.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [historyFilePath]);
+
+  const persistHistory = useCallback(
+    (items: string[]) => {
+      const payload = JSON.stringify({ version: 1, history: items.slice(-MAX_HISTORY) }, null, 2);
+      void (async () => {
+        try {
+          await fs.mkdir(dirname(historyFilePath), { recursive: true });
+          await fs.writeFile(historyFilePath, payload, 'utf-8');
+        } catch {
+          // History persistence failure should never break input UX.
+        }
+      })();
+    },
+    [historyFilePath],
+  );
 
   const clearPaste = useCallback(() => {
     setPastedLabel(null);
@@ -112,6 +163,10 @@ function InputBarComponent({ onSubmit, placeholder }: InputBarProps) {
     }
   }, []);
 
+  const handleTab = useCallback(() => {
+    // Hook reserved for future command autocompletion.
+  }, []);
+
   // ── Change handler ────────────────────────────────────────────────────────
   const handleChange = useCallback(
     (text: string) => {
@@ -144,10 +199,9 @@ function InputBarComponent({ onSubmit, placeholder }: InputBarProps) {
         msg &&
         (history.current.length === 0 || history.current[history.current.length - 1] !== msg)
       ) {
-        history.current.push(msg);
-        if (history.current.length > MAX_HISTORY) {
-          history.current.shift();
-        }
+        const nextHistory = [...history.current, msg].slice(-MAX_HISTORY);
+        history.current = nextHistory;
+        persistHistory(nextHistory);
       }
       historyIndex.current = -1;
       savedDraft.current = '';
@@ -156,12 +210,12 @@ function InputBarComponent({ onSubmit, placeholder }: InputBarProps) {
       clearPaste();
       setValue('');
     },
-    [value, onSubmit, clearPaste],
+    [value, onSubmit, clearPaste, persistHistory],
   );
 
   // ── Paste preview: first 5 lines of pasted content ───────────────────────
   const pastePreviewLines = React.useMemo(() => {
-    if (!pastedLabel || !fullText.current) return [];
+    if (!pastedLabel || !fullText.current) return null;
     const lines = fullText.current.split('\n');
     const preview = lines.slice(0, 5);
     const hasMore = lines.length > 5;
@@ -176,7 +230,7 @@ function InputBarComponent({ onSubmit, placeholder }: InputBarProps) {
             {pastedLabel}
             <Text dimColor> · Backspace to clear · Enter to send</Text>
           </Text>
-          {pastePreviewLines && pastePreviewLines.preview.map((line, i) => (
+          {pastePreviewLines && pastePreviewLines.preview.map((line: string, i: number) => (
             <Text key={i} dimColor>{'  '}{line}</Text>
           ))}
           {pastePreviewLines && pastePreviewLines.hasMore && (
@@ -190,6 +244,7 @@ function InputBarComponent({ onSubmit, placeholder }: InputBarProps) {
         onSubmit={handleSubmit}
         onHistoryPrev={handleHistoryPrev}
         onHistoryNext={handleHistoryNext}
+        onTab={handleTab}
         onClear={handleClear}
         placeholder={
           pastedLabel ? 'Add a comment or press Enter to send' : (placeholder ?? 'Type your message...')

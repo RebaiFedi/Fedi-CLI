@@ -2,11 +2,11 @@ import { z } from 'zod';
 
 // ── Agent identifiers ──────────────────────────────────────────────────────
 
-export type AgentId = 'claude' | 'codex' | 'opus';
+export type AgentId = 'sonnet' | 'codex' | 'opus';
 
 export const AGENT_LABELS: Record<AgentId, string> = {
   opus: 'Opus',
-  claude: 'Sonnet',
+  sonnet: 'Sonnet',
   codex: 'Codex',
 };
 
@@ -18,8 +18,8 @@ export type AgentStatus = 'idle' | 'running' | 'waiting' | 'error' | 'stopped';
 
 export const MessageSchema = z.object({
   id: z.string(),
-  from: z.enum(['claude', 'codex', 'opus', 'user', 'system']),
-  to: z.enum(['claude', 'codex', 'opus', 'all']),
+  from: z.enum(['sonnet', 'codex', 'opus', 'user', 'system']),
+  to: z.enum(['sonnet', 'codex', 'opus', 'all']),
   content: z.string(),
   correlationId: z.string().optional(),
   relayCount: z.number().default(0),
@@ -79,7 +79,7 @@ export interface SessionData {
   messages: Message[];
   agentSessions: {
     opus?: string;
-    claude?: string;
+    sonnet?: string;
     codex?: string;
   };
 }
@@ -95,7 +95,7 @@ export interface DisplayEntry {
 
 export interface ChatMessage {
   id: string;
-  agent: 'claude' | 'codex' | 'opus' | 'user' | 'system';
+  agent: 'sonnet' | 'codex' | 'opus' | 'user' | 'system';
   lines: DisplayEntry[];
   timestamp: number;
   status: 'streaming' | 'done';
@@ -106,6 +106,6 @@ export interface ChatMessage {
 // Relay directives must be standalone command lines to avoid false positives
 // from explanatory text that merely mentions "[TO:*]" patterns.
 // Content can follow on the same line OR on subsequent lines (Codex puts content on next line).
-export const TO_CLAUDE_PATTERN = /^\s*\[TO:CLAUDE\]\s*(.*?)\s*$/;
+export const TO_SONNET_PATTERN = /^\s*\[TO:SONNET\]\s*(.*?)\s*$/;
 export const TO_CODEX_PATTERN = /^\s*\[TO:CODEX\]\s*(.*?)\s*$/;
 export const TO_OPUS_PATTERN = /^\s*\[TO:OPUS\]\s*(.*?)\s*$/;
