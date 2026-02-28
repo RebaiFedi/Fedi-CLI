@@ -9,9 +9,9 @@ import { flog } from '../utils/log.js';
 export interface UserConfig {
   /** Max execution time per agent exec call (ms). Default: 120000 */
   execTimeoutMs: number;
-  /** Max execution time specifically for Codex (ms). Default: 360000 (3x execTimeoutMs) */
+  /** Max execution time specifically for Codex (ms). Default: 0 (no timeout — wait indefinitely) */
   codexTimeoutMs: number;
-  /** Max time to wait for all delegates before force-delivering (ms). Default: 420000 */
+  /** Max idle time (ms) before a delegate is considered stuck (0 = no timeout). Default: 0 */
   delegateTimeoutMs: number;
   /** Max relays per time window. Default: 50 */
   maxRelaysPerWindow: number;
@@ -35,8 +35,8 @@ export interface UserConfig {
 
 const UserConfigSchema = z.object({
   execTimeoutMs: z.number().min(1000).default(120_000),
-  codexTimeoutMs: z.number().min(1000).default(360_000),
-  delegateTimeoutMs: z.number().min(1000).default(420_000),
+  codexTimeoutMs: z.number().min(0).default(0),
+  delegateTimeoutMs: z.number().min(0).default(0),
   maxRelaysPerWindow: z.number().min(1).default(50),
   relayWindowMs: z.number().min(1000).default(60_000),
   flushIntervalMs: z.number().min(50).default(400),
@@ -50,8 +50,8 @@ const UserConfigSchema = z.object({
 
 const DEFAULTS: UserConfig = {
   execTimeoutMs: 120_000,
-  codexTimeoutMs: 360_000,
-  delegateTimeoutMs: 420_000,
+  codexTimeoutMs: 0,
+  delegateTimeoutMs: 0,
   maxRelaysPerWindow: 50,
   relayWindowMs: 60_000,
   flushIntervalMs: 400,

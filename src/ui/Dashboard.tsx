@@ -67,6 +67,7 @@ export function Dashboard({
     }),
     { opus: 'idle', claude: 'idle', codex: 'idle' } as Record<string, AgentStatus>,
   );
+  const agentStatusesRef = useRef<Record<string, AgentStatus>>({ opus: 'idle', claude: 'idle', codex: 'idle' });
   const [agentErrors, setAgentErrors] = useState<Partial<Record<string, string>>>({});
   const [stopped, setStopped] = useState(false);
   const stoppedRef = useRef(false);
@@ -169,11 +170,11 @@ export function Dashboard({
       }
 
       if (contentEntries.length === 0) {
-        // Actions only — print compact summary (throttled: max once per 3s per agent)
+        // Actions only — print compact summary (throttled: max once per 1s per agent)
         const allActions = pendingActions.current.get(agent) ?? [];
         const now = Date.now();
         const lastPrint = lastActionPrint.current.get(agent) ?? 0;
-        if (allActions.length > 0 && now - lastPrint >= 3000) {
+        if (allActions.length > 0 && now - lastPrint >= 1000) {
           lastActionPrint.current.set(agent, now);
           const last = allActions[allActions.length - 1];
           const short = last.length > 50 ? last.slice(0, 47) + '...' : last;
@@ -324,6 +325,7 @@ export function Dashboard({
       onAgentStatus: (agent: AgentId, status: AgentStatus) => {
         // Update pill status even when stopped (so pills go grey)
         dispatchStatus({ agent, status });
+        agentStatusesRef.current = { ...agentStatusesRef.current, [agent]: status };
 
         // Update agentErrors
         if (status === 'error') {
@@ -350,12 +352,8 @@ export function Dashboard({
           }
           setThinking(true);
         } else {
-          const statuses = [
-            agent === 'opus' ? status : orchestrator.opus.status,
-            agent === 'claude' ? status : orchestrator.claude.status,
-            agent === 'codex' ? status : orchestrator.codex.status,
-          ];
-          const anyRunningNow = statuses.some((s) => s === 'running');
+          const currentStatuses = { ...agentStatusesRef.current, [agent]: status };
+          const anyRunningNow = Object.values(currentStatuses).some((s) => s === 'running');
           // Keep spinner active if Opus still has pending delegates (agents answered
           // but Opus hasn't received the combined report yet — app would look frozen)
           const pendingDelegates = orchestrator.hasPendingDelegates;
@@ -574,18 +572,21 @@ export function Dashboard({
         return;
       }
 
-      // Parse @agent commands
+      // Parse @agent commands — use indexOf(' ') to avoid hardcoded offsets
       let targetAgent: AgentId | null = null;
       let agentMessage = text;
-      if (text.startsWith('@opus ')) {
-        targetAgent = 'opus';
-        agentMessage = text.slice(6);
-      } else if (text.startsWith('@codex ')) {
-        targetAgent = 'codex';
-        agentMessage = text.slice(7);
-      } else if (text.startsWith('@claude ') || text.startsWith('@sonnet ')) {
-        targetAgent = 'claude';
-        agentMessage = text.slice(text.indexOf(' ') + 1);
+      const agentPrefixes: { prefix: string; agent: AgentId }[] = [
+        { prefix: '@opus ', agent: 'opus' },
+        { prefix: '@codex ', agent: 'codex' },
+        { prefix: '@claude ', agent: 'claude' },
+        { prefix: '@sonnet ', agent: 'claude' },
+      ];
+      for (const { prefix, agent } of agentPrefixes) {
+        if (text.toLowerCase().startsWith(prefix)) {
+          targetAgent = agent;
+          agentMessage = text.slice(prefix.length);
+          break;
+        }
       }
 
       if (!orchestrator.isStarted || stopped) {

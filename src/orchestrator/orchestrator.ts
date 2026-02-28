@@ -158,6 +158,11 @@ export class Orchestrator {
       // This prevents Opus from writing partial reports visible to the user before
       // all delegates have finished. The buffer is flushed when all delegates report.
       if (this.expectedDelegates.size > 0 && line.type === 'stdout') {
+        // Always pass task tags through to the callback so the todo list updates in real-time
+        const hasTaskTags = /\[TASK:(add|done)\]/i.test(line.text);
+        if (hasTaskTags) {
+          cb.onAgentOutput('opus', line);
+        }
         // Allow only lines that are purely delegation tags or task tags to pass through
         const stripped = line.text
           .replace(/\[TO:(CLAUDE|CODEX|OPUS)\][^\n]*/gi, '')
@@ -169,6 +174,8 @@ export class Orchestrator {
           this.relayBuffer.get('opus')!.push(line);
           return;
         }
+        // If line was purely tags and already passed through via hasTaskTags, don't emit again
+        if (hasTaskTags) return;
       }
       cb.onAgentOutput('opus', line);
     });
@@ -328,6 +335,8 @@ export class Orchestrator {
           this.detectRelayPatterns(agentId, line.text);
           if (this.agentsOnRelay.has(agentId) && line.type === 'stdout') {
             flog.debug('BUFFER', 'On cross-talk + relay for opus', { agent: agentId });
+            // Pass task tags through so todo list updates in real-time
+            if (/\[TASK:(add|done)\]/i.test(line.text)) cb.onAgentOutput(agentId, line);
             this.relayBuffer.get(agentId)!.push(line);
           }
           if (line.type !== 'stdout') cb.onAgentOutput(agentId, line);
@@ -336,7 +345,8 @@ export class Orchestrator {
       }
       if (this.agentsOnRelay.has(agentId)) {
         const start = this.relayStartTime.get(agentId) ?? 0;
-        if (Date.now() - start > this.RELAY_TIMEOUT_MS) {
+        // RELAY_TIMEOUT_MS <= 0 means no relay timeout — wait indefinitely
+        if (this.RELAY_TIMEOUT_MS > 0 && Date.now() - start > this.RELAY_TIMEOUT_MS) {
           this.agentsOnRelay.delete(agentId);
           this.relayBuffer.set(agentId, []);
           this.relayStartTime.delete(agentId);
@@ -345,6 +355,8 @@ export class Orchestrator {
           this.detectRelayPatterns(agentId, line.text);
           if (line.type === 'stdout') {
             flog.debug('BUFFER', 'On relay for opus', { agent: agentId });
+            // Pass task tags through so todo list updates in real-time
+            if (/\[TASK:(add|done)\]/i.test(line.text)) cb.onAgentOutput(agentId, line);
             this.relayBuffer.get(agentId)!.push(line);
           } else {
             cb.onAgentOutput(agentId, line);
@@ -723,19 +735,10 @@ export class Orchestrator {
     const content = rawContent.trim();
     if (!content) return;
 
-    if (this.isRelayRateLimited()) {
-      flog.warn('ORCH', `Relay rate limited — skipping from ${from}`);
-      this.callbacks?.onAgentOutput(from, {
-        text: '[Rate limit] Trop de relays — patientez quelques secondes.',
-        timestamp: Date.now(),
-        type: 'info',
-      });
-      return;
-    }
-
     flog.info('RELAY', `${from}->${target}: ${content.slice(0, 80)}`);
 
     // ── Cross-talk: peer-to-peer between agents (not via Opus) ──
+    // Cross-talk is checked BEFORE rate-limit — it has its own limit (MAX_CROSS_TALK_PER_ROUND)
     const isPeerToPeer =
       from !== 'opus' && target !== 'opus' && from !== target;
 
@@ -754,6 +757,17 @@ export class Orchestrator {
         // Cross-talk does NOT count against relay rate limit — only record, don't check limit
         this.bus.relay(from, target, content);
       }
+      return;
+    }
+
+    // ── Rate-limit check (applies to standard relays only, NOT cross-talk) ──
+    if (this.isRelayRateLimited()) {
+      flog.warn('ORCH', `Relay rate limited — skipping from ${from}`);
+      this.callbacks?.onAgentOutput(from, {
+        text: '[Rate limit] Trop de relays — patientez quelques secondes.',
+        timestamp: Date.now(),
+        type: 'info',
+      });
       return;
     }
 
@@ -964,7 +978,8 @@ export class Orchestrator {
         }
 
         // Agent is not running AND has been idle too long — truly stuck
-        if (idleMs >= this.DELEGATE_IDLE_TIMEOUT_MS) {
+        // DELEGATE_IDLE_TIMEOUT_MS <= 0 means no timeout — never consider agents stuck
+        if (this.DELEGATE_IDLE_TIMEOUT_MS > 0 && idleMs >= this.DELEGATE_IDLE_TIMEOUT_MS) {
           flog.warn('ORCH', `Heartbeat: ${delegate} idle for ${Math.round(idleMs / 1000)}s (status=${agent.status}) — timing out`);
           timedOut.push(delegate);
         } else {

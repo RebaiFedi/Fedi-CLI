@@ -288,7 +288,8 @@ export abstract class BaseExecAgent implements AgentProcess {
       let fullStdout = '';
       let settled = false;
 
-      const execTimeout = setTimeout(() => {
+      // timeoutMs <= 0 means no timeout — wait indefinitely
+      const execTimeout = timeoutMs > 0 ? setTimeout(() => {
         if (settled) return;
         flog.warn('AGENT', `${this.logTag}: Exec timeout after ${timeoutMs / 1000}s — killing process`);
         this.emit({ text: `${this.logTag}: timeout — processus termine`, timestamp: Date.now(), type: 'info' });
@@ -297,7 +298,7 @@ export abstract class BaseExecAgent implements AgentProcess {
         } catch (err) {
           flog.debug('AGENT', `${this.logTag}: SIGKILL ignored on timeout: ${String(err).slice(0, 120)}`);
         }
-      }, timeoutMs);
+      }, timeoutMs) : null;
 
       const rl = createInterface({ input: proc.stdout! });
       rl.on('line', (line) => {
@@ -337,7 +338,7 @@ export abstract class BaseExecAgent implements AgentProcess {
       proc.on('error', (err) => {
         if (settled) return;
         settled = true;
-        clearTimeout(execTimeout);
+        if (execTimeout) clearTimeout(execTimeout);
         closeReadlines();
         flog.error('AGENT', `${this.logTag}: Process error: ${err.message}`);
         this.emit({ text: `Error: ${err.message}`, timestamp: Date.now(), type: 'system' });
@@ -347,13 +348,26 @@ export abstract class BaseExecAgent implements AgentProcess {
         reject(err);
       });
 
-      proc.on('exit', (code) => {
+      proc.on('exit', (code, signal) => {
         if (settled) return;
         settled = true;
-        clearTimeout(execTimeout);
+        if (execTimeout) clearTimeout(execTimeout);
         closeReadlines();
-        flog.info('AGENT', `${this.logTag}: Process exited with code ${code}`);
+        flog.info('AGENT', `${this.logTag}: Process exited with code ${code}, signal ${signal}`);
         this.activeProcess = null;
+        if (signal) {
+          flog.warn('AGENT', `${this.logTag}: Killed by signal: ${signal}`);
+          this.emit({
+            text: `${this.logTag}: processus tue par ${signal}`,
+            timestamp: Date.now(),
+            type: 'info',
+          });
+          const err = new Error(`${this.logTag}: killed by ${signal}`);
+          this.emitExecFailed(err);
+          this.setStatus('error');
+          reject(err);
+          return;
+        }
         if (code !== null && code !== 0) {
           flog.warn('AGENT', `${this.logTag}: Non-zero exit code: ${code}`);
           this.emit({

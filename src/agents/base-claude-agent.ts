@@ -202,7 +202,10 @@ export abstract class BaseClaudeAgent implements AgentProcess {
     }
 
     if (type === 'result') {
-      this.onResult();
+      // Don't reset to 'waiting' if this result was an error — preserve error status
+      if (!msg.is_error) {
+        this.onResult();
+      }
     }
   }
 
@@ -354,6 +357,7 @@ export abstract class BaseClaudeAgent implements AgentProcess {
     const proc = this.process;
     if (!proc) {
       this.clearHandlers();
+      this.setStatus('stopped');
       return;
     }
 
