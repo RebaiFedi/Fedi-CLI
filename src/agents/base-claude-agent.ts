@@ -20,6 +20,7 @@ export abstract class BaseClaudeAgent implements AgentProcess {
   private procErrorHandler: ((err: Error) => void) | null = null;
   private sendChain: Promise<void> = Promise.resolve();
   private sendAborted = false;
+  private lastDeadWarning = 0;
 
   /** Human-readable agent name for log messages */
   protected abstract get logTag(): string;
@@ -164,6 +165,7 @@ export abstract class BaseClaudeAgent implements AgentProcess {
 
     if (type === 'result' && msg.is_error) {
       const errorMsg = typeof msg.result === 'string' ? msg.result : 'Unknown error';
+      this.lastError = errorMsg;
       flog.error('AGENT', `${this.logTag}: Result error: ${errorMsg}`);
       // Detect quota/usage limit errors and show user-friendly message
       if (errorMsg.includes('out of extra usage') || errorMsg.includes('rate limit')) {
@@ -245,7 +247,11 @@ export abstract class BaseClaudeAgent implements AgentProcess {
 
   send(prompt: string) {
     if (!this.process?.stdin?.writable) {
+      const now = Date.now();
+      if (now - this.lastDeadWarning < 5000) return; // throttle: 1 warning per 5s
+      this.lastDeadWarning = now;
       flog.error('AGENT', `${this.logTag}: Cannot send: process not running`);
+      this.lastError = 'process not running';
       this.setStatus('error');
       this.emit({
         text: `${this.logTag}: processus mort — redemarrage necessaire`,

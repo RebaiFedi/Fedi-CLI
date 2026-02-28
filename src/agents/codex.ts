@@ -58,7 +58,9 @@ export class CodexAgent extends BaseExecAgent {
         (typeof event.error === 'string' ? event.error : '') ||
         'Unknown error';
       flog.error('AGENT', `[CODEX] Error event: ${errorMsg}`);
+      this.lastError = errorMsg;
       this.emit({ text: `Codex error: ${errorMsg}`, timestamp: Date.now(), type: 'info' });
+      this.setStatus('error');
     }
 
     // Detect thread truncation / context limit

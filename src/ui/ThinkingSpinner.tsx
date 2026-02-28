@@ -45,10 +45,18 @@ function formatElapsed(ms: number): string {
   return `${secs}s`;
 }
 
+interface SpinnerState {
+  frame: number;
+  verb: string;
+  elapsed: string;
+}
+
 function ThinkingSpinnerComponent() {
-  const [frame, setFrame] = useState(0);
-  const [verb, setVerb] = useState(randomVerb);
-  const [elapsed, setElapsed] = useState('0s');
+  const [state, setState] = useState<SpinnerState>({
+    frame: 0,
+    verb: randomVerb(),
+    elapsed: '0s',
+  });
   const startTime = useRef(0);
   const tickCount = useRef(0);
 
@@ -57,12 +65,12 @@ function ThinkingSpinnerComponent() {
     tickCount.current = 0;
 
     const id = setInterval(() => {
-      setFrame((f) => (f + 1) % SPINNER_FRAMES.length);
-      setElapsed(formatElapsed(Date.now() - startTime.current));
       tickCount.current += 1;
-      if (tickCount.current % VERB_TICK_INTERVAL === 0) {
-        setVerb(randomVerb());
-      }
+      setState((prev) => ({
+        frame: (prev.frame + 1) % SPINNER_FRAMES.length,
+        elapsed: formatElapsed(Date.now() - startTime.current),
+        verb: tickCount.current % VERB_TICK_INTERVAL === 0 ? randomVerb() : prev.verb,
+      }));
     }, 80);
 
     return () => clearInterval(id);
@@ -70,15 +78,15 @@ function ThinkingSpinnerComponent() {
 
   return (
     <Text>
-      <Text color={THEME.opus}>{`  ${SPINNER_FRAMES[frame]} `}</Text>
+      <Text color={THEME.opus}>{`  ${SPINNER_FRAMES[state.frame]} `}</Text>
       <Text color={THEME.opus} italic>
-        {verb}
+        {state.verb}
       </Text>
       <Text color={THEME.opus} dimColor>
         {'...'}
       </Text>
       <Text color={THEME.opus} dimColor>
-        {` ${elapsed}`}
+        {` ${state.elapsed}`}
       </Text>
     </Text>
   );

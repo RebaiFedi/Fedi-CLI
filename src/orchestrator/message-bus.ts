@@ -17,6 +17,9 @@ import { flog } from '../utils/log.js';
 export class MessageBus extends EventEmitter {
   private history: Message[] = [];
   private correlationCounts: Map<string, number> = new Map();
+  private correlationTimestamps: Map<string, number> = new Map();
+  /** Max age (ms) before a correlation entry is evicted */
+  private static readonly CORRELATION_MAX_AGE_MS = 600_000; // 10 min
 
   constructor() {
     super();
@@ -37,6 +40,11 @@ export class MessageBus extends EventEmitter {
     }
     if (full.correlationId) {
       this.correlationCounts.set(full.correlationId, (this.correlationCounts.get(full.correlationId) ?? 0) + 1);
+      this.correlationTimestamps.set(full.correlationId, Date.now());
+    }
+    // Evict stale correlation entries periodically
+    if (this.correlationCounts.size > 200) {
+      this.evictStaleCorrelations();
     }
     flog.info('BUS', `${full.from}->${full.to}: ${full.content.slice(0, 100)}`);
 
@@ -107,9 +115,20 @@ export class MessageBus extends EventEmitter {
     return true;
   }
 
+  private evictStaleCorrelations(): void {
+    const now = Date.now();
+    for (const [id, ts] of this.correlationTimestamps) {
+      if (now - ts > MessageBus.CORRELATION_MAX_AGE_MS) {
+        this.correlationCounts.delete(id);
+        this.correlationTimestamps.delete(id);
+      }
+    }
+  }
+
   reset(): void {
     this.history = [];
     this.correlationCounts.clear();
+    this.correlationTimestamps.clear();
     // NOTE: Do NOT call removeAllListeners() here — bind() registers
     // persistent handlers (message:opus, message:claude, etc.) that must
     // survive a restart. Only clear the message history.

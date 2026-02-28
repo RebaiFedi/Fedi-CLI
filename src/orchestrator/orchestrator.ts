@@ -68,6 +68,7 @@ export class Orchestrator {
     ['codex', Promise.resolve()],
   ]);
   private opusRestartPending = false;
+  private opusRestartTimer: ReturnType<typeof setTimeout> | null = null;
   private opusRestartCount = 0;
   private config: Omit<SessionConfig, 'task'> | null = null;
   private relayTimestamps: number[] = [];
@@ -199,7 +200,8 @@ export class Orchestrator {
           return;
         }
         this.opusRestartPending = true;
-        setTimeout(async () => {
+        this.opusRestartTimer = setTimeout(async () => {
+          this.opusRestartTimer = null;
           this.opusRestartPending = false;
           const config = this.config;
           if (!config) {
@@ -651,6 +653,10 @@ export class Orchestrator {
 
   private resetState() {
     this.started = false;
+    if (this.opusRestartTimer) {
+      clearTimeout(this.opusRestartTimer);
+      this.opusRestartTimer = null;
+    }
     this.opusRestartPending = false;
     this.opusRestartCount = 0;
     this.workerStarted = new Map([
@@ -1274,10 +1280,15 @@ export class Orchestrator {
     this.claudeQueue.clear();
     this.codexQueue.clear();
 
-    // 2. Cancel all safety-net and delegate timers
+    // 2. Cancel all safety-net, delegate, and restart timers
     for (const timer of this.safetyNetTimers.values()) clearTimeout(timer);
     this.safetyNetTimers.clear();
     this.stopDelegateHeartbeat();
+    if (this.opusRestartTimer) {
+      clearTimeout(this.opusRestartTimer);
+      this.opusRestartTimer = null;
+      this.opusRestartPending = false;
+    }
 
     // 3. Clear all relay/mute state so no stale handlers fire
     this.agentsOnRelay.clear();

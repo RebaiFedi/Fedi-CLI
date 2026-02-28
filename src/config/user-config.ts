@@ -83,8 +83,23 @@ export function loadUserConfig(): UserConfig {
   try {
     const raw = readFileSync(configPath, 'utf-8');
     const parsed = JSON.parse(raw);
-    const validated = UserConfigSchema.safeParse(parsed);
-    const merged = validated.success ? validated.data : {};
+    // Parse tolerantly key-by-key: valid keys are kept, invalid ones fall back to defaults
+    const merged: Record<string, unknown> = {};
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      for (const [key, value] of Object.entries(parsed)) {
+        if (key in DEFAULTS) {
+          const fieldSchema = UserConfigSchema.shape[key as keyof typeof UserConfigSchema.shape];
+          if (fieldSchema) {
+            const result = fieldSchema.safeParse(value);
+            if (result.success) {
+              merged[key] = result.data;
+            } else {
+              flog.warn('SYSTEM', `Config key "${key}" invalid (${result.error.message}) — using default`);
+            }
+          }
+        }
+      }
+    }
     cachedConfig = { ...DEFAULTS, ...merged };
     flog.info('SYSTEM', `Loaded user config from ${configPath}`);
     return cachedConfig;

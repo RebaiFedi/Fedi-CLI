@@ -57,7 +57,7 @@ export function Dashboard({
   resumeSessionId,
 }: DashboardProps) {
   const { exit } = useApp();
-  const maxMessages = getMaxMessages();
+  const maxMessagesRef = useRef(getMaxMessages());
   const flushInterval = getFlushInterval();
 
   const [agentStatuses, dispatchStatus] = useReducer(
@@ -76,7 +76,7 @@ export function Dashboard({
   const [thinking, setThinking] = useState(false);
 
   // Schedule auto-hide when all todos are done; reset when new todos arrive
-  const todosAllDone = todos.length > 0 && todos.every((t) => t.done);
+  const todosAllDone = useMemo(() => todos.length > 0 && todos.every((t) => t.done), [todos]);
   useEffect(() => {
     if (!todosAllDone) return;
     const timer = setTimeout(() => setTodosHiddenAt(Date.now()), 1500);
@@ -107,21 +107,27 @@ export function Dashboard({
     printWelcomeBanner(projectDir);
   }, [projectDir]);
 
-  // Fix Ink resize ghost: clear stale output when terminal width changes
+  // Fix Ink resize ghost: clear stale output when terminal width changes (debounced)
   const { stdout } = useStdout();
   const lastWidth = useRef(stdout.columns || 80);
+  const resizeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
     const onResize = () => {
-      const newWidth = stdout.columns || 80;
-      if (newWidth !== lastWidth.current) {
-        // Ink only clears on width decrease. On increase, ghost boxes remain.
-        // Write clear-to-end-of-screen to prevent ghosts.
-        stdout.write('\x1b[J');
-        lastWidth.current = newWidth;
-      }
+      if (resizeTimer.current) clearTimeout(resizeTimer.current);
+      resizeTimer.current = setTimeout(() => {
+        resizeTimer.current = null;
+        const newWidth = stdout.columns || 80;
+        if (newWidth !== lastWidth.current) {
+          stdout.write('\x1b[J');
+          lastWidth.current = newWidth;
+        }
+      }, 100);
     };
     stdout.on('resize', onResize);
-    return () => { stdout.off('resize', onResize); };
+    return () => {
+      stdout.off('resize', onResize);
+      if (resizeTimer.current) clearTimeout(resizeTimer.current);
+    };
   }, [stdout]);
 
   const flushBuffer = useCallback(() => {
@@ -166,7 +172,9 @@ export function Dashboard({
 
       if (newActions.length > 0) {
         const existing = pendingActions.current.get(agent) ?? [];
-        pendingActions.current.set(agent, [...existing, ...newActions]);
+        const combined = [...existing, ...newActions];
+        // Cap at 100 actions per agent to prevent memory leak
+        pendingActions.current.set(agent, combined.length > 100 ? combined.slice(-100) : combined);
       }
 
       if (contentEntries.length === 0) {
@@ -220,9 +228,9 @@ export function Dashboard({
         timestamp: Date.now(),
         status: 'streaming',
       });
-      if (chatMessagesMap.current.size > maxMessages) {
+      if (chatMessagesMap.current.size > maxMessagesRef.current) {
         const keys = [...chatMessagesMap.current.keys()];
-        for (const k of keys.slice(0, chatMessagesMap.current.size - maxMessages)) {
+        for (const k of keys.slice(0, chatMessagesMap.current.size - maxMessagesRef.current)) {
           chatMessagesMap.current.delete(k);
         }
       }
@@ -241,7 +249,7 @@ export function Dashboard({
       // Single console.log call — Ink erases+redraws its zone only once
       console.log(final);
     }
-  }, [maxMessages]);
+  }, []);
 
   const enqueueOutput = useCallback(
     (agent: AgentId, entries: DisplayEntry[]) => {
@@ -296,14 +304,21 @@ export function Dashboard({
         if (hasNewItems) setTodosHiddenAt(0);
         for (const done of dones) {
           const lower = done.toLowerCase();
+          // 1. Exact substring match (done text inside todo text)
           let idx = updated.findIndex((t) => !t.done && t.text.toLowerCase().includes(lower));
+          // 2. Reverse match (todo text inside done text)
+          if (idx === -1) {
+            idx = updated.findIndex((t) => !t.done && lower.includes(t.text.toLowerCase()));
+          }
+          // 3. Fuzzy word match (at least 1 significant word overlap for short texts, 2 for longer)
           if (idx === -1) {
             const doneWords = lower.split(/\s+/).filter((w) => w.length > 3);
+            const threshold = doneWords.length <= 2 ? 1 : 2;
             idx = updated.findIndex((t) => {
               if (t.done) return false;
               const todoLower = t.text.toLowerCase();
               const matchCount = doneWords.filter((w) => todoLower.includes(w)).length;
-              return matchCount >= 2;
+              return matchCount >= threshold;
             });
           }
           if (idx !== -1) updated[idx] = { ...updated[idx], done: true };
@@ -459,7 +474,16 @@ export function Dashboard({
         flog.warn('UI', 'Force exit requested');
         process.exit(1);
       }
-      exitInProgress.current = true;
+      // Warn if agents are still active
+      const activeAgents = Object.entries(agentStatusesRef.current)
+        .filter(([, s]) => s === 'running')
+        .map(([a]) => a);
+      if (activeAgents.length > 0 && !stoppedRef.current) {
+        exitInProgress.current = true;
+        console.log(chalk.yellow(`\n  Agents actifs (${activeAgents.join(', ')}) — Ctrl+C encore pour forcer.`));
+      } else {
+        exitInProgress.current = true;
+      }
       flog.info('UI', 'Graceful shutdown initiated...');
       // Flush pending output before stopping
       if (flushTimer.current) {
@@ -665,7 +689,7 @@ export function Dashboard({
         >
           <Text color={THEME.text}>{' \u276F '}</Text>
           <Box flexGrow={1}>
-            <InputBar onSubmit={handleInput} placeholder="Improve documentation in @filename" />
+            <InputBar onSubmit={handleInput} placeholder={stopped ? "Tapez pour relancer les agents..." : "Message or @agent command"} />
           </Box>
         </Box>
       </Box>
