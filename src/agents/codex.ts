@@ -129,10 +129,11 @@ export class CodexAgent extends BaseExecAgent {
             const file = typeof change.filename === 'string' ? change.filename
               : typeof change.file === 'string' ? change.file
               : typeof change.path === 'string' ? change.path : undefined;
-            const act = typeof change.action === 'string' ? change.action
+            const act = typeof change.kind === 'string' ? change.kind
+              : typeof change.action === 'string' ? change.action
               : typeof change.type === 'string' ? change.type : undefined;
             if (file) {
-              const label = act === 'create' ? 'create' : act === 'delete' ? 'delete' : 'edit';
+              const label = (act === 'create' || act === 'add') ? 'create' : act === 'delete' ? 'delete' : 'edit';
               const formatted = formatAction(label, file);
               if (formatted) {
                 const suffix = itemStatus && itemStatus !== 'completed' ? ` (${itemStatus})` : '';
