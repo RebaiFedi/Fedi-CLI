@@ -140,10 +140,6 @@ export class Orchestrator {
    *  message takes priority and Opus should not interfere. Cleared on next user
    *  message or sendToAllDirect. */
   private directModeAgents: Set<AgentId> = new Set();
-  /** Timestamp of last checkpoint forwarded to Opus per agent — used for throttling */
-  private lastCheckpointForward: Map<AgentId, number> = new Map();
-  /** How often (ms) checkpoints are forwarded to Opus per agent */
-  private readonly CHECKPOINT_THROTTLE_MS = _cfg.checkpointThrottleMs;
 
   setConfig(config: Omit<SessionConfig, 'task'>) {
     this.config = config;
@@ -185,31 +181,11 @@ export class Orchestrator {
       flog.debug('AGENT', 'Output', { agent: 'opus', type: line.type, text: line.text.slice(0, 150) });
       this.detectRelayPatterns('opus', line.text);
 
-      // When Opus has active delegates, buffer ALL stdout (not just long messages).
-      // This prevents Opus from writing partial reports visible to the user before
-      // all delegates have finished. The buffer is flushed when all delegates report.
-      // EXCEPTION: in @tous mode (opusAllMode), Opus output passes through so the
-      // user sees Opus working in real-time alongside Sonnet and Codex.
-      if (this.expectedDelegates.size > 0 && line.type === 'stdout' && !this.opusAllMode) {
-        // Always pass task tags through to the callback so the todo list updates in real-time
-        const hasTaskTags = /\[TASK:(add|done)\]/i.test(line.text);
-        if (hasTaskTags) {
-          cb.onAgentOutput('opus', line);
-        }
-        // Allow only lines that are purely delegation tags or task tags to pass through
-        const stripped = line.text
-          .replace(/\[TO:(SONNET|CODEX|OPUS)\][^\n]*/gi, '')
-          .replace(/\[FROM:(SONNET|CODEX|OPUS)\][^\n]*/gi, '')
-          .replace(/\[TASK:(add|done)\][^\n]*/gi, '')
-          .trim();
-        if (stripped.length > 0) {
-          flog.debug('BUFFER', `Opus stdout BUFFERED (${this.expectedDelegates.size} delegates pending): ${stripped.slice(0, 80)}`, { agent: 'opus' });
-          this.relayBuffer.get('opus')!.push(line);
-          return;
-        }
-        // If line was purely tags and already passed through via hasTaskTags, don't emit again
-        if (hasTaskTags) return;
-      }
+      // Opus stdout passes through in real-time even when delegates are pending.
+      // Buffering was causing Opus text (plans, explanations, status updates) to appear
+      // AFTER delegate reports — breaking chronological order and confusing the user.
+      // The prompt already instructs Opus to stop writing after delegation, so any text
+      // he produces is either a brief status line or something useful for the user.
       cb.onAgentOutput('opus', line);
     });
     this.opus.onStatusChange((s) => {
@@ -372,12 +348,11 @@ export class Orchestrator {
       flog.debug('AGENT', 'Output', { agent: agentId, type: line.type, text: line.text.slice(0, 150) });
       // Keep heartbeat alive — agent is producing output
       this.recordDelegateActivity(agentId);
-      // Checkpoint passthrough — always forward to UI and optionally to Opus
+      // Checkpoint passthrough — always forward to UI, but NEVER to Opus while
+      // delegates are pending.  Forwarding checkpoints to Opus was causing him to
+      // "wake up" and write a premature report before all agents had reported back.
       if (line.type === 'checkpoint') {
         cb.onAgentOutput(agentId, line);
-        if (this.expectedDelegates.has(agentId)) {
-          this.forwardCheckpointToOpus(agentId, line.text);
-        }
         return;
       }
       // Agent's report already delivered to Opus — mute ALL late output completely
@@ -853,7 +828,6 @@ export class Orchestrator {
     // so that setDirectMode() called before restart() is preserved. It is cleared
     // explicitly in sendUserMessage(), sendToAllDirect(), and stop().
     this.lastDelegationContent.clear();
-    this.lastCheckpointForward.clear();
     this.relayDrafts.clear();
     for (const timer of this.relayDraftTimers.values()) clearTimeout(timer);
     this.relayDraftTimers.clear();
@@ -1364,20 +1338,6 @@ export class Orchestrator {
     }
   }
 
-  /** Forward a checkpoint from a worker agent to Opus via sendUrgent.
-   *  Throttled per agent to avoid flooding Opus with too many checkpoints. */
-  private forwardCheckpointToOpus(agentId: AgentId, text: string) {
-    const now = Date.now();
-    const lastForward = this.lastCheckpointForward.get(agentId) ?? 0;
-    if (now - lastForward < this.CHECKPOINT_THROTTLE_MS) return;
-    this.lastCheckpointForward.set(agentId, now);
-    const tag = `[CHECKPOINT:${agentId.toUpperCase()}]`;
-    if (this.opus.status === 'running') {
-      this.opus.sendUrgent(`${tag} ${text}`);
-    }
-    flog.debug('ORCH', `Forwarded checkpoint to Opus: ${tag} ${text.slice(0, 80)}`);
-  }
-
   /** Extract buffered text for an agent and handle auto-relay or combined delivery */
   private autoRelayBuffer(agent: AgentId) {
     const buffer = this.relayBuffer.get(agent) ?? [];
@@ -1551,7 +1511,6 @@ export class Orchestrator {
     this.expectedDelegates.clear();
     this.pendingReportsForOpus.clear();
     this.crossTalkCount = 0;
-    this.lastCheckpointForward.clear();
     // Clear @tous mode — Opus buffering returns to normal
     this.opusAllMode = false;
     // Clear delegate heartbeat — delivery complete
@@ -1571,14 +1530,15 @@ export class Orchestrator {
       });
     }
 
+    // DROP Opus buffer — these are stale lines Opus wrote while waiting for delegates
+    // (e.g. "J'attends les rapports"). Showing them now would be confusing since the
+    // reports have already arrived. Opus will write a fresh synthesis after receiving
+    // the combined report below.
+    this.relayBuffer.set('opus', []);
+
     // Deliver as a single message via the bus
     this.recordRelay();
     this.bus.send({ from: 'system', to: 'opus', content: combined });
-
-    // Flush Opus buffer so he writes a fresh synthesis
-    if (this.callbacks) {
-      this.flushOpusBuffer(this.callbacks);
-    }
   }
 
   async stop() {
