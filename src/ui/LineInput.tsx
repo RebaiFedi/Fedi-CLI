@@ -134,8 +134,10 @@ export function LineInput({
     }
   }, [value]);
 
-  // Compute terminal width — reserve 5 chars for the prompt prefix (" ❯ ")
-  const termWidth = (stdout?.columns ?? 80) - 5;
+  // Compute terminal width — reserve chars for:
+  //   border-left (1) + border-right (1) + prompt " ❯ " (3) = 5
+  // Add 2 extra to match Ink's internal box padding and avoid off-by-one overflow
+  const termWidth = (stdout?.columns ?? 80) - 7;
   const wrapWidth = Math.max(10, termWidth);
 
   // ── Key handler ────────────────────────────────────────────────────────────
@@ -268,23 +270,24 @@ export function LineInput({
     { isActive: focus },
   );
 
+  // ── Compact threshold — above this, show badge instead of full text ──────────
+  const COMPACT_THRESHOLD = 3;
+
   // ── Render ──────────────────────────────────────────────────────────────────
   const renderedLines = useMemo(() => {
     const { row: cursorRow, col: cursorCol, lines } = cursorToRowCol(value, safeOffset, wrapWidth);
-
-    // Compute visible slice
     const totalLines = lines.length;
-    const safeTop = clamp(viewportTop, 0, Math.max(0, totalLines - maxVisibleLines));
-    const visibleLines = lines.slice(safeTop, safeTop + maxVisibleLines);
-    const scrollIndicatorTop = safeTop > 0;
-    const scrollIndicatorBottom = safeTop + maxVisibleLines < totalLines;
 
     // Build rendered strings
     if (!showCursor || !focus) {
       if (value.length === 0 && placeholder) {
         return [chalk.grey(placeholder)];
       }
-      return visibleLines;
+      // In no-focus mode, show compact badge if text is long
+      if (totalLines > COMPACT_THRESHOLD) {
+        return [chalk.dim(`[${totalLines} lignes]`)];
+      }
+      return lines;
     }
 
     // Show placeholder when empty
@@ -293,23 +296,46 @@ export function LineInput({
       return [chalk.inverse(placeholder[0]) + chalk.grey(placeholder.slice(1))];
     }
 
+    // ── Compact mode: text > threshold lines ─────────────────────────────────
+    // Show: badge line + current cursor line (like Claude Code)
+    if (totalLines > COMPACT_THRESHOLD) {
+      const cursorLine = lines[cursorRow] ?? '';
+
+      // Build cursor line with highlight
+      let cursorRendered = '';
+      for (let i = 0; i < cursorLine.length; i++) {
+        const char = cursorLine[i] ?? '';
+        cursorRendered += i === cursorCol ? chalk.inverse(char) : char;
+      }
+      if (cursorCol >= cursorLine.length) cursorRendered += chalk.inverse(' ');
+
+      // Badge: "[N lignes · ligne X/N]"
+      const badge = chalk.dim(`[${totalLines} lignes · ligne ${cursorRow + 1}/${totalLines}]`);
+
+      return [badge, cursorRendered];
+    }
+
+    // ── Normal mode: text fits within threshold lines ─────────────────────────
+    const safeTop = clamp(viewportTop, 0, Math.max(0, totalLines - maxVisibleLines));
+    const visibleLines = lines.slice(safeTop, safeTop + maxVisibleLines);
+    const scrollIndicatorTop = safeTop > 0;
+    const scrollIndicatorBottom = safeTop + maxVisibleLines < totalLines;
+
     return visibleLines.map((line, vi) => {
       const lineIdx = safeTop + vi;
       if (lineIdx !== cursorRow) {
-        // Non-cursor line — add scroll indicator
         let out = line;
         if (vi === 0 && scrollIndicatorTop) out = chalk.dim('↑') + out;
         if (vi === visibleLines.length - 1 && scrollIndicatorBottom) out = out + chalk.dim('↓');
         return out;
       }
-      // Cursor is on this line — render with cursor highlight
+      // Cursor line
       let out = '';
       for (let i = 0; i < line.length; i++) {
         const char = line[i] ?? '';
         out += i === cursorCol ? chalk.inverse(char) : char;
       }
       if (cursorCol >= line.length) out += chalk.inverse(' ');
-      // Scroll indicators
       if (vi === 0 && scrollIndicatorTop) out = chalk.dim('↑') + out;
       if (vi === visibleLines.length - 1 && scrollIndicatorBottom) out = out + chalk.dim('↓');
       return out;
