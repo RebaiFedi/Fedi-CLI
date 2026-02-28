@@ -13,7 +13,7 @@ import type {
 import type { Orchestrator } from '../orchestrator/orchestrator.js';
 import { InputBar } from './InputBar.js';
 import { flog } from '../utils/log.js';
-import { THEME, agentHex, agentDisplayName, agentChalkColor } from '../config/theme.js';
+import { THEME, agentHex, agentDisplayName, agentChalkColor, agentIcon } from '../config/theme.js';
 import { getMaxMessages, getFlushInterval, INDENT } from '../config/constants.js';
 import { outputToEntries, extractTasks } from '../rendering/output-transform.js';
 import { entriesToAnsiOutputLines } from '../rendering/ansi-renderer.js';
@@ -199,10 +199,11 @@ export function Dashboard({
         // Actions only — print every action live, no throttle
         const allActions = pendingActions.current.get(agent) ?? [];
         if (allActions.length > 0) {
-          const label = chalk.hex(agentHex(agent))(agentDisplayName(agent));
+          const icon = agentIcon(agent as import('../agents/types.js').AgentId);
+          const label = chalk.hex(agentHex(agent))(`${icon} ${agentDisplayName(agent)}`);
           for (const action of allActions) {
-            const short = action.length > 60 ? action.slice(0, 57) + '...' : action;
-            outputLines.push(`${INDENT}${label} ${chalk.dim(short)}`);
+            const short = action.length > 60 ? action.slice(0, 57) + '…' : action;
+            outputLines.push(`${INDENT}${label} ${chalk.dim('·')} ${chalk.hex(THEME.actionText)(short)}`);
           }
           pendingActions.current.set(agent, []);
         }
@@ -217,8 +218,12 @@ export function Dashboard({
           const agentSwitched = lastPrintedAgent.current && lastPrintedAgent.current !== agent;
           if (agentSwitched) {
             outputLines.push('');
-            const agName = chalk.hex(agentHex(agent)).bold(agentDisplayName(agent));
-            outputLines.push(`${INDENT}${agName}`);
+            const icon = agentIcon(agent as import('../agents/types.js').AgentId);
+            const agName = chalk.hex(agentHex(agent)).bold(`${icon} ${agentDisplayName(agent)}`);
+            const termW = process.stdout.columns || 80;
+            const headerLine = `${INDENT}${agName}`;
+            outputLines.push(headerLine);
+            outputLines.push(`${INDENT}${chalk.hex(THEME.panelBorder)('─'.repeat(Math.min(termW - 4, 60)))}`);
           }
           lastPrintedAgent.current = agent;
           msg.lines.push(...entries);
@@ -251,8 +256,11 @@ export function Dashboard({
         }
       }
 
-      const name = chalk.hex(agentHex(agent)).bold(agentDisplayName(agent));
+      const icon = agentIcon(agent as import('../agents/types.js').AgentId);
+      const name = chalk.hex(agentHex(agent)).bold(`${icon} ${agentDisplayName(agent)}`);
+      const termW = process.stdout.columns || 80;
       outputLines.push(`${INDENT}${name}`);
+      outputLines.push(`${INDENT}${chalk.hex(THEME.panelBorder)('─'.repeat(Math.min(termW - 4, 60)))}`);
       flushPendingActions(agent, agentColor);
       outputLines.push(...entriesToAnsiOutputLines(contentEntries, agentColor));
       const last = contentEntries[contentEntries.length - 1];
@@ -270,9 +278,10 @@ export function Dashboard({
       // Show heartbeat every 5s if agent hasn't emitted actions in 5+ seconds
       if (sinceLastAction >= 5000 && now - lastHb >= 5000) {
         lastHeartbeatTime.current.set(agent, now);
-        const label = chalk.hex(agentHex(agent))(agentDisplayName(agent));
+        const icon = agentIcon(agent as import('../agents/types.js').AgentId);
+        const label = chalk.hex(agentHex(agent))(`${icon} ${agentDisplayName(agent)}`);
         const elapsed = Math.floor(sinceLastAction / 1000);
-        outputLines.push(`${INDENT}${label} ${chalk.dim(`▸ working... ${elapsed}s`)}`);
+        outputLines.push(`${INDENT}${label} ${chalk.hex(THEME.actionIcon)('·')} ${chalk.dim(`thinking… ${elapsed}s`)}`);
       }
     }
 
@@ -528,9 +537,11 @@ export function Dashboard({
         const preview = msg.content.length > 120
           ? msg.content.slice(0, 117) + '...'
           : msg.content;
-        const relayLine =
-          `${INDENT}${chalk.hex(fromColor).bold(fromName)} ${chalk.dim('\u2192')} ${chalk.hex(toColor).bold(toName)}${chalk.dim(':')} ${chalk.hex('#CBD5E1')(preview)}`;
-        console.log(`\n${relayLine}`);
+        const fromIcon = agentIcon(fromAgent);
+        const toIcon = agentIcon(toAgent);
+        const relayHeader = `${INDENT}${chalk.hex(fromColor).bold(`${fromIcon} ${fromName}`)} ${chalk.hex(THEME.muted)('→')} ${chalk.hex(toColor).bold(`${toIcon} ${toName}`)}`;
+        const relayBody = `${INDENT}  ${chalk.hex('#94A3B8')(preview)}`;
+        console.log(`\n${relayHeader}\n${relayBody}`);
       },
       onRelayBlocked: (msg: Message) => {
         flog.info('UI', `Relay blocked: ${msg.from}->${msg.to}`);

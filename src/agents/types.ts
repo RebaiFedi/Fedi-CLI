@@ -65,6 +65,9 @@ export interface AgentProcess {
   getSessionId(): string | null;
   setContextReminder?(reminder: string): void;
   mute?(): void;
+  /** Interrupt the current active turn (persistent agents only).
+   *  Used to stop wasteful work after combined report delivery. */
+  interruptCurrentTask?(): void;
 }
 
 // ── Session persistence (v2) ────────────────────────────────────────────────

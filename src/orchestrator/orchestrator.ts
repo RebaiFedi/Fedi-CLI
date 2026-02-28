@@ -181,11 +181,20 @@ export class Orchestrator {
       flog.debug('AGENT', 'Output', { agent: 'opus', type: line.type, text: line.text.slice(0, 150) });
       this.detectRelayPatterns('opus', line.text);
 
-      // Opus stdout passes through in real-time even when delegates are pending.
-      // Buffering was causing Opus text (plans, explanations, status updates) to appear
-      // AFTER delegate reports — breaking chronological order and confusing the user.
-      // The prompt already instructs Opus to stop writing after delegation, so any text
-      // he produces is either a brief status line or something useful for the user.
+      // When Opus has delegated to agents and is waiting for their reports,
+      // buffer his stdout so his analysis doesn't appear before the combined report.
+      // Actions (system), checkpoints, and info lines still pass through so the
+      // user sees Opus is working. Only stdout (text content) is buffered.
+      if (this.expectedDelegates.size > 0 && line.type === 'stdout' && !this.opusAllMode) {
+        const stripped = line.text
+          .replace(/\[TASK:(add|done)\][^\n]*/gi, '')
+          .trim();
+        if (stripped.length > 0) {
+          flog.debug('BUFFER', `Opus stdout BUFFERED (${this.expectedDelegates.size} delegates pending): ${stripped.slice(0, 80)}`, { agent: 'opus' });
+          this.relayBuffer.get('opus')!.push(line);
+          return;
+        }
+      }
       cb.onAgentOutput('opus', line);
     });
     this.opus.onStatusChange((s) => {
@@ -773,18 +782,16 @@ export class Orchestrator {
     // Enable @tous mode — Opus stdout passes through (user sees Opus working)
     this.opusAllMode = true;
 
-    // Send LIVE to running agents, normal bus.send to idle ones
-    for (const agentId of ['opus', 'sonnet', 'codex'] as AgentId[]) {
-      if (!this.isAgentEnabled(agentId)) continue;
-      const payload = agentId === 'opus' ? opusAllModeMessage : text;
-      const agent = this.getAgent(agentId);
-      if (agent.status === 'running') {
-        agent.sendUrgent(`[FROM:USER] ${payload}`);
-        // Record in bus history
-        this.bus.record({ from: 'user', to: agentId, content: payload });
-      } else {
-        this.bus.send({ from: 'user', to: agentId, content: payload });
-      }
+    // ONLY Opus receives the @tous message directly.
+    // Sonnet and Codex will receive their tasks via Opus's [TO:SONNET]/[TO:CODEX]
+    // delegation, which the orchestrator detects and routes automatically.
+    // This prevents workers from starting before Opus has formulated the delegation.
+    const opus = this.getAgent('opus');
+    if (opus.status === 'running') {
+      opus.sendUrgent(`[FROM:USER] ${opusAllModeMessage}`);
+      this.bus.record({ from: 'user', to: 'opus', content: opusAllModeMessage });
+    } else {
+      this.bus.send({ from: 'user', to: 'opus', content: opusAllModeMessage });
     }
   }
 
@@ -1484,13 +1491,18 @@ export class Orchestrator {
     flog.info('ORCH', `Delivering combined report to Opus (${this.pendingReportsForOpus.size} delegates): ${combined.slice(0, 200)}`);
 
     // Track delivered agents — late output from these will be muted completely.
-    // Also mute exec-based agents to stop wasting compute on their current task.
+    // Mute agents AND interrupt persistent agents to stop wasting compute.
     for (const delegate of this.expectedDelegates) {
       this.deliveredToOpus.add(delegate);
       const agent = this.getAgent(delegate);
       if (agent.mute) {
         agent.mute();
         flog.info('ORCH', `Muted ${delegate} after combined delivery (save compute)`);
+      }
+      // Interrupt persistent agents (Codex app-server) — stop the active turn
+      if (agent.interruptCurrentTask) {
+        agent.interruptCurrentTask();
+        flog.info('ORCH', `Interrupted ${delegate} active turn after combined delivery`);
       }
     }
 

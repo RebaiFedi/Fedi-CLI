@@ -65,10 +65,11 @@ export function createTestOrchestrator(): TestHarness {
   });
 
   async function flush(): Promise<void> {
-    // Give relay draft debounce (150ms) + PQueue microtasks time to process.
-    // The relay system uses RELAY_DRAFT_FLUSH_MS (150ms) to batch streamed
-    // chunks before routing. We need to wait longer than that + queue time.
-    await new Promise((r) => setTimeout(r, 250));
+    // Must be longer than the largest timer in the orchestrator:
+    // - RELAY_DRAFT_FLUSH_MS (150ms) — batches streamed chunks before routing
+    // - SAFETY_NET_DEBOUNCE_MS (500ms) — auto-relay when agent finishes without [TO:OPUS]
+    // We use 650ms to cover the safety-net debounce + margin.
+    await new Promise((r) => setTimeout(r, 650));
   }
 
   async function start(): Promise<void> {

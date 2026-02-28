@@ -311,7 +311,7 @@ describe('Orchestrator', () => {
       assert.ok(codexOut.length > 0, 'codex stdout should pass through');
     });
 
-    it('sendToAllDirect instructs Opus to also do its own analysis', async () => {
+    it('sendToAllDirect instructs Opus to delegate and work', async () => {
       h.orchestrator.sendToAllDirect('Analyse front et back');
       await h.flush();
 
@@ -320,16 +320,26 @@ describe('Orchestrator', () => {
 
       assert.ok(opusPrompt, 'Opus should receive explicit @tous mode instruction');
       assert.ok(
-        opusPrompt!.includes('Fais AUSSI ta propre analyse en parallele'),
-        'Opus message should force own analysis in parallel',
+        opusPrompt!.includes('[TO:SONNET]'),
+        'Opus message should show delegation syntax example',
       );
       assert.ok(
-        opusPrompt!.includes('MESSAGE ORIGINAL DU USER:\nAnalyse front et back'),
+        opusPrompt!.includes('PUIS fais ta propre analyse'),
+        'Opus message should instruct Opus to also work',
+      );
+      assert.ok(
+        opusPrompt!.includes('MESSAGE DU USER:\nAnalyse front et back'),
         'Original user text should be preserved in Opus message',
       );
+
+      // Sonnet and Codex should NOT receive direct messages — they wait for Opus delegation
+      const claudeMessages = h.sonnet.getSentMessages();
+      const codexMessages = h.codex.getSentMessages();
+      assert.equal(claudeMessages.length, 0, 'Sonnet should not receive direct @tous message');
+      assert.equal(codexMessages.length, 0, 'Codex should not receive direct @tous message');
     });
 
-    it('sendToAllDirect uses urgent path and keeps @tous instruction for running Opus', async () => {
+    it('sendToAllDirect uses urgent path for running Opus only', async () => {
       h.opus.setStatus('running');
       h.sonnet.setStatus('running');
       h.codex.setStatus('running');
@@ -338,25 +348,17 @@ describe('Orchestrator', () => {
       await h.flush();
 
       const opusUrgent = h.opus.getUrgentMessages();
-      const claudeUrgent = h.sonnet.getUrgentMessages();
-      const codexUrgent = h.codex.getUrgentMessages();
-
       assert.ok(opusUrgent.length > 0, 'Opus should receive urgent message');
-      assert.ok(claudeUrgent.length > 0, 'Claude should receive urgent message');
-      assert.ok(codexUrgent.length > 0, 'Codex should receive urgent message');
-
       assert.ok(
         opusUrgent.some((m) => m.includes('[MODE @TOUS ACTIVE]')),
         'Urgent Opus payload should include explicit @tous instruction',
       );
-      assert.ok(
-        claudeUrgent.some((m) => m.includes('[FROM:USER] Urgent all-mode task')),
-        'Claude urgent payload should keep raw user text',
-      );
-      assert.ok(
-        codexUrgent.some((m) => m.includes('[FROM:USER] Urgent all-mode task')),
-        'Codex urgent payload should keep raw user text',
-      );
+
+      // Sonnet and Codex should NOT receive urgent messages — only Opus does
+      const claudeUrgent = h.sonnet.getUrgentMessages();
+      const codexUrgent = h.codex.getUrgentMessages();
+      assert.equal(claudeUrgent.length, 0, 'Sonnet should not receive urgent @tous message');
+      assert.equal(codexUrgent.length, 0, 'Codex should not receive urgent @tous message');
     });
   });
 

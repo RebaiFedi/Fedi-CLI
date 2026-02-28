@@ -11,7 +11,25 @@ export const THEME = {
   codex: '#22C55E',
   userPrefix: '#CBD5E1',
   userBubbleBg: '#1F2937',
+  // Action/tool display
+  actionIcon: '#64748B',
+  actionText: '#94A3B8',
+  actionValue: '#CBD5E1',
+  codeBlock: '#1E293B',
+  codeBorder: '#334155',
+  separator: '#1E293B',
+  // Agent header accents (dimmer background shade)
+  opusDim: '#78350F',
+  sonnetDim: '#0C4A6E',
+  codexDim: '#14532D',
 } as const;
+
+// Agent icons for terminal display
+export const AGENT_ICONS: Record<AgentId, string> = {
+  opus: '◆',
+  sonnet: '◈',
+  codex: '◉',
+};
 
 const AGENT_HEX: Record<AgentId, string> = {
   opus: THEME.opus,
@@ -38,4 +56,8 @@ export function agentDisplayName(agent: AgentId): string {
 
 export function agentChalkColor(agent: AgentId): 'green' | 'yellow' | 'magenta' | 'cyan' {
   return AGENT_CHALK_COLOR[agent] ?? 'yellow';
+}
+
+export function agentIcon(agent: AgentId): string {
+  return AGENT_ICONS[agent] ?? '◆';
 }

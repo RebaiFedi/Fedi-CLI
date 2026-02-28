@@ -97,6 +97,18 @@ export abstract class BaseAppServerAgent implements AgentProcess {
     this.muted = true;
   }
 
+  interruptCurrentTask(): void {
+    if (this.activeTurnId && this.threadId && this.process?.stdin?.writable) {
+      flog.info('AGENT', `${this.logTag}: Interrupting active turn ${this.activeTurnId}`);
+      this.rpcRequest('turn/interrupt', {
+        threadId: this.threadId,
+        turnId: this.activeTurnId,
+      }).catch((err) => {
+        flog.debug('AGENT', `${this.logTag}: turn/interrupt failed (expected): ${err}`);
+      });
+    }
+  }
+
   setContextReminder(reminder: string) {
     this.contextReminder = reminder;
   }
@@ -547,8 +559,6 @@ export abstract class BaseAppServerAgent implements AgentProcess {
       // Only emit checkpoint on start — the system action line is emitted on item/completed (with exit code)
       const command = typeof item.command === 'string' ? item.command : undefined;
       if (command) {
-        const formatted = formatAction('bash', command);
-        if (formatted) this.emit({ text: formatted, timestamp: Date.now(), type: 'system' });
         this.emitCheckpoint(`[CODEX:checkpoint] Running: ${command.slice(0, 100)}`);
       }
     } else if (itemType === 'fileChange' || itemType === 'file_change') {

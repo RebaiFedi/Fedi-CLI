@@ -40,6 +40,41 @@ function isTableLine(text: string): boolean {
   return t.startsWith('|') && t.endsWith('|');
 }
 
+// ── Action line formatter ────────────────────────────────────────────────────
+// Parses "Read · /path/to/file" or "Bash · command" style actions and formats
+// them with icon + color to look pro.
+
+const ACTION_PATTERNS: Array<{ re: RegExp; icon: string; label?: string }> = [
+  { re: /^(Read|reading|Lire|lecture)\s*[·:·]\s*/i, icon: '  ↳', label: 'Read' },
+  { re: /^(Glob|glob)\s*[·:·]\s*/i, icon: '  ↳', label: 'Glob' },
+  { re: /^(Grep|grep)\s*[·:·]\s*/i, icon: '  ↳', label: 'Grep' },
+  { re: /^(Write|write|Écriture|ecriture)\s*[·:·]\s*/i, icon: '  ↳', label: 'Write' },
+  { re: /^(Edit|edit|Modifier)\s*[·:·]\s*/i, icon: '  ↳', label: 'Edit' },
+  { re: /^(Bash|bash|cmd|exec)\s*[·:·]\s*/i, icon: '  ↳', label: 'Exec' },
+  { re: /^(WebFetch|fetch|Fetch)\s*[·:·]\s*/i, icon: '  ↳', label: 'Fetch' },
+  { re: /^(Agent|agent)\s*[·:·]\s*/i, icon: '  ↳', label: 'Agent' },
+  { re: /^(TodoWrite|todo)\s*[·:·]\s*/i, icon: '  ↳', label: 'Todo' },
+];
+
+function formatActionLine(text: string, maxW: number): string {
+  const trimmed = text.trim();
+
+  for (const { re, icon, label } of ACTION_PATTERNS) {
+    if (re.test(trimmed)) {
+      const value = trimmed.replace(re, '').trim();
+      const labelStr = chalk.hex(THEME.actionIcon)(label ?? icon);
+      const short = value.length > maxW - 20 ? value.slice(0, maxW - 23) + '…' : value;
+      return `${icon} ${labelStr} ${chalk.hex(THEME.actionValue)(short)}`;
+    }
+  }
+
+  // Generic action — dim with left marker
+  const short = trimmed.length > maxW - 6 ? trimmed.slice(0, maxW - 9) + '…' : trimmed;
+  return `  ${chalk.dim('↳')} ${chalk.hex(THEME.actionText)(short)}`;
+}
+
+// ── Entry renderer ───────────────────────────────────────────────────────────
+
 export function entryToAnsiLines(
   e: DisplayEntry,
   _agentColor: 'green' | 'yellow' | 'magenta' | 'cyan',
@@ -47,6 +82,7 @@ export function entryToAnsiLines(
   const termW = process.stdout.columns || 80;
   const maxW = Math.max(20, Math.min(termW - INDENT.length, MAX_READABLE_WIDTH));
   const wrapW = INDENT.length + maxW;
+  const contIndent = INDENT + '  ';
 
   if (e.kind === 'empty') return [''];
 
@@ -59,34 +95,45 @@ export function entryToAnsiLines(
   }
 
   if (e.kind === 'info') {
-    const raw = `${INDENT}${chalk.hex(THEME.info)(e.text)}`;
-    return wordWrap(raw, wrapW, INDENT);
+    const icon = chalk.hex(THEME.info)('▸');
+    const raw = `${INDENT}${icon} ${chalk.hex(THEME.info)(e.text)}`;
+    return wordWrap(raw, wrapW, contIndent);
   }
 
   if (e.kind === 'action') {
-    const raw = `${INDENT}${chalk.dim(e.text)}`;
-    return wordWrap(raw, wrapW, INDENT);
+    const formatted = formatActionLine(e.text, maxW);
+    return [`${INDENT}${formatted}`];
   }
 
   if (e.kind === 'code') {
-    const raw = chalk.hex(THEME.info)(e.text);
-    return wordWrap(raw, wrapW, INDENT).map((l, i) => (i === 0 ? `${INDENT}${l}` : l));
+    // Code block: left border + monospace color
+    const border = chalk.hex(THEME.codeBorder)('│');
+    const lines = e.text.split('\n');
+    return lines.map((l) => {
+      const visLen = stripAnsi(l).length;
+      const clipped = visLen > maxW - 4 ? l.slice(0, maxW - 7) + '…' : l;
+      return `${INDENT}${border} ${chalk.hex(THEME.info)(clipped)}`;
+    });
   }
 
   if (e.kind === 'separator') {
-    const sepText = e.text.length > maxW ? e.text.slice(0, maxW) : e.text;
-    return [`${INDENT}${chalk.dim(sepText)}`];
+    // Thin horizontal rule
+    const width = Math.min(maxW, 48);
+    const rule = chalk.hex(THEME.separator)('─'.repeat(width));
+    return [`${INDENT}${rule}`];
   }
 
   if (e.kind === 'heading') {
     const col = e.color === 'cyan' ? chalk.hex(THEME.sonnet) : chalk.hex(THEME.text);
-    const raw = col.bold(e.text);
-    return wordWrap(raw, maxW, INDENT).map((l, i) => (i === 0 ? `${INDENT}${l}` : l));
+    // Add a subtle leading marker for headings
+    const marker = chalk.hex(THEME.muted)('▌ ');
+    const raw = `${marker}${col.bold(e.text)}`;
+    return wordWrap(raw, maxW, contIndent).map((l, i) => (i === 0 ? `${INDENT}${l}` : l));
   }
 
-  // Regular text — apply subtle coloring
+  // Regular text
   const styled = chalk.hex('#CBD5E1')(e.text);
-  return wordWrap(styled, maxW, INDENT).map((l, i) => (i === 0 ? `${INDENT}${l}` : l));
+  return wordWrap(styled, maxW, contIndent).map((l, i) => (i === 0 ? `${INDENT}${l}` : l));
 }
 
 /** Convert entries to ANSI lines with proper spacing around action groups */
