@@ -104,6 +104,9 @@ export function Dashboard({
   const currentMsgRef = useRef<Map<string, string>>(new Map());
   const lastEntryKind = useRef<Map<string, DisplayEntry['kind']>>(new Map());
   const chatMessagesMap = useRef<Map<string, ChatMessage>>(new Map());
+  // Grace period timers for closing agent messages — prevents duplicate headers
+  // when an agent goes waiting→running in quick succession (multi-turn responses).
+  const msgCloseTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
   const outputBuffer = useRef<BufferedEntry[]>([]);
   const flushTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const welcomePrinted = useRef(false);
@@ -455,6 +458,9 @@ export function Dashboard({
         if (stoppedRef.current) return;
 
         if (status === 'running') {
+          // Cancel grace-period timer — agent resumed, keep message open
+          const graceTimer = msgCloseTimers.current.get(agent);
+          if (graceTimer) { clearTimeout(graceTimer); msgCloseTimers.current.delete(agent); }
           if (thinkingClearTimer.current) {
             clearTimeout(thinkingClearTimer.current);
             thinkingClearTimer.current = null;
@@ -508,10 +514,31 @@ export function Dashboard({
           }
           const currentId = currentMsgRef.current.get(agent);
           if (currentId) {
-            const msg = chatMessagesMap.current.get(currentId);
-            if (msg) msg.status = 'done';
-            currentMsgRef.current.delete(agent);
-            lastEntryKind.current.delete(agent);
+            if (status === 'waiting') {
+              // Grace period: agent may resume (multi-turn). Close the message
+              // after 3s if the agent doesn't go back to running.
+              const prevTimer = msgCloseTimers.current.get(agent);
+              if (prevTimer) clearTimeout(prevTimer);
+              const timer = setTimeout(() => {
+                msgCloseTimers.current.delete(agent);
+                const stillId = currentMsgRef.current.get(agent);
+                if (stillId === currentId) {
+                  const msg = chatMessagesMap.current.get(currentId);
+                  if (msg) msg.status = 'done';
+                  currentMsgRef.current.delete(agent);
+                  lastEntryKind.current.delete(agent);
+                }
+              }, 3000);
+              msgCloseTimers.current.set(agent, timer);
+            } else {
+              // stopped / error / idle — close immediately
+              const prevTimer = msgCloseTimers.current.get(agent);
+              if (prevTimer) { clearTimeout(prevTimer); msgCloseTimers.current.delete(agent); }
+              const msg = chatMessagesMap.current.get(currentId);
+              if (msg) msg.status = 'done';
+              currentMsgRef.current.delete(agent);
+              lastEntryKind.current.delete(agent);
+            }
           }
         }
       },

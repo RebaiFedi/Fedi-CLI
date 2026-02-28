@@ -14,6 +14,8 @@ export class MockAgent implements AgentProcess {
   private sentMessages: string[] = [];
   private urgentMessages: string[] = [];
   private _started = false;
+  private _muted = false;
+  private _interrupted = false;
   private contextReminder: string = '';
 
   constructor(id: AgentId) {
@@ -57,6 +59,12 @@ export class MockAgent implements AgentProcess {
   setContextReminder(reminder: string): void {
     this.contextReminder = reminder;
   }
+
+  mute(): void { this._muted = true; }
+  isMuted(): boolean { return this._muted; }
+
+  interruptCurrentTask(): void { this._interrupted = true; }
+  isInterrupted(): boolean { return this._interrupted; }
 
   // ── Test control methods ────────────────────────────────────────────────
 

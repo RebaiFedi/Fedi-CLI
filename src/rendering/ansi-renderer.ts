@@ -37,7 +37,9 @@ export function wordWrap(text: string, maxWidth: number, contIndent: string): st
 
 function isTableLine(text: string): boolean {
   const t = stripAnsi(text).trim();
-  return t.startsWith('|') && t.endsWith('|');
+  return (t.startsWith('|') && t.endsWith('|')) ||
+         (t.startsWith('│') && t.endsWith('│')) ||
+         t.startsWith('┌') || t.startsWith('├') || t.startsWith('└');
 }
 
 // ── Action line formatter ────────────────────────────────────────────────────

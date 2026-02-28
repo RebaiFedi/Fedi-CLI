@@ -140,6 +140,14 @@ export class Orchestrator {
    *  message takes priority and Opus should not interfere. Cleared on next user
    *  message or sendToAllDirect. */
   private directModeAgents: Set<AgentId> = new Set();
+  /** Timer for @tous mode: if Opus doesn't delegate within N seconds,
+   *  send message directly to workers (it's a simple question). */
+  private opusAllModeWorkerTimer: ReturnType<typeof setTimeout> | null = null;
+  /** The original user text for @tous, kept until we decide to send to workers */
+  private opusAllModePendingText: string | null = null;
+  /** Track whether Opus has already responded in @tous non-delegation mode.
+   *  Prevents duplicate content from multi-turn auto-continuation. */
+  private opusAllModeResponded = false;
 
   setConfig(config: Omit<SessionConfig, 'task'>) {
     this.config = config;
@@ -182,10 +190,13 @@ export class Orchestrator {
       this.detectRelayPatterns('opus', line.text);
 
       // When Opus has delegated to agents and is waiting for their reports,
-      // buffer his stdout so his analysis doesn't appear before the combined report.
-      // Actions (system), checkpoints, and info lines still pass through so the
-      // user sees Opus is working. Only stdout (text content) is buffered.
-      if (this.expectedDelegates.size > 0 && line.type === 'stdout' && !this.opusAllMode) {
+      // buffer his stdout so his analysis/report doesn't appear before the
+      // combined report.  This applies in ALL modes including @tous — Opus's
+      // text output (report, tables, synthesis) must wait until all delegates
+      // have finished so the user sees ONE final report, not a premature one.
+      // Actions (system), checkpoints, and info lines still pass through so
+      // the user sees Opus is working.
+      if (this.expectedDelegates.size > 0 && line.type === 'stdout') {
         const stripped = line.text
           .replace(/\[TASK:(add|done)\][^\n]*/gi, '')
           .trim();
@@ -195,12 +206,26 @@ export class Orchestrator {
           return;
         }
       }
+
+      // @tous non-delegation mode: Opus already responded (simple question).
+      // Suppress multi-turn duplicate content (Claude CLI auto-continuation).
+      if (this.opusAllMode && this.opusAllModeResponded && this.expectedDelegates.size === 0 && line.type === 'stdout') {
+        flog.debug('ORCH', `Opus stdout SUPPRESSED (already responded in @tous non-delegation): ${line.text.slice(0, 80)}`);
+        return;
+      }
+
       cb.onAgentOutput('opus', line);
     });
     this.opus.onStatusChange((s) => {
       flog.info('AGENT', `opus: ${s}`, { agent: 'opus' });
       if (s === 'waiting' || s === 'stopped' || s === 'error') {
         this.flushRelayDraft('opus');
+      }
+      // @tous: mark Opus as having responded when it goes 'waiting' without delegating.
+      // This prevents duplicate content on multi-turn auto-continuation.
+      if (s === 'waiting' && this.opusAllMode && this.expectedDelegates.size === 0 && !this.opusAllModeResponded) {
+        this.opusAllModeResponded = true;
+        flog.info('ORCH', '@tous: Opus responded without delegating — marking as responded (suppress multi-turn)');
       }
       cb.onAgentStatus('opus', s);
       if (s === 'running') {
@@ -357,16 +382,17 @@ export class Orchestrator {
       flog.debug('AGENT', 'Output', { agent: agentId, type: line.type, text: line.text.slice(0, 150) });
       // Keep heartbeat alive — agent is producing output
       this.recordDelegateActivity(agentId);
+      // Agent's report already delivered to Opus — mute ALL late output completely
+      // (including checkpoints — they cause stale agent headers in the UI)
+      if (this.deliveredToOpus.has(agentId)) {
+        flog.debug('ORCH', `${label} output MUTED (delivered to Opus, type=${line.type}): ${line.text.slice(0, 80)}`);
+        return;
+      }
       // Checkpoint passthrough — always forward to UI, but NEVER to Opus while
       // delegates are pending.  Forwarding checkpoints to Opus was causing him to
       // "wake up" and write a premature report before all agents had reported back.
       if (line.type === 'checkpoint') {
         cb.onAgentOutput(agentId, line);
-        return;
-      }
-      // Agent's report already delivered to Opus — mute ALL late output completely
-      if (this.deliveredToOpus.has(agentId) && line.type === 'stdout') {
-        flog.debug('ORCH', `${label} output MUTED (delivered to Opus): ${line.text.slice(0, 80)}`);
         return;
       }
       // Agent already reported to Opus (pending combined delivery) — mute late stdout
@@ -781,17 +807,45 @@ export class Orchestrator {
     const opusAllModeMessage = buildOpusAllModeUserMessage(text);
     // Enable @tous mode — Opus stdout passes through (user sees Opus working)
     this.opusAllMode = true;
+    this.opusAllModeResponded = false;
 
-    // ONLY Opus receives the @tous message directly.
-    // Sonnet and Codex will receive their tasks via Opus's [TO:SONNET]/[TO:CODEX]
-    // delegation, which the orchestrator detects and routes automatically.
-    // This prevents workers from starting before Opus has formulated the delegation.
+    // Send to Opus with the @tous wrapper (delegation instructions)
     const opus = this.getAgent('opus');
     if (opus.status === 'running') {
       opus.sendUrgent(`[FROM:USER] ${opusAllModeMessage}`);
       this.bus.record({ from: 'user', to: 'opus', content: opusAllModeMessage });
     } else {
       this.bus.send({ from: 'user', to: 'opus', content: opusAllModeMessage });
+    }
+
+    // DON'T send to workers immediately — wait for Opus to decide.
+    // If Opus delegates (task), workers get the task through Opus's [TO:SONNET]/[TO:CODEX].
+    // If Opus doesn't delegate within 5s (simple question), send to workers directly.
+    this.opusAllModePendingText = text;
+    if (this.opusAllModeWorkerTimer) clearTimeout(this.opusAllModeWorkerTimer);
+    this.opusAllModeWorkerTimer = setTimeout(() => {
+      this.opusAllModeWorkerTimer = null;
+      // Opus didn't delegate — it's a simple question. Send to workers now.
+      if (this.opusAllModePendingText && this.expectedDelegates.size === 0) {
+        flog.info('ORCH', '@tous: Opus did not delegate within 5s — sending to workers directly');
+        this.sendToWorkersDirectly(this.opusAllModePendingText);
+      }
+      this.opusAllModePendingText = null;
+    }, 5000);
+  }
+
+  /** Send message from user directly to Sonnet and Codex (used in @tous non-delegation mode) */
+  private sendToWorkersDirectly(text: string) {
+    for (const agentId of ['sonnet', 'codex'] as AgentId[]) {
+      if (!this.isAgentEnabled(agentId)) continue;
+      const agent = this.getAgent(agentId);
+      const workerMsg = `[FROM:USER] ${text}`;
+      if (agent.status === 'running') {
+        agent.sendUrgent(workerMsg);
+        this.bus.record({ from: 'user', to: agentId, content: text });
+      } else {
+        this.bus.send({ from: 'user', to: agentId, content: text });
+      }
     }
   }
 
@@ -831,6 +885,12 @@ export class Orchestrator {
     this.deliveredToOpus.clear();
     this.crossTalkCount = 0;
     this.opusAllMode = false;
+    this.opusAllModeResponded = false;
+    if (this.opusAllModeWorkerTimer) {
+      clearTimeout(this.opusAllModeWorkerTimer);
+      this.opusAllModeWorkerTimer = null;
+    }
+    this.opusAllModePendingText = null;
     // NOTE: directModeAgents is NOT cleared here — it must survive across restart()
     // so that setDirectMode() called before restart() is preserved. It is cleared
     // explicitly in sendUserMessage(), sendToAllDirect(), and stop().
@@ -961,6 +1021,13 @@ export class Orchestrator {
       if (this.agentsOnRelay.has(target) && this.expectedDelegates.has(target)) {
         flog.info('RELAY', `BLOCKED duplicate delegation opus->${target} (agent already on relay): ${content.slice(0, 80)}`);
         return;
+      }
+      // Opus delegated — cancel the @tous worker timer (workers get tasks through delegation)
+      if (this.opusAllMode && this.opusAllModeWorkerTimer) {
+        clearTimeout(this.opusAllModeWorkerTimer);
+        this.opusAllModeWorkerTimer = null;
+        this.opusAllModePendingText = null;
+        flog.info('ORCH', '@tous: Opus delegated — cancelled worker direct-send timer');
       }
       // New delegation — clear delivered tracking for this agent (fresh round)
       this.deliveredToOpus.delete(target);
@@ -1483,11 +1550,30 @@ export class Orchestrator {
       parts.push(`[FROM:${agent.toUpperCase()}] ${report}`);
     }
     const reportsBody = parts.join('\n\n---\n\n');
+
+    // In @tous mode, Opus wrote its own analysis while delegates were working.
+    // That output was buffered (not shown to user). We include it in the combined
+    // delivery so Opus has full context — its own analysis + delegate reports —
+    // and can produce a REAL fused rapport instead of saying "rapport deja fait".
+    const opusBuf = this.relayBuffer.get('opus') ?? [];
+    const opusAnalysis = opusBuf
+      .filter(l => l.type === 'stdout')
+      .map(l => l.text)
+      .join('\n')
+      .trim();
+    const opusSection = opusAnalysis
+      ? `\n\n---\n\n[TA PROPRE ANALYSE (non montrée au user)] Voici ce que tu as écrit pendant que tes agents travaillaient. UTILISE cette analyse pour enrichir ta synthese finale:\n${opusAnalysis}`
+      : '';
+
     // Prepend a clear header so Opus knows these are the delegate reports it was waiting for.
-    // Without this header, Opus receives "[FROM:SYSTEM] [FROM:SONNET] ..." and may not
-    // recognize it as the combined delivery — causing it to say "j'attends les rapports"
-    // instead of synthesizing.
-    const combined = `[RAPPORTS RECUS — ${agentNames.join(' + ')}] Voici les rapports de tes agents. Fais ta synthese MAINTENANT et reponds au user.\n\n${reportsBody}`;
+    const combined = `[RAPPORTS RECUS — ${agentNames.join(' + ')}] Tous les rapports sont arrivés.
+
+INSTRUCTIONS CRITIQUES:
+1. Tu dois MAINTENANT écrire le rapport final fusionné pour le user
+2. Le user n'a RIEN vu encore — c'est la PREMIERE fois qu'il verra un rapport
+3. NE DIS PAS "le rapport est déjà là" ou "voir ci-dessus" — le user ne voit RIEN avant ce message
+4. Ecris un rapport COMPLET et structuré qui fusionne TOUTES les analyses
+5. Pour les TABLEAUX: utilise la syntaxe markdown avec pipes |${opusSection}\n\n${reportsBody}`;
     flog.info('ORCH', `Delivering combined report to Opus (${this.pendingReportsForOpus.size} delegates): ${combined.slice(0, 200)}`);
 
     // Track delivered agents — late output from these will be muted completely.
@@ -1528,24 +1614,24 @@ export class Orchestrator {
     // Clear delegate heartbeat — delivery complete
     this.stopDelegateHeartbeat();
 
-    // Emit synthetic relay events for each agent so the UI shows "Agent → Opus"
+    // Emit synthetic relay events for each agent — but with SHORT summaries only.
+    // Don't include the actual report content — Opus will write a fused rapport
+    // that includes everything. Showing raw agent text would duplicate content.
     for (const agent of deliveredAgents) {
-      const report = deliveredReports.get(agent) ?? '';
-      const preview = report.slice(0, 80).trim() + (report.length > 80 ? '…' : '');
       this.bus.emit('relay', {
         from: agent,
         to: 'opus',
-        content: preview || `rapport ${agent}`,
+        content: `rapport terminé — synthèse en cours`,
         id: randomUUID(),
         timestamp: Date.now(),
         relayCount: 0,
       });
     }
 
-    // DROP Opus buffer — these are stale lines Opus wrote while waiting for delegates
-    // (e.g. "J'attends les rapports"). Showing them now would be confusing since the
-    // reports have already arrived. Opus will write a fresh synthesis after receiving
-    // the combined report below.
+    // DROP Opus buffer — its content was already extracted above and included in
+    // the combined delivery message (opusSection). Opus will use that context to
+    // write a fresh fused rapport. We don't show the raw buffer to the user because
+    // it's a premature partial analysis written before delegate reports arrived.
     this.relayBuffer.set('opus', []);
 
     // Deliver as a single message via the bus
@@ -1589,6 +1675,12 @@ export class Orchestrator {
     this.pendingReportsForOpus.clear();
     this.deliveredToOpus.clear();
     this.opusAllMode = false;
+    this.opusAllModeResponded = false;
+    if (this.opusAllModeWorkerTimer) {
+      clearTimeout(this.opusAllModeWorkerTimer);
+      this.opusAllModeWorkerTimer = null;
+    }
+    this.opusAllModePendingText = null;
     this.directModeAgents.clear();
     this.relayDrafts.clear();
     for (const timer of this.relayDraftTimers.values()) clearTimeout(timer);

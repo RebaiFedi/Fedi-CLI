@@ -1,3 +1,5 @@
+import { stripAnsi } from './strip-ansi.js';
+
 export interface StyledLine {
   text: string;
   bold?: boolean;
@@ -25,6 +27,13 @@ function isTableSeparatorRow(line: string): boolean {
   return cells.length > 0 && cells.every((cell) => /^:?-{3,}:?$/.test(cell));
 }
 
+/** Pad a string that may contain ANSI codes to a visible width */
+function padEndVisible(text: string, width: number): string {
+  const visible = stripAnsi(text).length;
+  const padding = Math.max(0, width - visible);
+  return text + ' '.repeat(padding);
+}
+
 function formatTableBlock(block: string[]): StyledLine[] {
   if (block.length < 2 || !isTableSeparatorRow(block[1])) {
     return block.map((r) => ({ text: clean(r.trim()) }));
@@ -39,19 +48,29 @@ function formatTableBlock(block: string[]): StyledLine[] {
     Array.from({ length: colCount }, (_, i) => (row[i] ?? '').trim());
   const rows = rowData.map(normalize);
 
+  // Use visible length (strip ANSI) for width calculation
   const widths = Array.from({ length: colCount }, (_, i) =>
-    Math.max(3, ...rows.map((row) => row[i].length)),
+    Math.max(3, ...rows.map((row) => stripAnsi(row[i]).length)),
   );
 
-  const formatRow = (row: string[]) =>
-    row.map((cell, i) => cell.padEnd(widths[i])).join('  ');
-  const separator = widths.map((w) => '─'.repeat(w)).join('──');
+  const makeBorder = (left: string, mid: string, right: string) =>
+    left + widths.map((w) => '─'.repeat(w + 2)).join(mid) + right;
+  const makeRow = (row: string[]) =>
+    '│ ' + row.map((cell, i) => padEndVisible(cell, widths[i])).join(' │ ') + ' │';
 
-  return [
-    { text: formatRow(rows[0]), bold: true },
-    { text: separator, dim: true },
-    ...rows.slice(1).map((row) => ({ text: formatRow(row) })),
-  ];
+  const topBorder = makeBorder('┌', '┬', '┐');
+  const midBorder = makeBorder('├', '┼', '┤');
+  const botBorder = makeBorder('└', '┴', '┘');
+
+  const result: StyledLine[] = [];
+  result.push({ text: topBorder, dim: true });
+  result.push({ text: makeRow(rows[0]), bold: true });
+  for (let i = 1; i < rows.length; i++) {
+    result.push({ text: midBorder, dim: true });
+    result.push({ text: makeRow(rows[i]) });
+  }
+  result.push({ text: botBorder, dim: true });
+  return result;
 }
 
 export function renderMarkdown(raw: string): StyledLine[] {
