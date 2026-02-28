@@ -357,7 +357,7 @@ export abstract class BaseAppServerAgent implements AgentProcess {
       threadId: this.threadId,
       input: [{ type: 'text', text: prompt }],
       model: this.model,
-      effort: 'high',
+      effort: 'xhigh',
       approvalPolicy: 'never',
       sandboxPolicy: { type: 'dangerFullAccess' },
     }).catch((err) => {

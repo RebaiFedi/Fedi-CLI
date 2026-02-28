@@ -69,6 +69,8 @@ export abstract class BaseSonnetAgent implements AgentProcess {
       'stream-json',
       '--verbose',
       '--dangerously-skip-permissions',
+      '--effort',
+      'high',
     ];
 
     // Resume existing session if available (preserves conversation history)
