@@ -45,6 +45,15 @@ export abstract class BaseAppServerAgent implements AgentProcess {
    * the first user-message echo is consumed.
    */
   private suppressNextUserEcho = false;
+  /**
+   * Accumulates streaming deltas from item/agentMessage/delta.
+   * Instead of emitting each token as a separate line (which makes "Salut . Que veux -tu ..."
+   * appear word-by-word), we buffer the deltas and let item/completed emit the final text.
+   */
+  private agentMessageBuffer = '';
+  /** Tracks whether we received any deltas for the current agentMessage item.
+   *  If true, item/completed should skip emitting text (already covered by deltas). */
+  private hadAgentMessageDeltas = false;
 
   /** Human-readable tag for log messages */
   protected abstract get logTag(): string;
@@ -561,7 +570,11 @@ export abstract class BaseAppServerAgent implements AgentProcess {
         this.emitCheckpoint(`[CODEX:checkpoint] Reading: ${filename}`);
       }
     }
-    // agentMessage items — wait for delta/completed
+    // agentMessage items — reset delta buffer for new item
+    if (itemType === 'agent_message' || itemType === 'agentMessage' || itemType === 'message' || itemType === 'output_message') {
+      this.agentMessageBuffer = '';
+      this.hadAgentMessageDeltas = false;
+    }
   }
 
   private handleItemCompleted(params: Record<string, unknown>) {
@@ -587,10 +600,17 @@ export abstract class BaseAppServerAgent implements AgentProcess {
       // Suppress the first echo of the fused system prompt + task
       if (this.suppressNextUserEcho) {
         this.suppressNextUserEcho = false;
+        this.agentMessageBuffer = '';
+        this.hadAgentMessageDeltas = false;
         flog.debug('AGENT', `${this.logTag}: Suppressed user-message echo (fused system prompt)`);
         return;
       }
-      const text = this.extractText(item);
+      // Use buffered deltas if available, otherwise extract from item
+      const text = this.hadAgentMessageDeltas
+        ? this.agentMessageBuffer.trim()
+        : this.extractText(item);
+      this.agentMessageBuffer = '';
+      this.hadAgentMessageDeltas = false;
       if (text) {
         this.emit({ text, timestamp: Date.now(), type: 'stdout' });
       }
@@ -602,10 +622,17 @@ export abstract class BaseAppServerAgent implements AgentProcess {
       // Suppress the first echo of the fused system prompt + task
       if (this.suppressNextUserEcho) {
         this.suppressNextUserEcho = false;
+        this.agentMessageBuffer = '';
+        this.hadAgentMessageDeltas = false;
         flog.debug('AGENT', `${this.logTag}: Suppressed user-message echo (fused system prompt)`);
         return;
       }
-      const text = this.extractText(item);
+      // Use buffered deltas if available, otherwise extract from item
+      const text = this.hadAgentMessageDeltas
+        ? this.agentMessageBuffer.trim()
+        : this.extractText(item);
+      this.agentMessageBuffer = '';
+      this.hadAgentMessageDeltas = false;
       if (text) {
         this.emit({ text, timestamp: Date.now(), type: 'stdout' });
       }
@@ -700,7 +727,10 @@ export abstract class BaseAppServerAgent implements AgentProcess {
   private handleAgentMessageDelta(params: Record<string, unknown>) {
     const delta = typeof params.delta === 'string' ? params.delta : undefined;
     if (delta) {
-      this.emit({ text: delta, timestamp: Date.now(), type: 'stdout' });
+      // Buffer deltas instead of emitting each token as a separate line.
+      // The full text will be emitted by item/completed.
+      this.agentMessageBuffer += delta;
+      this.hadAgentMessageDeltas = true;
     }
   }
 
