@@ -1,14 +1,6 @@
 import type { DisplayEntry } from '../agents/types.js';
 import { stripAnsi } from '../utils/strip-ansi.js';
 
-/**
- * Pass through all actions individually — no collapsing.
- * Each action (read, bash, etc.) is shown live for full visibility.
- */
-export function collapseActions(entries: DisplayEntry[]): DisplayEntry[] {
-  return entries;
-}
-
 export function compact(entries: DisplayEntry[]): DisplayEntry[] {
   const out: DisplayEntry[] = [];
   for (const e of entries) {

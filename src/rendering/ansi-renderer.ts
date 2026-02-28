@@ -3,7 +3,7 @@ import type { DisplayEntry } from '../agents/types.js';
 import { stripAnsi } from '../utils/strip-ansi.js';
 import { THEME } from '../config/theme.js';
 import { INDENT, MAX_READABLE_WIDTH } from '../config/constants.js';
-import { collapseActions, compact, addActionSpacing } from './compact.js';
+import { compact, addActionSpacing } from './compact.js';
 
 /**
  * Word-wrap `text` so each line fits within `maxWidth` visible characters.
@@ -98,7 +98,7 @@ export function entriesToAnsiOutputLines(
   const withContext: DisplayEntry[] = prevKind
     ? [{ text: '', kind: prevKind }, ...entries]
     : entries;
-  const processed = compact(collapseActions(addActionSpacing(withContext)));
+  const processed = compact(addActionSpacing(withContext));
   const start = prevKind ? 1 : 0;
   const lines: string[] = [];
   for (let i = start; i < processed.length; i++) {

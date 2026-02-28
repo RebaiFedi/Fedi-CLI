@@ -5,8 +5,10 @@ import { createTestOrchestrator, type TestHarness } from '../test-utils/test-har
 describe('Orchestrator', () => {
   let h: TestHarness;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     h = createTestOrchestrator();
+    // Start the orchestrator so PQueue handlers accept messages
+    await h.start();
   });
 
   afterEach(async () => {

@@ -21,7 +21,8 @@ import { compactOutputLines } from '../rendering/compact.js';
 import { ThinkingSpinner } from './ThinkingSpinner.js';
 import { TodoPanel, type TodoItem } from './TodoPanel.js';
 import { printWelcomeBanner } from './WelcomeBanner.js';
-import { printSessionResume, buildResumePrompt } from './SessionResumeView.js';
+import { printSessionResume } from './SessionResumeView.js';
+import { buildResumePrompt } from '../utils/session-manager.js';
 import { printUserBubble } from './UserBubble.js';
 // trace functions replaced by unified flog
 
@@ -67,9 +68,9 @@ export function Dashboard({
       ...state,
       [action.agent]: action.status,
     }),
-    { opus: 'idle', claude: 'idle', codex: 'idle' } as Record<string, AgentStatus>,
+    { opus: 'idle', sonnet: 'idle', codex: 'idle' } as Record<string, AgentStatus>,
   );
-  const agentStatusesRef = useRef<Record<string, AgentStatus>>({ opus: 'idle', claude: 'idle', codex: 'idle' });
+  const agentStatusesRef = useRef<Record<string, AgentStatus>>({ opus: 'idle', sonnet: 'idle', codex: 'idle' });
   const [agentErrors, setAgentErrors] = useState<Partial<Record<string, string>>>({});
   const [stopped, setStopped] = useState(false);
   const stoppedRef = useRef(false);
@@ -258,7 +259,7 @@ export function Dashboard({
       if (last) lastEntryKind.current.set(agent, last.kind);
     }
 
-    // Heartbeat — show "writing report..." for agents that are running but
+    // Heartbeat — show a working indicator for agents that are running but
     // haven't emitted any action in 5+ seconds (they're thinking/writing)
     const now = Date.now();
     for (const [agent, lastTime] of lastActionTime.current.entries()) {
@@ -270,7 +271,8 @@ export function Dashboard({
       if (sinceLastAction >= 5000 && now - lastHb >= 5000) {
         lastHeartbeatTime.current.set(agent, now);
         const label = chalk.hex(agentHex(agent))(agentDisplayName(agent));
-        outputLines.push(`${INDENT}${label} ${chalk.dim('▸ writing report...')}`);
+        const elapsed = Math.floor(sinceLastAction / 1000);
+        outputLines.push(`${INDENT}${label} ${chalk.dim(`▸ working... ${elapsed}s`)}`);
       }
     }
 

@@ -47,5 +47,3 @@ export function printSessionResume(session: SessionData, matchId: string): void 
   lines.push('', chalk.dim('  \u2500\u2500\u2500 Fin historique \u2500\u2500\u2500'), '');
   console.log(lines.join('\n'));
 }
-
-export { buildResumePrompt } from '../utils/session-manager.js';

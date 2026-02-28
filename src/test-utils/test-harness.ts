@@ -19,6 +19,8 @@ export interface TestHarness {
   log: HarnessCallbackLog;
   /** Wait for PQueue microtasks to settle */
   flush(): Promise<void>;
+  /** Start the orchestrator so PQueue handlers accept messages */
+  start(): Promise<void>;
 }
 
 /**
@@ -63,9 +65,23 @@ export function createTestOrchestrator(): TestHarness {
   });
 
   async function flush(): Promise<void> {
-    // Give PQueue microtasks time to process
-    await new Promise((r) => setTimeout(r, 40));
+    // Give relay draft debounce (150ms) + PQueue microtasks time to process.
+    // The relay system uses RELAY_DRAFT_FLUSH_MS (150ms) to batch streamed
+    // chunks before routing. We need to wait longer than that + queue time.
+    await new Promise((r) => setTimeout(r, 250));
   }
 
-  return { orchestrator, opus, sonnet, codex, bus, log, flush };
+  async function start(): Promise<void> {
+    // Start the orchestrator with a dummy task so PQueue handlers accept messages.
+    // MockAgent.start() is a no-op so no real processes are spawned.
+    await orchestrator.startWithTask('__test__');
+    await flush();
+    // Clear the initial task message and reset Opus to idle.
+    // startWithTask sends a message to Opus which sets it to 'running' —
+    // reset to 'idle' so tests control the agent status explicitly.
+    opus.clearMessages();
+    opus.setStatus('idle');
+  }
+
+  return { orchestrator, opus, sonnet, codex, bus, log, flush, start };
 }
