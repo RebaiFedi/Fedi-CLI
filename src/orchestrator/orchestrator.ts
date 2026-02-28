@@ -221,11 +221,20 @@ export class Orchestrator {
       if (s === 'waiting' || s === 'stopped' || s === 'error') {
         this.flushRelayDraft('opus');
       }
-      // @tous: mark Opus as having responded when it goes 'waiting' without delegating.
-      // This prevents duplicate content on multi-turn auto-continuation.
+      // @tous: Opus finished first turn without delegating → it's a simple question.
+      // Send the message to workers now, and mark as responded (suppress multi-turn).
       if (s === 'waiting' && this.opusAllMode && this.expectedDelegates.size === 0 && !this.opusAllModeResponded) {
         this.opusAllModeResponded = true;
-        flog.info('ORCH', '@tous: Opus responded without delegating — marking as responded (suppress multi-turn)');
+        flog.info('ORCH', '@tous: Opus responded without delegating — sending to workers now');
+        // Cancel the safety-net timer — we're sending immediately
+        if (this.opusAllModeWorkerTimer) {
+          clearTimeout(this.opusAllModeWorkerTimer);
+          this.opusAllModeWorkerTimer = null;
+        }
+        if (this.opusAllModePendingText) {
+          this.sendToWorkersDirectly(this.opusAllModePendingText);
+          this.opusAllModePendingText = null;
+        }
       }
       cb.onAgentStatus('opus', s);
       if (s === 'running') {
@@ -386,6 +395,16 @@ export class Orchestrator {
       // (including checkpoints — they cause stale agent headers in the UI)
       if (this.deliveredToOpus.has(agentId)) {
         flog.debug('ORCH', `${label} output MUTED (delivered to Opus, type=${line.type}): ${line.text.slice(0, 80)}`);
+        return;
+      }
+      // @tous delegation mode: worker stdout is ALWAYS suppressed (only actions pass).
+      // Workers send their report to Opus via [TO:OPUS] relay — their text should
+      // never appear in the user's chat. This is a hard block that catches any edge
+      // case where agentsOnRelay state might be stale.
+      if (this.opusAllMode && this.expectedDelegates.size > 0 && line.type === 'stdout') {
+        flog.debug('ORCH', `${label} stdout BLOCKED (@tous delegation active): ${line.text.slice(0, 80)}`);
+        this.detectRelayPatterns(agentId, line.text);
+        this.relayBuffer.get(agentId)!.push(line);
         return;
       }
       // Checkpoint passthrough — always forward to UI, but NEVER to Opus while
@@ -820,18 +839,19 @@ export class Orchestrator {
 
     // DON'T send to workers immediately — wait for Opus to decide.
     // If Opus delegates (task), workers get the task through Opus's [TO:SONNET]/[TO:CODEX].
-    // If Opus doesn't delegate within 5s (simple question), send to workers directly.
+    // If Opus finishes first turn (goes 'waiting') without delegating → it's a simple question,
+    // so we send to workers at that point (handled in Opus onStatusChange).
+    // Safety-net timer: if Opus doesn't respond within 15s, send to workers anyway.
     this.opusAllModePendingText = text;
     if (this.opusAllModeWorkerTimer) clearTimeout(this.opusAllModeWorkerTimer);
     this.opusAllModeWorkerTimer = setTimeout(() => {
       this.opusAllModeWorkerTimer = null;
-      // Opus didn't delegate — it's a simple question. Send to workers now.
       if (this.opusAllModePendingText && this.expectedDelegates.size === 0) {
-        flog.info('ORCH', '@tous: Opus did not delegate within 5s — sending to workers directly');
+        flog.info('ORCH', '@tous: Opus safety-net timer (15s) — sending to workers directly');
         this.sendToWorkersDirectly(this.opusAllModePendingText);
       }
       this.opusAllModePendingText = null;
-    }, 5000);
+    }, 15_000);
   }
 
   /** Send message from user directly to Sonnet and Codex (used in @tous non-delegation mode) */
