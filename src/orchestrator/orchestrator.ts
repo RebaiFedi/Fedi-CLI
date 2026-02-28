@@ -189,7 +189,10 @@ export class Orchestrator {
       if (s === 'running') {
         this.opusRestartCount = 0;
       }
-      if ((s === 'error' || s === 'stopped') && this.started && !this.opusRestartPending) {
+      // Only auto-restart on genuine errors — NOT on clean stops (user Esc, shutdown, etc.)
+      // A clean stop happens when stop() is called explicitly (this.started becomes false
+      // during shutdown, or opusRestartPending is set to prevent re-entry).
+      if (s === 'error' && this.started && !this.opusRestartPending) {
         if (this.opusRestartCount >= this.MAX_OPUS_RESTARTS) {
           flog.error('ORCH', `Opus restart limit reached (${this.MAX_OPUS_RESTARTS})`);
           cb.onAgentOutput('opus', {
@@ -203,6 +206,11 @@ export class Orchestrator {
         this.opusRestartTimer = setTimeout(async () => {
           this.opusRestartTimer = null;
           this.opusRestartPending = false;
+          // Double-check: don't restart if orchestrator was stopped during the delay
+          if (!this.started) {
+            flog.info('ORCH', 'Opus restart skipped: orchestrator stopped during delay');
+            return;
+          }
           const config = this.config;
           if (!config) {
             flog.warn('ORCH', 'Opus restart skipped: config missing');
@@ -1274,6 +1282,10 @@ export class Orchestrator {
 
   async stop() {
     flog.info('ORCH', 'Shutting down...');
+
+    // 0. Mark as not started FIRST — prevents Opus status handler from
+    //    scheduling a new restart timer when agents emit 'stopped' during shutdown
+    this.started = false;
 
     // 1. Clear all queues FIRST — prevent new messages from being sent to agents
     this.opusQueue.clear();
