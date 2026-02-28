@@ -1634,14 +1634,32 @@ INSTRUCTIONS CRITIQUES:
     // Clear delegate heartbeat — delivery complete
     this.stopDelegateHeartbeat();
 
-    // Emit synthetic relay events for each agent — but with SHORT summaries only.
-    // Don't include the actual report content — Opus will write a fused rapport
-    // that includes everything. Showing raw agent text would duplicate content.
+    // Emit synthetic relay events for each agent — show a short preview of the
+    // agent's response. For multi-delegate (analyse/task), keep it brief.
+    // For single delegate (simple exchange), show the actual content preview.
+    const isMultiDelegate = deliveredAgents.length > 1;
     for (const agent of deliveredAgents) {
+      const report = deliveredReports.get(agent) ?? '';
+      // Strip relay tags and prefixes from the preview
+      const cleanReport = report
+        .replace(/^\[(?:TO|FROM):(?:OPUS|SONNET|CODEX)\]\s*/gi, '')
+        .trim();
+      let preview: string;
+      if (isMultiDelegate) {
+        // Multi-delegate: short preview (first 80 chars) — Opus will fuse the reports
+        preview = cleanReport.length > 80
+          ? cleanReport.slice(0, 77) + '...'
+          : cleanReport || 'terminé';
+      } else {
+        // Single delegate: show more content (up to 120 chars)
+        preview = cleanReport.length > 120
+          ? cleanReport.slice(0, 117) + '...'
+          : cleanReport || 'terminé';
+      }
       this.bus.emit('relay', {
         from: agent,
         to: 'opus',
-        content: `rapport terminé — synthèse en cours`,
+        content: preview,
         id: randomUUID(),
         timestamp: Date.now(),
         relayCount: 0,
