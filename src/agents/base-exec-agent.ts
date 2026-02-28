@@ -26,6 +26,8 @@ export abstract class BaseExecAgent implements AgentProcess {
   protected contextReminder: string = '';
   protected muted = false;
   protected activeProcess: ChildProcess | null = null;
+  /** Stored system prompt — fused with first send() to avoid a wasted exec() */
+  private pendingSystemPrompt: string | null = null;
 
   private outputHandlers: Array<(line: OutputLine) => void> = [];
   private statusHandlers: Array<(status: AgentStatus) => void> = [];
@@ -139,22 +141,26 @@ export abstract class BaseExecAgent implements AgentProcess {
     this.cliPath = this.getCliPath(config);
 
     this.muted = options?.muted ?? false;
-    this.setStatus('running');
 
     if (this.sessionId) {
+      // Resuming an existing session — must exec immediately (session already has context)
+      this.setStatus('running');
       const resumeMsg = options?.muted
         ? '[Session reprise] Tu es en standby. Attends une tache.'
         : '[Session reprise] Continue ton travail.';
       flog.info('AGENT', `${this.logTag}: Resuming session ${this.sessionId}`);
       await this.exec(resumeMsg);
+      this.systemPromptSent = true;
+      this.muted = false;
     } else {
-      const suffix = options?.muted
-        ? "\n\nTu es en standby. Reponds UNIQUEMENT: \"Pret.\" — rien d'autre. N'execute AUCUNE commande, ne lis AUCUN fichier. Attends qu'on te donne une tache."
-        : '\n\nNow begin working on the task.';
-      await this.exec(`${systemPrompt}${suffix}`);
+      // First start — store system prompt and fuse it with the first real send().
+      // This avoids a wasted exec() that just gets "Pret." back.
+      this.pendingSystemPrompt = systemPrompt;
+      this.setStatus('idle');
+      flog.info('AGENT', `${this.logTag}: System prompt stored — will fuse with first send()`);
+      this.systemPromptSent = false;
+      this.muted = false;
     }
-    this.systemPromptSent = true;
-    this.muted = false;
   }
 
   setContextReminder(reminder: string) {
@@ -173,16 +179,25 @@ export abstract class BaseExecAgent implements AgentProcess {
     this.setStatus('running');
 
     let finalPrompt = prompt;
+
+    // Fuse pending system prompt with first real task — single exec instead of two
+    if (this.pendingSystemPrompt) {
+      finalPrompt = `${this.pendingSystemPrompt}\n\n${prompt}`;
+      flog.info('AGENT', `${this.logTag}: Fused system prompt with first task (saving one exec)`);
+      this.pendingSystemPrompt = null;
+      this.systemPromptSent = true;
+    }
+
     if (this.urgentQueue.length > 0) {
       const urgentMessages = this.urgentQueue
         .map((m) => `[LIVE MESSAGE DU USER] ${m}`)
         .join('\n\n');
-      finalPrompt = `${urgentMessages}\n\n${prompt}`;
+      finalPrompt = `${urgentMessages}\n\n${finalPrompt}`;
       flog.info('AGENT', `${this.logTag}: Drained ${this.urgentQueue.length} urgent messages`);
       this.urgentQueue = [];
     }
 
-    if (!this.sessionId && this.systemPromptSent && this.contextReminder) {
+    if (!this.sessionId && this.systemPromptSent && this.contextReminder && !this.pendingSystemPrompt) {
       finalPrompt = `${this.contextReminder}\n\n${finalPrompt}`;
       flog.info('AGENT', `${this.logTag}: Session lost — prepending compact context reminder`);
     }
