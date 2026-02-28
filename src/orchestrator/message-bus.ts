@@ -153,7 +153,11 @@ export class MessageBus extends EventEmitter {
   ): { summary: string; newIndex: number } {
     const relevant = this.history
       .slice(sinceIndex)
-      .filter((m) => m.to !== forAgent && m.from !== forAgent);
+      .filter((m) => m.to !== forAgent && m.from !== forAgent)
+      // Exclude direct user→agent messages from other agents' context.
+      // When user speaks to @codex directly, Opus should NOT see it in context
+      // (prevents Opus from "taking over" a task meant for another agent).
+      .filter((m) => !(m.from === 'user' && m.to !== forAgent && m.to !== 'opus'));
 
     if (relevant.length === 0) return { summary: '', newIndex: this.history.length };
 

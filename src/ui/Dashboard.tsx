@@ -586,9 +586,14 @@ export function Dashboard({
           stoppedRef.current = false;
           setTodos([]);
           if (isRestart) console.log('Redemarrage...');
+          // Pass the real message as Opus startup task so Opus also participates
           orchestrator
-            .restart(`Le user parle a tous les agents directement. Attends.`)
-            .then(() => orchestrator.sendToAllDirect(allMessage))
+            .restart(`[FROM:USER] @tous ${allMessage}`)
+            .then(() => {
+              // Also send directly to claude and codex
+              orchestrator.sendToAgent('claude', allMessage);
+              orchestrator.sendToAgent('codex', allMessage);
+            })
             .catch((err) => flog.error('UI',`[DASHBOARD] Start error: ${err}`));
         } else {
           orchestrator.sendToAllDirect(allMessage);
@@ -623,7 +628,7 @@ export function Dashboard({
           if (isRestart) console.log('Redemarrage...');
           orchestrator
             .restart(
-              `Le user veut parler directement a ${agentNames[targetAgent] ?? targetAgent}. Attends.`,
+              `Le user parle directement a ${agentNames[targetAgent] ?? targetAgent} via @${targetAgent}. NE FAIS RIEN. N'execute AUCUNE tache. Attends en silence.`,
             )
             .then(() => {
               orchestrator.sendToAgent(targetAgent!, agentMessage);

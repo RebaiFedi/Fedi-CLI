@@ -369,6 +369,20 @@ export abstract class BaseExecAgent implements AgentProcess {
           return;
         }
         if (code !== null && code !== 0) {
+          // If the agent already produced meaningful output, treat non-zero exit
+          // as a warning rather than a fatal error (e.g. Codex reconnection failures
+          // that happen AFTER the work was already completed successfully).
+          if (fullStdout.trim().length > 0) {
+            flog.warn('AGENT', `${this.logTag}: Non-zero exit code ${code} but has output (${fullStdout.length} chars) — treating as success`);
+            this.emit({
+              text: `${this.logTag}: termine avec code ${code} (output present — traite comme succes)`,
+              timestamp: Date.now(),
+              type: 'info',
+            });
+            this.setStatus('waiting');
+            resolve(fullStdout);
+            return;
+          }
           flog.warn('AGENT', `${this.logTag}: Non-zero exit code: ${code}`);
           this.emit({
             text: `${this.logTag}: processus termine avec code ${code}`,

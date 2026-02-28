@@ -10,6 +10,7 @@ import {
   getCodexSystemPrompt,
   getOpusSystemPrompt,
   getCodexContextReminder,
+  buildOpusAllModeUserMessage,
 } from './prompts.js';
 import { flog } from '../utils/log.js';
 import { SessionManager } from '../utils/session-manager.js';
@@ -129,6 +130,9 @@ export class Orchestrator {
   private readonly RELAY_DRAFT_FLUSH_MS = 60;
   /** Max consecutive empty retries before we give up and flush (prevents leaks). */
   private readonly RELAY_DRAFT_MAX_EMPTY_RETRIES = 8;
+  /** When true, Opus stdout is NOT buffered even when delegates are pending.
+   *  Set by sendToAllDirect so the user sees Opus working in real-time (@tous mode). */
+  private opusAllMode = false;
 
   setConfig(config: Omit<SessionConfig, 'task'>) {
     this.config = config;
@@ -158,7 +162,9 @@ export class Orchestrator {
       // When Opus has active delegates, buffer ALL stdout (not just long messages).
       // This prevents Opus from writing partial reports visible to the user before
       // all delegates have finished. The buffer is flushed when all delegates report.
-      if (this.expectedDelegates.size > 0 && line.type === 'stdout') {
+      // EXCEPTION: in @tous mode (opusAllMode), Opus output passes through so the
+      // user sees Opus working in real-time alongside Sonnet and Codex.
+      if (this.expectedDelegates.size > 0 && line.type === 'stdout' && !this.opusAllMode) {
         // Always pass task tags through to the callback so the todo list updates in real-time
         const hasTaskTags = /\[TASK:(add|done)\]/i.test(line.text);
         if (hasTaskTags) {
@@ -406,12 +412,59 @@ export class Orchestrator {
         this.relayBuffer.set(agentId, []);
         this.relayStartTime.delete(agentId);
         if (this.expectedDelegates.has(agentId) && !this.pendingReportsForOpus.has(agentId)) {
-          this.pendingReportsForOpus.set(agentId, `(agent ${s} — pas de rapport)`);
-          if (this.pendingReportsForOpus.size >= this.expectedDelegates.size) {
-            this.deliverCombinedReportsToOpus();
+          // ── Try fallback BEFORE using a placeholder ──
+          // If this agent crashed/stopped without reporting, attempt to redelegate
+          // to the other worker (or Opus as last resort) instead of immediately
+          // inserting a placeholder and delivering a partial combined report.
+          const originalTask = this.lastDelegationContent.get(agentId);
+          const fallback = this.pickFallbackAgent(agentId);
+
+          if (fallback && fallback !== 'opus' && originalTask) {
+            flog.info('ORCH', `Agent ${agentId} ${s} — fallback to ${fallback}`);
+            this.expectedDelegates.add(fallback);
+            this.deliveredToOpus.delete(fallback);
+            this.agentsOnRelay.add(fallback);
+            this.relayStartTime.set(fallback, Date.now());
+            this.lastDelegationContent.set(fallback, originalTask);
+            this.delegateLastActivity.set(fallback, Date.now());
+            this.recordRelay();
+            this.bus.relay('opus', fallback, `[FALLBACK — ${agentId} ${s}] ${originalTask}`);
+            if (this.callbacks) {
+              this.callbacks.onAgentOutput(agentId, {
+                text: `${agentId} ${s} — tache transferee a ${fallback}`,
+                timestamp: Date.now(),
+                type: 'info',
+              });
+            }
+          } else if (fallback === 'opus' && originalTask) {
+            // Both workers unavailable — Opus takes over
+            flog.info('ORCH', `Agent ${agentId} ${s}, no worker fallback — Opus takes over`);
+            this.expectedDelegates.clear();
+            this.pendingReportsForOpus.clear();
+            this.stopDelegateHeartbeat();
+            this.bus.send({
+              from: 'system',
+              to: 'opus',
+              content: `[FALLBACK — ${agentId} ${s}, aucun agent disponible] Fais le travail toi-meme: ${originalTask}`,
+            });
+            if (this.callbacks) {
+              this.callbacks.onAgentOutput(agentId, {
+                text: `${agentId} ${s} — Opus prend le relais`,
+                timestamp: Date.now(),
+                type: 'info',
+              });
+            }
+          } else {
+            // No fallback possible — use placeholder
+            this.pendingReportsForOpus.set(agentId, `(agent ${s} — pas de rapport)`);
+            if (this.pendingReportsForOpus.size >= this.expectedDelegates.size) {
+              this.deliverCombinedReportsToOpus();
+            }
           }
         }
-        if (!this.isOpusWaitingForRelays() && this.callbacks) {
+        // Only flush Opus buffer if NO delegates are still pending —
+        // prevents Opus from writing partial output before all reports arrive
+        if (!this.isOpusWaitingForRelays() && this.expectedDelegates.size === 0 && this.callbacks) {
           this.flushOpusBuffer(this.callbacks);
         }
       }
@@ -575,6 +628,8 @@ export class Orchestrator {
   }
 
   sendUserMessage(text: string) {
+    // Normal user message to Opus — exit @tous mode
+    this.opusAllMode = false;
     // If Opus is actively running, inject LIVE instead of queuing behind PQueue
     if (this.opus.status === 'running') {
       this.sendUserMessageLive(text, 'opus');
@@ -646,15 +701,20 @@ export class Orchestrator {
       }
       this.relayBuffer.set(agent, []);
     }
+    const opusAllModeMessage = buildOpusAllModeUserMessage(text);
+    // Enable @tous mode — Opus stdout passes through (user sees Opus working)
+    this.opusAllMode = true;
+
     // Send LIVE to running agents, normal bus.send to idle ones
     for (const agentId of ['opus', 'claude', 'codex'] as AgentId[]) {
+      const payload = agentId === 'opus' ? opusAllModeMessage : text;
       const agent = this.getAgent(agentId);
       if (agent.status === 'running') {
-        agent.sendUrgent(`[FROM:USER] ${text}`);
+        agent.sendUrgent(`[FROM:USER] ${payload}`);
         // Record in bus history
-        this.bus.record({ from: 'user', to: agentId, content: text });
+        this.bus.record({ from: 'user', to: agentId, content: payload });
       } else {
-        this.bus.send({ from: 'user', to: agentId, content: text });
+        this.bus.send({ from: 'user', to: agentId, content: payload });
       }
     }
   }
@@ -694,6 +754,7 @@ export class Orchestrator {
     this.pendingReportsForOpus.clear();
     this.deliveredToOpus.clear();
     this.crossTalkCount = 0;
+    this.opusAllMode = false;
     this.lastDelegationContent.clear();
     this.relayDrafts.clear();
     for (const timer of this.relayDraftTimers.values()) clearTimeout(timer);
@@ -1185,7 +1246,7 @@ export class Orchestrator {
     this.agentsOnRelay.delete(agent);
     this.relayBuffer.set(agent, []);
     this.relayStartTime.delete(agent);
-    if (!this.isOpusWaitingForRelays() && this.callbacks) {
+    if (!this.isOpusWaitingForRelays() && this.expectedDelegates.size === 0 && this.callbacks) {
       this.flushOpusBuffer(this.callbacks);
     }
   }
@@ -1264,11 +1325,21 @@ export class Orchestrator {
         this.safetyNetTimers.delete(delegate);
       }
     }
+    // Capture agents before clearing, for relay events below
+    const deliveredAgents = [...this.pendingReportsForOpus.keys()];
+
     this.expectedDelegates.clear();
     this.pendingReportsForOpus.clear();
     this.crossTalkCount = 0;
+    // Clear @tous mode — Opus buffering returns to normal
+    this.opusAllMode = false;
     // Clear delegate heartbeat — delivery complete
     this.stopDelegateHeartbeat();
+
+    // Emit synthetic relay events for each agent so the UI shows "Agent → Opus"
+    for (const agent of deliveredAgents) {
+      this.bus.emit('relay', { from: agent, to: 'opus', content: '', id: '', timestamp: Date.now(), relayCount: 0 });
+    }
 
     // Deliver as a single message via the bus
     this.recordRelay();
@@ -1309,6 +1380,7 @@ export class Orchestrator {
     this.expectedDelegates.clear();
     this.pendingReportsForOpus.clear();
     this.deliveredToOpus.clear();
+    this.opusAllMode = false;
     this.relayDrafts.clear();
     for (const timer of this.relayDraftTimers.values()) clearTimeout(timer);
     this.relayDraftTimers.clear();

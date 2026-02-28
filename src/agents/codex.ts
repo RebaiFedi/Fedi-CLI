@@ -57,6 +57,15 @@ export class CodexAgent extends BaseExecAgent {
         (typeof event.message === 'string' ? event.message : '') ||
         (typeof event.error === 'string' ? event.error : '') ||
         'Unknown error';
+
+      // Reconnection warnings are NOT fatal — Codex retries internally and usually succeeds.
+      // Log silently — do NOT emit to UI (pollutes the chat with noise).
+      // Do NOT setStatus('error') — let the process continue normally.
+      if (/reconnect/i.test(errorMsg) || /stream disconnect/i.test(errorMsg) || /connection closed/i.test(errorMsg)) {
+        flog.warn('AGENT', `[CODEX] Transient warning (non-fatal): ${errorMsg}`);
+        return;
+      }
+
       flog.error('AGENT', `[CODEX] Error event: ${errorMsg}`);
       this.lastError = errorMsg;
       this.emit({ text: `Codex error: ${errorMsg}`, timestamp: Date.now(), type: 'info' });
@@ -189,7 +198,20 @@ export class CodexAgent extends BaseExecAgent {
     if (/^provider:\s+/i.test(trimmed)) return true;
     if (/^[─━┌┐└┘├┤┬┴┼│\-=+]+$/.test(trimmed)) return true;
     if (/^approval mode:/i.test(trimmed)) return true;
+    // Reconnection/stream warnings are noise — Codex handles them internally
+    if (/reconnect/i.test(trimmed)) return true;
+    if (/stream disconnect/i.test(trimmed)) return true;
+    if (/connection closed/i.test(trimmed)) return true;
     return false;
+  }
+
+  /** Override stderr handling: reconnection warnings should not propagate as errors */
+  protected override handleStderrLine(line: string): void {
+    if (/reconnect/i.test(line) || /stream disconnect/i.test(line) || /connection closed/i.test(line)) {
+      flog.warn('AGENT', `[CODEX] stderr (transient, non-fatal): ${line.slice(0, 200)}`);
+      return;
+    }
+    flog.debug('AGENT', `[CODEX] stderr: ${line}`);
   }
 
   /** Try to extract text from various item shapes */

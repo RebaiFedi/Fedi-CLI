@@ -308,6 +308,54 @@ describe('Orchestrator', () => {
       assert.ok(claudeOut.length > 0, 'claude stdout should pass through');
       assert.ok(codexOut.length > 0, 'codex stdout should pass through');
     });
+
+    it('sendToAllDirect instructs Opus to also do its own analysis', async () => {
+      h.orchestrator.sendToAllDirect('Analyse front et back');
+      await h.flush();
+
+      const opusMessages = h.opus.getSentMessages();
+      const opusPrompt = opusMessages.find((m) => m.includes('[MODE @TOUS ACTIVE]'));
+
+      assert.ok(opusPrompt, 'Opus should receive explicit @tous mode instruction');
+      assert.ok(
+        opusPrompt!.includes('Fais AUSSI ta propre analyse en parallele'),
+        'Opus message should force own analysis in parallel',
+      );
+      assert.ok(
+        opusPrompt!.includes('MESSAGE ORIGINAL DU USER:\nAnalyse front et back'),
+        'Original user text should be preserved in Opus message',
+      );
+    });
+
+    it('sendToAllDirect uses urgent path and keeps @tous instruction for running Opus', async () => {
+      h.opus.setStatus('running');
+      h.claude.setStatus('running');
+      h.codex.setStatus('running');
+
+      h.orchestrator.sendToAllDirect('Urgent all-mode task');
+      await h.flush();
+
+      const opusUrgent = h.opus.getUrgentMessages();
+      const claudeUrgent = h.claude.getUrgentMessages();
+      const codexUrgent = h.codex.getUrgentMessages();
+
+      assert.ok(opusUrgent.length > 0, 'Opus should receive urgent message');
+      assert.ok(claudeUrgent.length > 0, 'Claude should receive urgent message');
+      assert.ok(codexUrgent.length > 0, 'Codex should receive urgent message');
+
+      assert.ok(
+        opusUrgent.some((m) => m.includes('[MODE @TOUS ACTIVE]')),
+        'Urgent Opus payload should include explicit @tous instruction',
+      );
+      assert.ok(
+        claudeUrgent.some((m) => m.includes('[FROM:USER] Urgent all-mode task')),
+        'Claude urgent payload should keep raw user text',
+      );
+      assert.ok(
+        codexUrgent.some((m) => m.includes('[FROM:USER] Urgent all-mode task')),
+        'Codex urgent payload should keep raw user text',
+      );
+    });
   });
 
   // ── Agent crash ─────────────────────────────────────────────────────────
