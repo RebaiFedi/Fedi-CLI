@@ -413,10 +413,8 @@ export class Orchestrator {
         const start = this.relayStartTime.get(agentId) ?? 0;
         // RELAY_TIMEOUT_MS <= 0 means no relay timeout — wait indefinitely
         if (this.RELAY_TIMEOUT_MS > 0 && Date.now() - start > this.RELAY_TIMEOUT_MS) {
-          this.agentsOnRelay.delete(agentId);
-          this.relayBuffer.set(agentId, []);
-          this.relayStartTime.delete(agentId);
-          flog.warn('ORCH', `${label} relay timeout (${this.RELAY_TIMEOUT_MS / 1000}s) — unmuting`);
+          flog.warn('ORCH', `${label} relay timeout (${this.RELAY_TIMEOUT_MS / 1000}s) — forcing auto-relay`);
+          this.autoRelayBuffer(agentId);
         } else {
           this.detectRelayPatterns(agentId, line.text);
           if (line.type === 'stdout') {
@@ -1333,11 +1331,14 @@ export class Orchestrator {
     return false;
   }
 
-  /** Discard Opus buffered partial reports — Opus will write a fresh synthesis */
-  private flushOpusBuffer(_cb: OrchestratorCallbacks) {
+  /** Flush Opus buffered lines to UI, then clear the buffer */
+  private flushOpusBuffer(cb: OrchestratorCallbacks) {
     const buffer = this.relayBuffer.get('opus') ?? [];
     if (buffer.length > 0) {
-      flog.info('ORCH', `Discarding ${buffer.length} buffered partial report lines (delegates done — Opus will write fresh synthesis)`);
+      flog.info('ORCH', `Flushing ${buffer.length} buffered Opus lines to UI`);
+      for (const line of buffer) {
+        cb.onAgentOutput('opus', line);
+      }
     }
     this.relayBuffer.set('opus', []);
   }
@@ -1509,12 +1510,18 @@ export class Orchestrator {
       return;
     }
 
+    const agentNames = [...this.pendingReportsForOpus.keys()].map(a => a.charAt(0).toUpperCase() + a.slice(1));
     const parts: string[] = [];
     for (const [agent, report] of this.pendingReportsForOpus) {
       parts.push(`[FROM:${agent.toUpperCase()}] ${report}`);
     }
-    const combined = parts.join('\n\n---\n\n');
-    flog.info('ORCH', `Delivering combined report to Opus (${this.pendingReportsForOpus.size} delegates): ${combined.slice(0, 120)}`);
+    const reportsBody = parts.join('\n\n---\n\n');
+    // Prepend a clear header so Opus knows these are the delegate reports it was waiting for.
+    // Without this header, Opus receives "[FROM:SYSTEM] [FROM:SONNET] ..." and may not
+    // recognize it as the combined delivery — causing it to say "j'attends les rapports"
+    // instead of synthesizing.
+    const combined = `[RAPPORTS RECUS — ${agentNames.join(' + ')}] Voici les rapports de tes agents. Fais ta synthese MAINTENANT et reponds au user.\n\n${reportsBody}`;
+    flog.info('ORCH', `Delivering combined report to Opus (${this.pendingReportsForOpus.size} delegates): ${combined.slice(0, 200)}`);
 
     // Track delivered agents — late output from these will be muted completely.
     // Also mute exec-based agents to stop wasting compute on their current task.
@@ -1537,8 +1544,9 @@ export class Orchestrator {
       // Cancel any pending safety-net timer
       this.clearSafetyNetTimer(delegate);
     }
-    // Capture agents before clearing, for relay events below
+    // Capture agents and reports before clearing, for relay events below
     const deliveredAgents = [...this.pendingReportsForOpus.keys()];
+    const deliveredReports = new Map(this.pendingReportsForOpus);
 
     this.expectedDelegates.clear();
     this.pendingReportsForOpus.clear();
@@ -1551,10 +1559,12 @@ export class Orchestrator {
 
     // Emit synthetic relay events for each agent so the UI shows "Agent → Opus"
     for (const agent of deliveredAgents) {
+      const report = deliveredReports.get(agent) ?? '';
+      const preview = report.slice(0, 80).trim() + (report.length > 80 ? '…' : '');
       this.bus.emit('relay', {
         from: agent,
         to: 'opus',
-        content: ' ',
+        content: preview || `rapport ${agent}`,
         id: randomUUID(),
         timestamp: Date.now(),
         relayCount: 0,
