@@ -5,8 +5,8 @@ import { renderMarkdown } from '../utils/render-markdown.js';
 
 export const TOOL_RE =
   /^\s*(EnterPlanMode|AskUserQuestion|ExitPlanMode|TodoWrite|TaskCreate|TaskUpdate|TaskList|TaskGet|NotebookEdit|EnterWorktree|WebSearch|WebFetch)\s*$/;
-export const RELAY_PREFIX_RE = /\[(TO|FROM):(CLAUDE|CODEX|OPUS|GEMINI)\]\s*/i;
-export const RELAY_LINE_RE = /^\s*\[TO:(CLAUDE|CODEX|OPUS|GEMINI)\]\s/i;
+export const RELAY_PREFIX_RE = /\[(TO|FROM):(CLAUDE|CODEX|OPUS)\]\s*/i;
+export const RELAY_LINE_RE = /^\s*\[TO:(CLAUDE|CODEX|OPUS)\]\s/i;
 export const TASK_DONE_RE = /\[TASK:done\]\s*(.+)/i;
 export const TASK_TAG_LINE_RE = /^\s*\[TASK:(add|done)\]\s*/i;
 export const CMD_OUTPUT_HEADER_RE = /^={3,}\s*.+\s*={3,}$/;
@@ -60,7 +60,7 @@ function cleanTaskText(raw: string): string {
   // Strip markdown/code artifacts
   t = t.replace(/`/g, '');
   // Strip relay tags that leaked
-  t = t.replace(/\[(TO|FROM):(CLAUDE|CODEX|OPUS|GEMINI)\]/gi, '');
+  t = t.replace(/\[(TO|FROM):(CLAUDE|CODEX|OPUS)\]/gi, '');
   // Collapse whitespace
   t = t.replace(/\s+/g, ' ').trim();
   // Cap length — no todo should be > 80 chars

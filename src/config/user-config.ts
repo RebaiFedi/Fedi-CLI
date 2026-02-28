@@ -1,6 +1,7 @@
 import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
+import { z } from 'zod';
 import { flog } from '../utils/log.js';
 
 // ── User config schema ────────────────────────────────────────────────────
@@ -10,8 +11,6 @@ export interface UserConfig {
   execTimeoutMs: number;
   /** Max execution time specifically for Codex (ms). Default: 360000 (3x execTimeoutMs) */
   codexTimeoutMs: number;
-  /** Max execution time specifically for Gemini (ms). Default: 360000 (3x execTimeoutMs) */
-  geminiTimeoutMs: number;
   /** Max time to wait for all delegates before force-delivering (ms). Default: 420000 */
   delegateTimeoutMs: number;
   /** Max relays per time window. Default: 50 */
@@ -32,14 +31,26 @@ export interface UserConfig {
   opusModel: string;
   /** Codex model to use. Default: 'gpt-5.3-codex' */
   codexModel: string;
-  /** Gemini model to use. Default: 'gemini-2.5-pro' */
-  geminiModel: string;
 }
+
+const UserConfigSchema = z.object({
+  execTimeoutMs: z.number().min(1000).default(120_000),
+  codexTimeoutMs: z.number().min(1000).default(360_000),
+  delegateTimeoutMs: z.number().min(1000).default(420_000),
+  maxRelaysPerWindow: z.number().min(1).default(50),
+  relayWindowMs: z.number().min(1000).default(60_000),
+  flushIntervalMs: z.number().min(50).default(400),
+  maxMessages: z.number().min(10).default(200),
+  maxCrossTalkPerRound: z.number().min(1).default(20),
+  maxLogFiles: z.number().min(1).default(20),
+  claudeModel: z.string().default('claude-sonnet-4-6'),
+  opusModel: z.string().default('claude-opus-4-6'),
+  codexModel: z.string().default('gpt-5.3-codex'),
+}).partial();
 
 const DEFAULTS: UserConfig = {
   execTimeoutMs: 120_000,
   codexTimeoutMs: 360_000,
-  geminiTimeoutMs: 360_000,
   delegateTimeoutMs: 420_000,
   maxRelaysPerWindow: 50,
   relayWindowMs: 60_000,
@@ -50,7 +61,6 @@ const DEFAULTS: UserConfig = {
   claudeModel: 'claude-sonnet-4-6',
   opusModel: 'claude-opus-4-6',
   codexModel: 'gpt-5.3-codex',
-  geminiModel: 'gemini-2.5-pro',
 };
 
 let cachedConfig: UserConfig | null = null;
@@ -73,22 +83,9 @@ export function loadUserConfig(): UserConfig {
   try {
     const raw = readFileSync(configPath, 'utf-8');
     const parsed = JSON.parse(raw);
-    cachedConfig = {
-      execTimeoutMs: typeof parsed.execTimeoutMs === 'number' ? parsed.execTimeoutMs : DEFAULTS.execTimeoutMs,
-      codexTimeoutMs: typeof parsed.codexTimeoutMs === 'number' ? parsed.codexTimeoutMs : DEFAULTS.codexTimeoutMs,
-      geminiTimeoutMs: typeof parsed.geminiTimeoutMs === 'number' ? parsed.geminiTimeoutMs : DEFAULTS.geminiTimeoutMs,
-      delegateTimeoutMs: typeof parsed.delegateTimeoutMs === 'number' ? parsed.delegateTimeoutMs : DEFAULTS.delegateTimeoutMs,
-      maxRelaysPerWindow: typeof parsed.maxRelaysPerWindow === 'number' ? parsed.maxRelaysPerWindow : DEFAULTS.maxRelaysPerWindow,
-      relayWindowMs: typeof parsed.relayWindowMs === 'number' ? parsed.relayWindowMs : DEFAULTS.relayWindowMs,
-      flushIntervalMs: typeof parsed.flushIntervalMs === 'number' ? parsed.flushIntervalMs : DEFAULTS.flushIntervalMs,
-      maxMessages: typeof parsed.maxMessages === 'number' ? parsed.maxMessages : DEFAULTS.maxMessages,
-      maxCrossTalkPerRound: typeof parsed.maxCrossTalkPerRound === 'number' ? parsed.maxCrossTalkPerRound : DEFAULTS.maxCrossTalkPerRound,
-      maxLogFiles: typeof parsed.maxLogFiles === 'number' ? parsed.maxLogFiles : DEFAULTS.maxLogFiles,
-      claudeModel: typeof parsed.claudeModel === 'string' ? parsed.claudeModel : DEFAULTS.claudeModel,
-      opusModel: typeof parsed.opusModel === 'string' ? parsed.opusModel : DEFAULTS.opusModel,
-      codexModel: typeof parsed.codexModel === 'string' ? parsed.codexModel : DEFAULTS.codexModel,
-      geminiModel: typeof parsed.geminiModel === 'string' ? parsed.geminiModel : DEFAULTS.geminiModel,
-    };
+    const validated = UserConfigSchema.safeParse(parsed);
+    const merged = validated.success ? validated.data : {};
+    cachedConfig = { ...DEFAULTS, ...merged };
     flog.info('SYSTEM', `Loaded user config from ${configPath}`);
     return cachedConfig;
   } catch (err) {

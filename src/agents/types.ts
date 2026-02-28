@@ -2,13 +2,12 @@ import { z } from 'zod';
 
 // ── Agent identifiers ──────────────────────────────────────────────────────
 
-export type AgentId = 'claude' | 'codex' | 'opus' | 'gemini';
+export type AgentId = 'claude' | 'codex' | 'opus';
 
 export const AGENT_LABELS: Record<AgentId, string> = {
   opus: 'Opus',
   claude: 'Sonnet',
   codex: 'Codex',
-  gemini: 'Gemini',
 };
 
 // ── Agent status ────────────────────────────────────────────────────────────
@@ -19,8 +18,8 @@ export type AgentStatus = 'idle' | 'running' | 'waiting' | 'error' | 'stopped';
 
 export const MessageSchema = z.object({
   id: z.string(),
-  from: z.enum(['claude', 'codex', 'opus', 'gemini', 'user', 'system']),
-  to: z.enum(['claude', 'codex', 'opus', 'gemini', 'all']),
+  from: z.enum(['claude', 'codex', 'opus', 'user', 'system']),
+  to: z.enum(['claude', 'codex', 'opus', 'all']),
   content: z.string(),
   correlationId: z.string().optional(),
   relayCount: z.number().default(0),
@@ -46,7 +45,6 @@ export interface SessionConfig {
   task: string;
   claudePath: string;
   codexPath: string;
-  geminiPath: string;
 }
 
 // ── Agent process interface ─────────────────────────────────────────────────
@@ -55,7 +53,7 @@ export interface AgentProcess {
   readonly id: AgentId;
   status: AgentStatus;
   /** Last API error message — used by orchestrator for auto-relay placeholders */
-  lastError?: string | null;
+  lastError: string | null;
   send(prompt: string): void;
   /** Inject a message directly into the agent's stdin without changing status.
    *  Used for LIVE user messages and cross-talk while the agent is running. */
@@ -83,7 +81,6 @@ export interface SessionData {
     opus?: string;
     claude?: string;
     codex?: string;
-    gemini?: string;
   };
 }
 
@@ -98,7 +95,7 @@ export interface DisplayEntry {
 
 export interface ChatMessage {
   id: string;
-  agent: 'claude' | 'codex' | 'opus' | 'gemini' | 'user' | 'system';
+  agent: 'claude' | 'codex' | 'opus' | 'user' | 'system';
   lines: DisplayEntry[];
   timestamp: number;
   status: 'streaming' | 'done';
@@ -112,5 +109,3 @@ export interface ChatMessage {
 export const TO_CLAUDE_PATTERN = /^\s*\[TO:CLAUDE\]\s*(.*?)\s*$/;
 export const TO_CODEX_PATTERN = /^\s*\[TO:CODEX\]\s*(.*?)\s*$/;
 export const TO_OPUS_PATTERN = /^\s*\[TO:OPUS\]\s*(.*?)\s*$/;
-export const TO_GEMINI_PATTERN = /^\s*\[TO:GEMINI\]\s*(.*?)\s*$/;
-

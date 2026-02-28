@@ -8,6 +8,7 @@ import { parseMessageWithImages, type ContentBlock } from '../utils/image-utils.
 export abstract class BaseClaudeAgent implements AgentProcess {
   abstract readonly id: AgentId;
   status: AgentStatus = 'idle';
+  lastError: string | null = null;
   protected process: ChildProcess | null = null;
   protected sessionId: string | null = null;
   protected cliPath: string = 'claude';

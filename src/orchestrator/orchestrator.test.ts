@@ -21,6 +21,7 @@ describe('Orchestrator', () => {
     it('detects [TO:CLAUDE] delegation from Opus', async () => {
       // Opus emits a relay tag → should be detected and relayed
       h.opus.emitText('[TO:CLAUDE] Analyse le fichier index.ts');
+      h.opus.setStatus('waiting');
       await h.flush();
 
       assert.ok(h.log.relays.length >= 1, 'should emit at least 1 relay');
@@ -33,6 +34,7 @@ describe('Orchestrator', () => {
       h.opus.emitText(
         '[TO:CLAUDE] Corrige le frontend\n[TO:CODEX] Corrige le backend',
       );
+      h.opus.setStatus('waiting');
       await h.flush();
 
       const claudeRelay = h.log.relays.find((r) => r.to === 'claude');
@@ -52,6 +54,19 @@ describe('Orchestrator', () => {
       const claudeRelays = h.log.relays.filter((r) => r.to === 'claude');
       assert.equal(claudeRelays.length, 0, 'should not detect relay tag inside sentence');
     });
+
+    it('keeps relay payload across streamed chunks', async () => {
+      h.opus.emitText('[TO:CODEX] ,');
+      h.opus.emitText('Tache backend: corrige le parser relay');
+      h.opus.emitText('et supprime l explorateur du backend.');
+      h.opus.setStatus('waiting');
+      await h.flush();
+
+      const relay = h.log.relays.find((r) => r.to === 'codex');
+      assert.ok(relay, 'relay should be emitted with merged payload');
+      assert.ok(relay.content.includes('Tache backend'));
+      assert.ok(relay.content.includes('supprime l explorateur'));
+    });
   });
 
   // ── Relay buffering ─────────────────────────────────────────────────────
@@ -60,6 +75,7 @@ describe('Orchestrator', () => {
     it('buffers stdout during relay, passes actions through', async () => {
       // Opus delegates to Claude
       h.opus.emitText('[TO:CLAUDE] Do the work');
+      h.opus.setStatus('waiting');
       await h.flush();
 
       // Claude is now on relay — stdout should be buffered
@@ -86,6 +102,7 @@ describe('Orchestrator', () => {
     it('mutes target agent stdout on cross-talk', async () => {
       // Claude sends cross-talk to Codex
       h.claude.emitText('[TO:CODEX] Check the API endpoint');
+      h.claude.setStatus('waiting');
       await h.flush();
 
       // Codex is now on cross-talk mute — stdout should be suppressed
@@ -103,12 +120,14 @@ describe('Orchestrator', () => {
       for (let i = 0; i < 20; i++) {
         h.claude.emitText(`[TO:CODEX] Cross-talk message ${i + 1}`);
       }
+      h.claude.setStatus('waiting');
       await h.flush();
 
       const relaysBefore = h.log.relays.length;
 
       // 21st should be blocked
       h.claude.emitText('[TO:CODEX] Cross-talk message 21 should be blocked');
+      h.claude.setStatus('waiting');
       await h.flush();
 
       assert.equal(
@@ -125,10 +144,12 @@ describe('Orchestrator', () => {
     it('delivers combined report only when ALL delegates have reported', async () => {
       // Opus delegates to both Claude and Codex
       h.opus.emitText('[TO:CLAUDE] Frontend task\n[TO:CODEX] Backend task');
+      h.opus.setStatus('waiting');
       await h.flush();
 
       // Claude reports back
       h.claude.emitText('[TO:OPUS] Frontend done');
+      h.claude.setStatus('waiting');
       await h.flush();
 
       // At this point, only Claude reported — Opus should NOT have received the combined message yet
@@ -140,6 +161,7 @@ describe('Orchestrator', () => {
 
       // Now Codex reports back
       h.codex.emitText('[TO:OPUS] Backend done');
+      h.codex.setStatus('waiting');
       await h.flush();
 
       // Now both reported — combined message should be delivered to Opus
@@ -159,6 +181,7 @@ describe('Orchestrator', () => {
     it('auto-relays buffer when agent goes waiting without [TO:OPUS]', async () => {
       // Opus delegates to Claude
       h.opus.emitText('[TO:CLAUDE] Do the task');
+      h.opus.setStatus('waiting');
       await h.flush();
 
       // Claude produces output but never sends [TO:OPUS]
@@ -179,6 +202,7 @@ describe('Orchestrator', () => {
     it('sends placeholder when buffer is empty on auto-relay', async () => {
       // Opus delegates to Claude
       h.opus.emitText('[TO:CLAUDE] Do the task');
+      h.opus.setStatus('waiting');
       await h.flush();
 
       // Claude finishes immediately without producing any output
@@ -199,10 +223,12 @@ describe('Orchestrator', () => {
     it('captures stdout in relay buffer during cross-talk + relay', async () => {
       // Opus delegates to both
       h.opus.emitText('[TO:CLAUDE] Frontend\n[TO:CODEX] Backend');
+      h.opus.setStatus('waiting');
       await h.flush();
 
       // Codex sends cross-talk to Claude while Claude is on relay
       h.codex.emitText('[TO:CLAUDE] Hey check this API');
+      h.codex.setStatus('waiting');
       await h.flush();
 
       // Claude is now on BOTH relay and cross-talk
@@ -211,10 +237,12 @@ describe('Orchestrator', () => {
 
       // Claude reports to Opus
       h.claude.emitText('[TO:OPUS] Frontend work complete');
+      h.claude.setStatus('waiting');
       await h.flush();
 
       // Codex reports too
       h.codex.emitText('[TO:OPUS] Backend work complete');
+      h.codex.setStatus('waiting');
       await h.flush();
 
       // Combined delivery should happen with both reports
@@ -232,6 +260,7 @@ describe('Orchestrator', () => {
     it('sendToAgent clears relay state for that agent', async () => {
       // Opus delegates to Claude
       h.opus.emitText('[TO:CLAUDE] Do something');
+      h.opus.setStatus('waiting');
       await h.flush();
 
       // Claude is now on relay
@@ -258,6 +287,7 @@ describe('Orchestrator', () => {
     it('sendToAllDirect clears all relay state', async () => {
       // Opus delegates to both
       h.opus.emitText('[TO:CLAUDE] Frontend\n[TO:CODEX] Backend');
+      h.opus.setStatus('waiting');
       await h.flush();
 
       // User sends to all — clears everything
@@ -286,6 +316,7 @@ describe('Orchestrator', () => {
     it('handles delegate crash with placeholder and triggers combined delivery', async () => {
       // Opus delegates to both
       h.opus.emitText('[TO:CLAUDE] Frontend\n[TO:CODEX] Backend');
+      h.opus.setStatus('waiting');
       await h.flush();
 
       // Claude crashes
@@ -294,6 +325,7 @@ describe('Orchestrator', () => {
 
       // Codex reports normally
       h.codex.emitText('[TO:OPUS] Backend done successfully');
+      h.codex.setStatus('waiting');
       await h.flush();
 
       // Combined delivery should still happen with placeholder for Claude
@@ -307,10 +339,12 @@ describe('Orchestrator', () => {
     it('crashed delegate gets placeholder text in combined report', async () => {
       // Opus delegates to both
       h.opus.emitText('[TO:CLAUDE] Frontend\n[TO:CODEX] Backend');
+      h.opus.setStatus('waiting');
       await h.flush();
 
       // Codex reports first
       h.codex.emitText('[TO:OPUS] Backend done');
+      h.codex.setStatus('waiting');
       await h.flush();
 
       // Claude crashes — should generate placeholder and trigger delivery
@@ -325,74 +359,6 @@ describe('Orchestrator', () => {
     });
   });
 
-  // ── Gemini relay ───────────────────────────────────────────────────────
-
-  describe('Gemini relay', () => {
-    it('detects [TO:GEMINI] delegation from Opus', async () => {
-      h.opus.emitText('[TO:GEMINI] Lis le fichier src/index.tsx et analyse la structure');
-      await h.flush();
-
-      const relay = h.log.relays.find((r) => r.to === 'gemini');
-      assert.ok(relay, 'relay should target gemini');
-      assert.ok(relay.content.includes('Lis le fichier src/index.tsx'));
-    });
-
-    it('receives Gemini report via [TO:OPUS]', async () => {
-      h.opus.emitText('[TO:GEMINI] Analyse le module auth');
-      await h.flush();
-
-      h.gemini.emitText('[TO:OPUS] Le module auth contient 3 fichiers...');
-      await h.flush();
-
-      const opusMessages = h.opus.getSentMessages();
-      const report = opusMessages.find((m) => m.includes('Le module auth contient 3 fichiers'));
-      assert.ok(report, 'Opus should receive Gemini report');
-    });
-
-    it('allows cross-talk: Gemini to Claude', async () => {
-      h.gemini.emitText('[TO:CLAUDE] Hey Sonnet check this');
-      await h.flush();
-
-      const claudeRelays = h.log.relays.filter((r) => r.from === 'gemini' && r.to === 'claude');
-      assert.equal(claudeRelays.length, 1, 'Gemini should be able to talk to Claude');
-    });
-
-    it('allows cross-talk: Claude to Gemini', async () => {
-      h.claude.emitText('[TO:GEMINI] Hey Gemini read this file');
-      await h.flush();
-
-      const geminiRelays = h.log.relays.filter((r) => r.from === 'claude' && r.to === 'gemini');
-      assert.equal(geminiRelays.length, 1, 'Claude should be able to talk to Gemini');
-    });
-
-    it('includes Gemini in combined delivery with other delegates', async () => {
-      h.opus.emitText('[TO:GEMINI] Explore the codebase\n[TO:CLAUDE] Fix the frontend');
-      await h.flush();
-
-      // Gemini reports
-      h.gemini.emitText('[TO:OPUS] Found 5 components');
-      await h.flush();
-
-      // Combined should NOT be delivered yet (waiting for Claude)
-      let opusMessages = h.opus.getSentMessages();
-      let combined = opusMessages.find(
-        (m) => m.includes('[FROM:GEMINI]') && m.includes('[FROM:CLAUDE]'),
-      );
-      assert.equal(combined, undefined, 'should not deliver until all delegates report');
-
-      // Claude reports
-      h.claude.emitText('[TO:OPUS] Frontend fixed');
-      await h.flush();
-
-      // Now both reported
-      opusMessages = h.opus.getSentMessages();
-      combined = opusMessages.find(
-        (m) => m.includes('[FROM:GEMINI]') && m.includes('[FROM:CLAUDE]'),
-      );
-      assert.ok(combined, 'combined report should include both Gemini and Claude');
-    });
-  });
-
   // ── Rate limiting ───────────────────────────────────────────────────────
 
   describe('rate limiting', () => {
@@ -401,12 +367,14 @@ describe('Orchestrator', () => {
       for (let i = 0; i < 50; i++) {
         h.opus.emitText(`[TO:CLAUDE] Task ${i + 1}`);
       }
+      h.opus.setStatus('waiting');
       await h.flush();
 
       const relaysBefore = h.log.relays.length;
 
       // 51st should be rate limited
       h.opus.emitText('[TO:CLAUDE] Task 51 should be blocked');
+      h.opus.setStatus('waiting');
       await h.flush();
 
       assert.equal(

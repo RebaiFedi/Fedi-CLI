@@ -5,7 +5,7 @@ import { flog } from '../utils/log.js';
 import { loadUserConfig } from '../config/user-config.js';
 
 /**
- * Abstract base class for spawn-per-exec agents (Codex, Gemini).
+ * Abstract base class for spawn-per-exec agents (Codex).
  * Each send() spawns a new child process. Provides common:
  * - Status/output handler management with muting
  * - Urgent message queue (drained at next send)
@@ -17,6 +17,7 @@ import { loadUserConfig } from '../config/user-config.js';
 export abstract class BaseExecAgent implements AgentProcess {
   abstract readonly id: AgentId;
   status: AgentStatus = 'idle';
+  lastError: string | null = null;
 
   protected sessionId: string | null = null;
   protected projectDir: string = '';
@@ -68,6 +69,7 @@ export abstract class BaseExecAgent implements AgentProcess {
 
   private emitExecFailed(err: unknown) {
     const message = String(err);
+    this.lastError = message;
     this.emit({
       text: `[EXEC_FAILED] ${message}`,
       timestamp: Date.now(),
@@ -97,6 +99,7 @@ export abstract class BaseExecAgent implements AgentProcess {
 
   protected setStatus(s: AgentStatus) {
     this.status = s;
+    if (s !== 'error') this.lastError = null;
     if (this.muted && s !== 'waiting' && s !== 'stopped' && s !== 'error') return;
     this.statusHandlers.forEach((h) => h(s));
   }
@@ -350,6 +353,7 @@ export abstract class BaseExecAgent implements AgentProcess {
         clearTimeout(execTimeout);
         closeReadlines();
         flog.info('AGENT', `${this.logTag}: Process exited with code ${code}`);
+        this.activeProcess = null;
         if (code !== null && code !== 0) {
           flog.warn('AGENT', `${this.logTag}: Non-zero exit code: ${code}`);
           this.emit({
@@ -357,9 +361,12 @@ export abstract class BaseExecAgent implements AgentProcess {
             timestamp: Date.now(),
             type: 'info',
           });
-          this.emitExecFailed(new Error(`${this.logTag}: exit code ${code}`));
+          const err = new Error(`${this.logTag}: exit code ${code}`);
+          this.emitExecFailed(err);
+          this.setStatus('error');
+          reject(err);
+          return;
         }
-        this.activeProcess = null;
         this.setStatus('waiting');
         resolve(fullStdout);
       });

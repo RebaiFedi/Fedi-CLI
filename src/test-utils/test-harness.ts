@@ -15,7 +15,6 @@ export interface TestHarness {
   opus: MockAgent;
   claude: MockAgent;
   codex: MockAgent;
-  gemini: MockAgent;
   bus: MessageBus;
   log: HarnessCallbackLog;
   /** Wait for PQueue microtasks to settle */
@@ -30,10 +29,9 @@ export function createTestOrchestrator(): TestHarness {
   const opus = new MockAgent('opus');
   const claude = new MockAgent('claude');
   const codex = new MockAgent('codex');
-  const gemini = new MockAgent('gemini');
   const bus = new MessageBus();
 
-  const orchestrator = new Orchestrator({ opus, claude, codex, gemini, bus });
+  const orchestrator = new Orchestrator({ opus, claude, codex, bus });
 
   const log: HarnessCallbackLog = {
     outputs: [],
@@ -62,13 +60,12 @@ export function createTestOrchestrator(): TestHarness {
     projectDir: '/tmp/fedi-test',
     claudePath: 'claude',
     codexPath: 'codex',
-    geminiPath: 'gemini',
   });
 
   async function flush(): Promise<void> {
     // Give PQueue microtasks time to process
-    await new Promise((r) => setTimeout(r, 15));
+    await new Promise((r) => setTimeout(r, 40));
   }
 
-  return { orchestrator, opus, claude, codex, gemini, bus, log, flush };
+  return { orchestrator, opus, claude, codex, bus, log, flush };
 }

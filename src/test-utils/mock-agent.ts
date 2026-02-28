@@ -7,6 +7,7 @@ import type { AgentProcess, AgentId, AgentStatus, OutputLine, SessionConfig } fr
 export class MockAgent implements AgentProcess {
   readonly id: AgentId;
   status: AgentStatus = 'idle';
+  lastError: string | null = null;
 
   private outputHandlers: Array<(line: OutputLine) => void> = [];
   private statusHandlers: Array<(status: AgentStatus) => void> = [];

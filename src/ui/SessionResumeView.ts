@@ -16,11 +16,6 @@ export function printSessionResume(session: SessionData, matchId: string): void 
       color: chalk.hex(THEME.codex),
       dot: chalk.hex(THEME.codex)(DOT_ACTIVE),
     },
-    gemini: {
-      label: 'Gemini',
-      color: chalk.hex(THEME.gemini),
-      dot: chalk.hex(THEME.gemini)(DOT_ACTIVE),
-    },
     user: { label: 'User', color: chalk.hex(THEME.text), dot: chalk.hex(THEME.text)('\u276F') },
   };
 

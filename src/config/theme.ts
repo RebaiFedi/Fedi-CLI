@@ -9,7 +9,6 @@ export const THEME = {
   opus: '#F59E0B',
   claude: '#38BDF8',
   codex: '#22C55E',
-  gemini: '#A78BFA',
   userPrefix: '#CBD5E1',
   userBubbleBg: '#1F2937',
 } as const;
@@ -18,17 +17,15 @@ const AGENT_HEX: Record<AgentId, string> = {
   opus: THEME.opus,
   claude: THEME.claude,
   codex: THEME.codex,
-  gemini: THEME.gemini,
 };
 
 // Chalk named colors aligned to match the THEME hex values visually:
 // opus #F59E0B (amber) → yellow, claude #38BDF8 (sky blue) → cyan,
-// codex #22C55E (green) → green, gemini #A78BFA (violet) → magenta
+// codex #22C55E (green) → green
 const AGENT_CHALK_COLOR: Record<AgentId, 'green' | 'yellow' | 'magenta' | 'cyan'> = {
   opus: 'yellow',
   claude: 'cyan',
   codex: 'green',
-  gemini: 'magenta',
 };
 
 export function agentHex(agent: AgentId): string {

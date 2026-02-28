@@ -6,6 +6,7 @@ const cfg = loadUserConfig();
 
 export class OpusAgent extends BaseClaudeAgent {
   readonly id: AgentId = 'opus';
+
   protected get logTag() {
     return 'OPUS';
   }

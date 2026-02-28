@@ -10,13 +10,13 @@ import { flog } from '../utils/log.js';
 //   'message:claude': [Message];
 //   'message:codex': [Message];
 //   'message:opus': [Message];
-//   'message:gemini': [Message];
 //   relay: [Message];
 //   'relay-blocked': [Message];
 // }
 
 export class MessageBus extends EventEmitter {
   private history: Message[] = [];
+  private correlationCounts: Map<string, number> = new Map();
 
   constructor() {
     super();
@@ -35,6 +35,9 @@ export class MessageBus extends EventEmitter {
     if (this.history.length > 500) {
       this.history = this.history.slice(-500);
     }
+    if (full.correlationId) {
+      this.correlationCounts.set(full.correlationId, (this.correlationCounts.get(full.correlationId) ?? 0) + 1);
+    }
     flog.info('BUS', `${full.from}->${full.to}: ${full.content.slice(0, 100)}`);
 
     this.emit('message', full);
@@ -45,13 +48,10 @@ export class MessageBus extends EventEmitter {
       this.emit('message:codex', full);
     } else if (full.to === 'opus') {
       this.emit('message:opus', full);
-    } else if (full.to === 'gemini') {
-      this.emit('message:gemini', full);
     } else if (full.to === 'all') {
       this.emit('message:claude', full);
       this.emit('message:codex', full);
       this.emit('message:opus', full);
-      this.emit('message:gemini', full);
     }
 
     return full;
@@ -76,7 +76,7 @@ export class MessageBus extends EventEmitter {
 
   relay(from: AgentId, to: AgentId, content: string, correlationId?: string): boolean {
     const relayCount = correlationId
-      ? this.history.filter((m) => m.correlationId === correlationId).length
+      ? (this.correlationCounts.get(correlationId) ?? 0)
       : 0;
 
     if (relayCount >= MAX_RELAY_DEPTH) {
@@ -109,6 +109,7 @@ export class MessageBus extends EventEmitter {
 
   reset(): void {
     this.history = [];
+    this.correlationCounts.clear();
     // NOTE: Do NOT call removeAllListeners() here — bind() registers
     // persistent handlers (message:opus, message:claude, etc.) that must
     // survive a restart. Only clear the message history.

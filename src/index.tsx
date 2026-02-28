@@ -79,7 +79,6 @@ async function viewSession(projectDir: string, sessionId: string) {
     opus: { label: 'Opus', color: chalk.hex(THEME.opus) },
     claude: { label: 'Sonnet', color: chalk.hex(THEME.claude) },
     codex: { label: 'Codex', color: chalk.hex(THEME.codex) },
-    gemini: { label: 'Gemini', color: chalk.hex(THEME.gemini) },
     user: { label: 'User', color: chalk.hex(THEME.text) },
     system: { label: 'System', color: chalk.dim },
   };
@@ -138,11 +137,11 @@ ${chalk.white.bold('OPTIONS')}
   --resume <id>                Reprendre une session precedente
   --agents <list>              Agents a activer (ex: opus,claude,codex)
 
+
 ${chalk.white.bold('COMMANDES INTERACTIVES')}
   @opus <message>              Parler directement a Opus (directeur)
   @claude <message>            Parler directement a Claude/Sonnet (frontend)
   @codex <message>             Parler directement a Codex (backend)
-  @gemini <message>            Parler directement a Gemini (explorateur)
   @tous <message>              Envoyer a tous les agents
   @sessions                    Lister les sessions
 
@@ -154,7 +153,7 @@ ${chalk.white.bold('AGENTS')}
   ${chalk.hex(THEME.opus)('Opus')}     Claude Opus 4.6     Directeur / orchestrateur
   ${chalk.hex(THEME.claude)('Sonnet')}   Claude Sonnet 4.6   Specialiste frontend
   ${chalk.hex(THEME.codex)('Codex')}    GPT-5.3 Codex       Specialiste backend
-  ${chalk.hex(THEME.gemini)('Gemini')}   Gemini 2.5 Pro      Explorateur / analyste
+
 
 ${chalk.dim('Logs:     ~/.fedi-cli/logs/')}
 ${chalk.dim('Sessions: ./sessions/')}
@@ -205,16 +204,16 @@ export async function main() {
 
   // Handle --agents flag: restrict which agents are enabled
   const agentsIdx = args.indexOf('--agents');
-  const enabledAgents = new Set<string>(['opus', 'claude', 'codex', 'gemini']);
+  const enabledAgents = new Set<string>(['opus', 'claude', 'codex']);
   if (agentsIdx !== -1) {
     const agentList = args[agentsIdx + 1];
     if (!agentList) {
-      console.error(chalk.red('  Usage: fedi --agents opus,claude,codex,gemini'));
+      console.error(chalk.red('  Usage: fedi --agents opus,claude,codex'));
       process.exit(1);
     }
     enabledAgents.clear();
     for (const a of agentList.split(',').map((s) => s.trim().toLowerCase())) {
-      if (['opus', 'claude', 'codex', 'gemini', 'sonnet'].includes(a)) {
+      if (['opus', 'claude', 'codex', 'sonnet'].includes(a)) {
         enabledAgents.add(a === 'sonnet' ? 'claude' : a);
       } else {
         console.warn(chalk.yellow(`  Agent inconnu: ${a} (ignoring)`));
@@ -237,12 +236,6 @@ export async function main() {
     process.exit(1);
   }
 
-  if (!clis.gemini.available && enabledAgents.has('gemini')) {
-    console.warn(chalk.yellow('  Gemini CLI not found. Explorer agent will be unavailable.'));
-    console.warn(chalk.dim('  Install with: npm i -g @anthropic-ai/gemini-cli'));
-    enabledAgents.delete('gemini');
-  }
-
   const projectDir = process.cwd();
   const orchestrator = new Orchestrator();
 
@@ -255,7 +248,6 @@ export async function main() {
         projectDir={projectDir}
         claudePath={clis.claude.path!}
         codexPath={clis.codex.path ?? ''}
-        geminiPath={clis.gemini.path ?? ''}
         resumeSessionId={resumeSessionId}
       />
     </ErrorBoundary>,

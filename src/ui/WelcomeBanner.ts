@@ -7,7 +7,7 @@ export function printWelcomeBanner(projectDir: string): void {
 
   const line1 = `  ${chalk.hex(THEME.text).bold('>_ Fedi Cli')} ${chalk.dim('(v1.0)')}`;
   const line2 = '';
-  const line3 = `  ${chalk.dim('agents:')}     ${chalk.hex(THEME.opus)('Opus')} ${chalk.dim('(Director)')}, ${chalk.hex(THEME.claude)('Sonnet')} ${chalk.dim('(Code)')}, ${chalk.hex(THEME.codex)('Codex')} ${chalk.dim('(Script)')}, ${chalk.hex(THEME.gemini)('Gemini')} ${chalk.dim('(Explorer)')}`;
+  const line3 = `  ${chalk.dim('agents:')}     ${chalk.hex(THEME.opus)('Opus')} ${chalk.dim('(Director)')}, ${chalk.hex(THEME.claude)('Sonnet')} ${chalk.dim('(Code)')}, ${chalk.hex(THEME.codex)('Codex')} ${chalk.dim('(Script)')}`;
   const line4 = `  ${chalk.dim('directory:')}  ${chalk.hex(THEME.text)(dir)}`;
 
   const contentWidth = Math.max(
@@ -40,7 +40,7 @@ export function printWelcomeBanner(projectDir: string): void {
     row(line4),
     chalk.hex(THEME.border)('  \u2570' + '\u2500'.repeat(inner) + '\u256F'),
     '',
-    `  ${chalk.white.bold('Tip:')} ${chalk.dim.italic('Type @opus, @sonnet, @codex, or @gemini to speak directly to an agent.')}`,
+    `  ${chalk.white.bold('Tip:')} ${chalk.dim.italic('Type @opus, @sonnet, or @codex to speak directly to an agent.')}`,
     `  ${chalk.dim.italic('       @tous <message> envoie a tous les agents simultanement.')}`,
     `  ${chalk.dim.italic('       @sessions liste vos sessions enregistrees.')}`,
     `  ${chalk.dim.italic('       Esc arrete les agents en cours  |  Ctrl+C quitte.')}`,

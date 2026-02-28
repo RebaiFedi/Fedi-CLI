@@ -19,7 +19,6 @@ const SessionDataSchema = z.object({
     opus: z.string().optional(),
     claude: z.string().optional(),
     codex: z.string().optional(),
-    gemini: z.string().optional(),
   }),
 });
 
@@ -29,7 +28,6 @@ export function buildResumePrompt(session: SessionData): string {
     opus: 'Opus',
     claude: 'Sonnet',
     codex: 'Codex',
-    gemini: 'Gemini',
     user: 'User',
   };
 
@@ -77,6 +75,9 @@ export class SessionManager {
   addMessage(msg: Message): void {
     if (!this.session) return;
     this.session.messages.push(msg);
+    if (this.session.messages.length > 1000) {
+      this.session.messages = this.session.messages.slice(-1000);
+    }
     this.scheduleSave();
   }
 

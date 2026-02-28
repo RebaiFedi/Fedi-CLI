@@ -32,7 +32,6 @@ interface DashboardProps {
   projectDir: string;
   claudePath: string;
   codexPath: string;
-  geminiPath: string;
   resumeSessionId?: string;
 }
 
@@ -45,8 +44,8 @@ interface BufferedEntry {
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
-const AGENT_IDS = ['opus', 'claude', 'codex', 'gemini'] as const;
-const VALID_AGENT_IDS = new Set<string>(['opus', 'claude', 'codex', 'gemini']);
+const AGENT_IDS = ['opus', 'claude', 'codex'] as const;
+const VALID_AGENT_IDS = new Set<string>(['opus', 'claude', 'codex']);
 
 // ── Dashboard ───────────────────────────────────────────────────────────────
 
@@ -55,7 +54,6 @@ export function Dashboard({
   projectDir,
   claudePath,
   codexPath,
-  geminiPath,
   resumeSessionId,
 }: DashboardProps) {
   const { exit } = useApp();
@@ -67,7 +65,7 @@ export function Dashboard({
       ...state,
       [action.agent]: action.status,
     }),
-    { opus: 'idle', claude: 'idle', codex: 'idle', gemini: 'idle' } as Record<string, AgentStatus>,
+    { opus: 'idle', claude: 'idle', codex: 'idle' } as Record<string, AgentStatus>,
   );
   const [agentErrors, setAgentErrors] = useState<Partial<Record<string, string>>>({});
   const [stopped, setStopped] = useState(false);
@@ -315,7 +313,7 @@ export function Dashboard({
   }, []);
 
   useEffect(() => {
-    orchestrator.setConfig({ projectDir, claudePath, codexPath, geminiPath });
+    orchestrator.setConfig({ projectDir, claudePath, codexPath });
     orchestrator.bind({
       onAgentOutput: (agent: AgentId, line: OutputLine) => {
         if (line.type === 'stdout') processTaskTags(agent, line.text);
@@ -356,7 +354,6 @@ export function Dashboard({
             agent === 'opus' ? status : orchestrator.opus.status,
             agent === 'claude' ? status : orchestrator.claude.status,
             agent === 'codex' ? status : orchestrator.codex.status,
-            agent === 'gemini' ? status : orchestrator.gemini.status,
           ];
           const anyRunningNow = statuses.some((s) => s === 'running');
           // Keep spinner active if Opus still has pending delegates (agents answered
@@ -492,7 +489,6 @@ export function Dashboard({
     projectDir,
     claudePath,
     codexPath,
-    geminiPath,
     resumeSessionId,
     processTaskTags,
     enqueueOutput,
@@ -563,10 +559,11 @@ export function Dashboard({
       if (allMatch) {
         const allMessage = allMatch[2];
         if (!orchestrator.isStarted || stopped) {
+          const isRestart = stopped;
           setStopped(false);
           stoppedRef.current = false;
           setTodos([]);
-          console.log('Redemarrage...');
+          if (isRestart) console.log('Redemarrage...');
           orchestrator
             .restart(`Le user parle a tous les agents directement. Attends.`)
             .then(() => orchestrator.sendToAllDirect(allMessage))
@@ -589,18 +586,16 @@ export function Dashboard({
       } else if (text.startsWith('@claude ') || text.startsWith('@sonnet ')) {
         targetAgent = 'claude';
         agentMessage = text.slice(text.indexOf(' ') + 1);
-      } else if (text.startsWith('@gemini ')) {
-        targetAgent = 'gemini';
-        agentMessage = text.slice(8);
       }
 
       if (!orchestrator.isStarted || stopped) {
+        const isRestart = stopped;
         setStopped(false);
         stoppedRef.current = false;
         setTodos([]);
         if (targetAgent && targetAgent !== 'opus') {
-          const agentNames: Record<string, string> = { claude: 'Sonnet', codex: 'Codex', gemini: 'Gemini' };
-          console.log('Redemarrage...');
+          const agentNames: Record<string, string> = { claude: 'Sonnet', codex: 'Codex' };
+          if (isRestart) console.log('Redemarrage...');
           orchestrator
             .restart(
               `Le user veut parler directement a ${agentNames[targetAgent] ?? targetAgent}. Attends.`,
@@ -610,7 +605,7 @@ export function Dashboard({
             })
             .catch((err) => flog.error('UI',`[DASHBOARD] Start error: ${err}`));
         } else {
-          console.log('Redemarrage...');
+          if (isRestart) console.log('Redemarrage...');
           orchestrator
             .restart(targetAgent === 'opus' ? agentMessage : text)
             .catch((err) => flog.error('UI',`[DASHBOARD] Start error: ${err}`));
