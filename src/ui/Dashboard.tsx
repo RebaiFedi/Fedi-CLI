@@ -108,8 +108,9 @@ export function Dashboard({
   const welcomePrinted = useRef(false);
   const lastPrintedAgent = useRef<AgentId | null>(null);
   const pendingActions = useRef<Map<AgentId, string[]>>(new Map());
-  /** Last time we printed an action summary for each agent — throttle to avoid spam */
-  const lastActionPrint = useRef<Map<AgentId, number>>(new Map());
+  /** Track last action time per agent — for "still working" heartbeat display */
+  const lastActionTime = useRef<Map<AgentId, number>>(new Map());
+  const lastHeartbeatTime = useRef<Map<AgentId, number>>(new Map());
   /**
    * Buffer of [TASK:done] tags emitted by agent sub-agents (claude/codex) during
    * their current turn. We accumulate them and apply all at once when the agent
@@ -165,15 +166,8 @@ export function Dashboard({
     const flushPendingActions = (agent: AgentId, agentColor: 'green' | 'yellow' | 'magenta' | 'cyan') => {
       const actions = pendingActions.current.get(agent);
       if (!actions || actions.length === 0) return;
-      const summary: DisplayEntry[] = [];
-      if (actions.length <= 2) {
-        for (const a of actions) summary.push({ text: a, kind: 'action' });
-      } else {
-        summary.push({
-          text: `${actions[actions.length - 1]} (+${actions.length - 1} more)`,
-          kind: 'action',
-        });
-      }
+      // Show each action individually for full live visibility
+      const summary: DisplayEntry[] = actions.map((a) => ({ text: a, kind: 'action' as const }));
       outputLines.push(...entriesToAnsiOutputLines(summary, agentColor));
       pendingActions.current.set(agent, []);
     };
@@ -197,20 +191,19 @@ export function Dashboard({
         const combined = [...existing, ...newActions];
         // Cap at 100 actions per agent to prevent memory leak
         pendingActions.current.set(agent, combined.length > 100 ? combined.slice(-100) : combined);
+        lastActionTime.current.set(agent, Date.now());
       }
 
       if (contentEntries.length === 0) {
-        // Actions only — print compact summary (throttled: max once per 1s per agent)
+        // Actions only — print every action live, no throttle
         const allActions = pendingActions.current.get(agent) ?? [];
-        const now = Date.now();
-        const lastPrint = lastActionPrint.current.get(agent) ?? 0;
-        if (allActions.length > 0 && now - lastPrint >= 1000) {
-          lastActionPrint.current.set(agent, now);
-          const last = allActions[allActions.length - 1];
-          const short = last.length > 50 ? last.slice(0, 47) + '...' : last;
-          const count = allActions.length > 1 ? chalk.dim(` (+${allActions.length - 1})`) : '';
+        if (allActions.length > 0) {
           const label = chalk.hex(agentHex(agent))(agentDisplayName(agent));
-          outputLines.push(`${INDENT}${label} ${chalk.dim(short)}${count}`);
+          for (const action of allActions) {
+            const short = action.length > 60 ? action.slice(0, 57) + '...' : action;
+            outputLines.push(`${INDENT}${label} ${chalk.dim(short)}`);
+          }
+          pendingActions.current.set(agent, []);
         }
         continue;
       }
@@ -265,6 +258,22 @@ export function Dashboard({
       if (last) lastEntryKind.current.set(agent, last.kind);
     }
 
+    // Heartbeat — show "writing report..." for agents that are running but
+    // haven't emitted any action in 5+ seconds (they're thinking/writing)
+    const now = Date.now();
+    for (const [agent, lastTime] of lastActionTime.current.entries()) {
+      const status = agentStatusesRef.current[agent];
+      if (status !== 'running') continue;
+      const sinceLastAction = now - lastTime;
+      const lastHb = lastHeartbeatTime.current.get(agent) ?? 0;
+      // Show heartbeat every 5s if agent hasn't emitted actions in 5+ seconds
+      if (sinceLastAction >= 5000 && now - lastHb >= 5000) {
+        lastHeartbeatTime.current.set(agent, now);
+        const label = chalk.hex(agentHex(agent))(agentDisplayName(agent));
+        outputLines.push(`${INDENT}${label} ${chalk.dim('▸ writing report...')}`);
+      }
+    }
+
     if (outputLines.length > 0) {
       const final = compactOutputLines(outputLines).join('\n');
       flog.debug('UI', 'Output displayed', { preview: final.slice(0, 120) });
@@ -276,17 +285,41 @@ export function Dashboard({
   const enqueueOutput = useCallback(
     (agent: AgentId, entries: DisplayEntry[]) => {
       const isFirstChunk = !currentMsgRef.current.has(agent);
+      const isActionOnly = entries.length > 0 && entries.every((e) => e.kind === 'action');
       outputBuffer.current.push({ agent, entries });
       if (isFirstChunk) {
         // Flush immediately on first token for perceived speed
         if (flushTimer.current) clearTimeout(flushTimer.current);
         flushTimer.current = setTimeout(flushBuffer, 0);
+      } else if (isActionOnly) {
+        // Actions (read, bash, etc.) — flush quickly for live visibility
+        if (!flushTimer.current) {
+          flushTimer.current = setTimeout(flushBuffer, 80);
+        }
       } else if (!flushTimer.current) {
         flushTimer.current = setTimeout(flushBuffer, flushInterval);
       }
     },
     [flushBuffer, flushInterval],
   );
+
+  // Periodic heartbeat timer — triggers flushBuffer so the heartbeat
+  // "writing report..." lines appear even when no agent is emitting output.
+  const heartbeatTimer = useRef<ReturnType<typeof setInterval> | null>(null);
+  useEffect(() => {
+    heartbeatTimer.current = setInterval(() => {
+      // Only trigger if there are running agents with stale action times
+      const now = Date.now();
+      let needsFlush = false;
+      for (const [, lastTime] of lastActionTime.current.entries()) {
+        if (now - lastTime >= 5000) { needsFlush = true; break; }
+      }
+      if (needsFlush && !flushTimer.current) {
+        flushTimer.current = setTimeout(flushBuffer, 0);
+      }
+    }, 3000);
+    return () => { if (heartbeatTimer.current) clearInterval(heartbeatTimer.current); };
+  }, [flushBuffer]);
 
   useInput((_input, key) => {
     if (key.escape && !stopped) {
@@ -435,6 +468,9 @@ export function Dashboard({
           status === 'error' ||
           status === 'stopped'
         ) {
+          // Clean up heartbeat tracking for finished agent
+          lastActionTime.current.delete(agent);
+          lastHeartbeatTime.current.delete(agent);
           // ── Flush batched [TASK:done] for sub-agents (claude/codex) ─────────
           // Apply all accumulated completions in a single setState call so the
           // progress bar jumps from 0/N straight to N/N (no intermediate steps).
@@ -453,15 +489,8 @@ export function Dashboard({
           const remaining = pendingActions.current.get(agent);
           if (remaining && remaining.length > 0) {
             const ac = agentChalkColor(agent);
-            const summary: DisplayEntry[] =
-              remaining.length <= 2
-                ? remaining.map((a) => ({ text: a, kind: 'action' as const }))
-                : [
-                    {
-                      text: `${remaining[remaining.length - 1]} (+${remaining.length - 1} more)`,
-                      kind: 'action' as const,
-                    },
-                  ];
+            // Show each remaining action individually
+            const summary: DisplayEntry[] = remaining.map((a) => ({ text: a, kind: 'action' as const }));
             const lines = entriesToAnsiOutputLines(summary, ac);
             if (lines.length > 0) console.log(compactOutputLines(lines).join('\n'));
             pendingActions.current.set(agent, []);

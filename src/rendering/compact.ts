@@ -2,46 +2,11 @@ import type { DisplayEntry } from '../agents/types.js';
 import { stripAnsi } from '../utils/strip-ansi.js';
 
 /**
- * Collapse consecutive actions into summary lines.
- * - 3+ consecutive file reads → "read 3 files"
- * - 3+ other actions → last action + "(+N more)"
- * - 1-2 actions → kept as-is
+ * Pass through all actions individually — no collapsing.
+ * Each action (read, bash, etc.) is shown live for full visibility.
  */
 export function collapseActions(entries: DisplayEntry[]): DisplayEntry[] {
-  const out: DisplayEntry[] = [];
-  let buf: string[] = [];
-
-  const isRead = (t: string) => /^\s*▸\s*read\s/.test(t);
-
-  const flush = () => {
-    if (!buf.length) return;
-    if (buf.length === 1) {
-      out.push({ text: buf[0].trim(), kind: 'action' });
-      buf = [];
-      return;
-    }
-    // 2+ actions → always collapse into a single summary line
-    const reads = buf.filter(isRead);
-    if (reads.length >= 2 && reads.length === buf.length) {
-      out.push({ text: `▸ read ${reads.length} files`, kind: 'action' });
-    } else {
-      out.push({
-        text: `${buf[buf.length - 1].trim()} (+${buf.length - 1} more)`,
-        kind: 'action',
-      });
-    }
-    buf = [];
-  };
-
-  for (const e of entries) {
-    if (e.kind === 'action') buf.push(e.text);
-    else {
-      flush();
-      out.push(e);
-    }
-  }
-  flush();
-  return out;
+  return entries;
 }
 
 export function compact(entries: DisplayEntry[]): DisplayEntry[] {
