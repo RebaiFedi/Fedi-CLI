@@ -14,7 +14,11 @@ export const CMD_OUTPUT_HEADER_RE = /^={3,}\s*.+\s*={3,}$/;
 // ── OutputLine → DisplayEntry[] ─────────────────────────────────────────────
 
 export function outputToEntries(line: OutputLine): DisplayEntry[] {
-  if (line.type === 'checkpoint') return [{ text: line.text, kind: 'action' }];
+  if (line.type === 'checkpoint') {
+    // Hide internal lifecycle checkpoints from user chat — these are only for Opus
+    if (/\[CODEX:(started|done)\]/.test(line.text)) return [];
+    return [{ text: line.text, kind: 'action' }];
+  }
   if (line.type === 'system') return [{ text: line.text, kind: 'action' }];
   if (line.type === 'info') return [{ text: line.text, kind: 'info' }];
   if (line.type === 'relay') return [];
