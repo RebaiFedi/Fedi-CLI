@@ -31,6 +31,8 @@ export interface UserConfig {
   opusModel: string;
   /** Codex model to use. Default: 'gpt-5.3-codex' */
   codexModel: string;
+  /** Checkpoint throttle interval per agent (ms). Default: 5000 */
+  checkpointThrottleMs: number;
 }
 
 const UserConfigSchema = z.object({
@@ -46,6 +48,7 @@ const UserConfigSchema = z.object({
   claudeModel: z.string().default('claude-sonnet-4-6'),
   opusModel: z.string().default('claude-opus-4-6'),
   codexModel: z.string().default('gpt-5.3-codex'),
+  checkpointThrottleMs: z.number().min(1000).default(5_000),
 }).partial();
 
 const DEFAULTS: UserConfig = {
@@ -61,6 +64,7 @@ const DEFAULTS: UserConfig = {
   claudeModel: 'claude-sonnet-4-6',
   opusModel: 'claude-opus-4-6',
   codexModel: 'gpt-5.3-codex',
+  checkpointThrottleMs: 5_000,
 };
 
 let cachedConfig: UserConfig | null = null;

@@ -11,8 +11,12 @@ interface LineInputProps {
   multiline?: boolean;
   /** Max number of visible lines in the viewport (default: 5) */
   maxVisibleLines?: number;
+  /** Optional badge displayed inline before the input text (e.g. "[Pasted text +50 lines]") */
+  prefixBadge?: string;
   onChange: (value: string) => void;
   onSubmit?: (value: string) => void;
+  /** Called when a paste is detected (multi-line or large input chunk) */
+  onPaste?: (text: string) => void;
   /** Called when up arrow is pressed on the first line (for history navigation) */
   onHistoryPrev?: () => void;
   /** Called when down arrow is pressed on the last line (for history navigation) */
@@ -118,8 +122,10 @@ export function LineInput({
   showCursor = true,
   multiline = false,
   maxVisibleLines = 5,
+  prefixBadge,
   onChange,
   onSubmit,
+  onPaste,
   onHistoryPrev,
   onHistoryNext,
   onTab,
@@ -283,6 +289,12 @@ export function LineInput({
         }
         // ── Typing ──────────────────────────────────────────────────────────
         else if (input.length > 0 && !key.ctrl && !key.meta) {
+          // Detect paste: multi-line input or large chunk arriving at once
+          const newlineCount = (input.match(/\n/g) ?? []).length;
+          if (onPaste && (newlineCount >= 3 || input.length >= 40)) {
+            onPaste(input);
+            return;
+          }
           nextValue = value.slice(0, safeOffset) + input + value.slice(safeOffset);
           nextOffset = safeOffset + input.length;
         } else {
@@ -302,26 +314,71 @@ export function LineInput({
           return top;
         });
       },
-      [value, safeOffset, wrapWidth, multiline, maxVisibleLines, onChange, onSubmit, onHistoryPrev, onHistoryNext, onTab, onClear],
+      [value, safeOffset, wrapWidth, multiline, maxVisibleLines, onChange, onSubmit, onPaste, onHistoryPrev, onHistoryNext, onTab, onClear],
     ),
     { isActive: focus },
   );
-
-  // ── Compact threshold — above this, show badge instead of full text ──────────
-  const COMPACT_THRESHOLD = 3;
 
   // ── Render ──────────────────────────────────────────────────────────────────
   const renderedLines = useMemo(() => {
     const { row: cursorRow, col: cursorCol, lines } = cursorToRowCol(value, safeOffset, wrapWidth);
     const totalLines = lines.length;
 
-    // Build rendered strings
+    // Helper: render a viewport of lines with cursor highlight and scroll indicators
+    function renderViewport(): string[] {
+      const safeTop = clamp(viewportTop, 0, Math.max(0, totalLines - maxVisibleLines));
+      const visibleLines = lines.slice(safeTop, safeTop + maxVisibleLines);
+      const scrollUp = safeTop > 0;
+      const scrollDown = safeTop + maxVisibleLines < totalLines;
+
+      return visibleLines.map((line, vi) => {
+        const lineIdx = safeTop + vi;
+        let out: string;
+        if (lineIdx === cursorRow) {
+          out = '';
+          for (let i = 0; i < line.length; i++) {
+            const char = line[i] ?? '';
+            out += i === cursorCol ? chalk.inverse(char) : char;
+          }
+          if (cursorCol >= line.length) out += chalk.inverse(' ');
+        } else {
+          out = line;
+        }
+        if (vi === 0 && scrollUp) out = chalk.dim('↑') + out;
+        if (vi === visibleLines.length - 1 && scrollDown) out = out + chalk.dim('↓');
+        return out;
+      });
+    }
+
+    // ── Prefix badge mode (pasted text) ─────────────────────────────────────
+    // Show badge inline with cursor, like Claude Code: "[Pasted text +N lines] |"
+    if (prefixBadge) {
+      const badge = chalk.magenta(prefixBadge);
+      if (value.length === 0) {
+        // Badge + cursor block
+        return [badge + chalk.inverse(' ')];
+      }
+      // Badge + typed text with cursor on same line (single-line comment)
+      // For multi-line additional text, show badge on first line
+      if (totalLines === 1) {
+        let typed = '';
+        for (let i = 0; i < value.length; i++) {
+          const char = value[i] ?? '';
+          typed += i === cursorCol ? chalk.inverse(char) : char;
+        }
+        if (cursorCol >= value.length) typed += chalk.inverse(' ');
+        return [badge + ' ' + typed];
+      }
+      // Multi-line extra text: badge on top, then viewport
+      return [badge, ...renderViewport()];
+    }
+
+    // ── No badge — normal rendering ─────────────────────────────────────────
     if (!showCursor || !focus) {
       if (value.length === 0 && placeholder) {
         return [chalk.grey(placeholder)];
       }
-      // In no-focus mode, show compact badge if text is long
-      if (totalLines > COMPACT_THRESHOLD) {
+      if (totalLines > maxVisibleLines) {
         return [chalk.dim(`[${totalLines} lignes]`)];
       }
       return lines;
@@ -333,51 +390,15 @@ export function LineInput({
       return [chalk.inverse(placeholder[0]) + chalk.grey(placeholder.slice(1))];
     }
 
-    // ── Compact mode: text > threshold lines ─────────────────────────────────
-    // Show: badge line + current cursor line (like Claude Code)
-    if (totalLines > COMPACT_THRESHOLD) {
-      const cursorLine = lines[cursorRow] ?? '';
-
-      // Build cursor line with highlight
-      let cursorRendered = '';
-      for (let i = 0; i < cursorLine.length; i++) {
-        const char = cursorLine[i] ?? '';
-        cursorRendered += i === cursorCol ? chalk.inverse(char) : char;
-      }
-      if (cursorCol >= cursorLine.length) cursorRendered += chalk.inverse(' ');
-
-      // Badge: "[N lignes · ligne X/N]"
-      const badge = chalk.dim(`[${totalLines} lignes · ligne ${cursorRow + 1}/${totalLines}]`);
-
-      return [badge, cursorRendered];
+    // Text overflows viewport: show position badge + scrollable viewport
+    if (totalLines > maxVisibleLines) {
+      const posBadge = chalk.dim(`[${totalLines} lignes · ligne ${cursorRow + 1}/${totalLines}]`);
+      return [posBadge, ...renderViewport()];
     }
 
-    // ── Normal mode: text fits within threshold lines ─────────────────────────
-    const safeTop = clamp(viewportTop, 0, Math.max(0, totalLines - maxVisibleLines));
-    const visibleLines = lines.slice(safeTop, safeTop + maxVisibleLines);
-    const scrollIndicatorTop = safeTop > 0;
-    const scrollIndicatorBottom = safeTop + maxVisibleLines < totalLines;
-
-    return visibleLines.map((line, vi) => {
-      const lineIdx = safeTop + vi;
-      if (lineIdx !== cursorRow) {
-        let out = line;
-        if (vi === 0 && scrollIndicatorTop) out = chalk.dim('↑') + out;
-        if (vi === visibleLines.length - 1 && scrollIndicatorBottom) out = out + chalk.dim('↓');
-        return out;
-      }
-      // Cursor line
-      let out = '';
-      for (let i = 0; i < line.length; i++) {
-        const char = line[i] ?? '';
-        out += i === cursorCol ? chalk.inverse(char) : char;
-      }
-      if (cursorCol >= line.length) out += chalk.inverse(' ');
-      if (vi === 0 && scrollIndicatorTop) out = chalk.dim('↑') + out;
-      if (vi === visibleLines.length - 1 && scrollIndicatorBottom) out = out + chalk.dim('↓');
-      return out;
-    });
-  }, [value, safeOffset, wrapWidth, viewportTop, maxVisibleLines, placeholder, focus, showCursor]);
+    // Text fits within viewport
+    return renderViewport();
+  }, [value, safeOffset, wrapWidth, viewportTop, maxVisibleLines, placeholder, focus, showCursor, prefixBadge]);
 
   if (renderedLines.length === 1) {
     return <Text>{renderedLines[0]}</Text>;

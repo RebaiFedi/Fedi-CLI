@@ -49,6 +49,7 @@ export class CodexAgent extends BaseExecAgent {
     if (eventType === 'thread.started' && typeof event.thread_id === 'string') {
       this.sessionId = event.thread_id;
       flog.info('AGENT', `[CODEX] Thread ID: ${this.sessionId}`);
+      this.emitCheckpoint(`[CODEX:started] Thread ${this.sessionId}`);
     }
 
     // Detect context/thread errors
@@ -120,6 +121,7 @@ export class CodexAgent extends BaseExecAgent {
             const suffix = itemStatus && itemStatus !== 'completed' ? ` (${itemStatus})` : '';
             this.emit({ text: `${formatted}${suffix}`, timestamp: Date.now(), type: 'system' });
           }
+          this.emitCheckpoint(`[CODEX:checkpoint] File ${action ?? 'change'}: ${filename}`);
           return;
         }
         // Codex CLI sends file_change with a "changes" array instead of top-level filename/action
@@ -139,6 +141,7 @@ export class CodexAgent extends BaseExecAgent {
                 const suffix = itemStatus && itemStatus !== 'completed' ? ` (${itemStatus})` : '';
                 this.emit({ text: `${formatted}${suffix}`, timestamp: Date.now(), type: 'system' });
               }
+              this.emitCheckpoint(`[CODEX:checkpoint] File ${act ?? 'change'}: ${file}`);
             } else {
               flog.warn('AGENT', `[CODEX] file_change entry — no file found. Keys: ${Object.keys(change).join(', ')}`);
             }
@@ -162,6 +165,7 @@ export class CodexAgent extends BaseExecAgent {
             const short = item.stderr.length > 200 ? item.stderr.slice(0, 200) + '...' : item.stderr;
             this.emit({ text: short, timestamp: Date.now(), type: 'info' });
           }
+          this.emitCheckpoint(`[CODEX:checkpoint] Command: ${command.slice(0, 100)}`);
           return;
         }
       }
@@ -173,6 +177,7 @@ export class CodexAgent extends BaseExecAgent {
         if (filename) {
           const formatted = formatAction('read', filename);
           if (formatted) this.emit({ text: formatted, timestamp: Date.now(), type: 'system' });
+          this.emitCheckpoint(`[CODEX:checkpoint] Read: ${filename}`);
           return;
         }
       }
@@ -202,14 +207,18 @@ export class CodexAgent extends BaseExecAgent {
 
     // turn.completed — extract usage info, mark waiting
     if (eventType === 'turn.completed') {
+      this.turnCompleted = true;
+      let tokenInfo = '';
       if (event.usage && typeof event.usage === 'object') {
         const usage = event.usage as Record<string, unknown>;
         const input = typeof usage.input_tokens === 'number' ? usage.input_tokens : undefined;
         const output = typeof usage.output_tokens === 'number' ? usage.output_tokens : undefined;
         if (input || output) {
+          tokenInfo = ` (${input ?? '?'} in / ${output ?? '?'} out tokens)`;
           flog.info('AGENT', `[CODEX] Usage: ${input ?? '?'} in / ${output ?? '?'} out tokens`);
         }
       }
+      this.emitCheckpoint(`[CODEX:done] Turn completed${tokenInfo}`);
       this.setStatus('waiting');
     }
   }

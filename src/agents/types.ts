@@ -35,7 +35,7 @@ export const MAX_RELAY_DEPTH = 5;
 export interface OutputLine {
   text: string;
   timestamp: number;
-  type: 'stdout' | 'stderr' | 'system' | 'relay' | 'info';
+  type: 'stdout' | 'stderr' | 'system' | 'relay' | 'info' | 'checkpoint';
 }
 
 // ── Session config ──────────────────────────────────────────────────────────

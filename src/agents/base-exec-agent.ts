@@ -25,6 +25,7 @@ export abstract class BaseExecAgent implements AgentProcess {
   protected systemPromptSent = false;
   protected contextReminder: string = '';
   protected muted = false;
+  protected turnCompleted = false;
   protected activeProcess: ChildProcess | null = null;
   /** Stored system prompt — fused with first send() to avoid a wasted exec() */
   private pendingSystemPrompt: string | null = null;
@@ -114,6 +115,15 @@ export abstract class BaseExecAgent implements AgentProcess {
   protected emit(line: OutputLine) {
     if (this.muted || this.stopped) return;
     this.outputHandlers.forEach((h) => h(line));
+  }
+
+  /** Emit a checkpoint event — bypasses the mute flag so checkpoints pass through
+   *  even when the agent is muted (relay buffering). Only stopped agents are silenced. */
+  protected emitCheckpoint(text: string) {
+    if (this.stopped) return;
+    this.outputHandlers.forEach((h) => h({
+      text, timestamp: Date.now(), type: 'checkpoint',
+    }));
   }
 
   onOutput(handler: (line: OutputLine) => void) {
@@ -321,6 +331,7 @@ export abstract class BaseExecAgent implements AgentProcess {
     return new Promise((resolve, reject) => {
       const args = this.buildArgs(prompt);
       const timeoutMs = (this.constructor as typeof BaseExecAgent).EXEC_TIMEOUT_MS;
+      this.turnCompleted = false;
 
       flog.info('AGENT',
         `${this.logTag}: Spawning: ${this.cliPath} ${args.slice(0, 3).join(' ')}... (prompt: ${prompt.slice(0, 80)})`,
@@ -335,7 +346,7 @@ export abstract class BaseExecAgent implements AgentProcess {
       });
 
       this.activeProcess = proc;
-      let fullStdout = '';
+      let hasOutput = false;
       let settled = false;
 
       // timeoutMs <= 0 means no timeout — wait indefinitely
@@ -353,7 +364,7 @@ export abstract class BaseExecAgent implements AgentProcess {
       const rl = createInterface({ input: proc.stdout! });
       rl.on('line', (line) => {
         if (!line.trim()) return;
-        fullStdout += line + '\n';
+        hasOutput = true;
         try {
           const event = JSON.parse(line);
           this.handleStreamEvent(event);
@@ -437,15 +448,15 @@ export abstract class BaseExecAgent implements AgentProcess {
           // If the agent already produced meaningful output, treat non-zero exit
           // as a warning rather than a fatal error (e.g. Codex reconnection failures
           // that happen AFTER the work was already completed successfully).
-          if (fullStdout.trim().length > 0) {
-            flog.warn('AGENT', `${this.logTag}: Non-zero exit code ${code} but has output (${fullStdout.length} chars) — treating as success`);
+          if (hasOutput) {
+            flog.warn('AGENT', `${this.logTag}: Non-zero exit code ${code} but has output — treating as success`);
             this.emit({
               text: `${this.logTag}: termine avec code ${code} (output present — traite comme succes)`,
               timestamp: Date.now(),
               type: 'info',
             });
             this.setStatus('waiting');
-            resolve(fullStdout);
+            resolve('');
             return;
           }
           flog.warn('AGENT', `${this.logTag}: Non-zero exit code: ${code}`);
@@ -461,7 +472,7 @@ export abstract class BaseExecAgent implements AgentProcess {
           return;
         }
         this.setStatus('waiting');
-        resolve(fullStdout);
+        resolve('');
       });
     });
   }

@@ -128,6 +128,12 @@ MESSAGES LIVE DU USER:
 - C'est un message URGENT du user qui arrive en temps reel. Lis-le et integre-le dans ton travail en cours.
 - Reponds naturellement, comme si le user venait de parler.
 
+CHECKPOINTS LIVE DES AGENTS:
+- Tu peux recevoir [CHECKPOINT:CODEX] ou [CHECKPOINT:SONNET] pendant qu'un agent travaille.
+- C'est une mise a jour de progres en temps reel. Ne reponds pas a chaque checkpoint.
+- Utilise ces infos pour savoir ou en est l'agent (fichiers lus, commandes executees, etc.)
+- Si un checkpoint indique un probleme, tu peux envoyer un message LIVE a l'agent.
+
 COMMUNICATION:
 - Au user: tu parles normalement, tu expliques le plan et le progres
 - A Sonnet: ecris le tag de delegation suivi de ton message, SEUL sur sa propre ligne
@@ -296,6 +302,11 @@ COLLABORATION DIRECTE AVEC SONNET (CROSS-TALK):
 MESSAGES LIVE DU USER:
 - Tu peux recevoir [LIVE MESSAGE DU USER] pendant que tu travailles.
 - C'est une instruction URGENTE du user. Lis-la et integre-la immediatement.
+
+PROGRESSION:
+- Le systeme envoie automatiquement des checkpoints a Opus pendant que tu travailles.
+- Opus peut voir en temps reel les fichiers que tu lis, les commandes que tu executes, etc.
+- Si Opus t'envoie un message LIVE pendant que tu travailles, integre-le immediatement.
 
 COMMUNICATION — SYNTAXE CRITIQUE:
 - Delegation de Opus: [FROM:OPUS] → travaille → [TO:OPUS] rapport

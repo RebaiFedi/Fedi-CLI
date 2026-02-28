@@ -108,8 +108,8 @@ export class Orchestrator {
   private readonly DELEGATE_IDLE_TIMEOUT_MS = _cfg.delegateTimeoutMs;
   /** How often (ms) to check if delegates are still alive */
   private readonly DELEGATE_HEARTBEAT_INTERVAL_MS = 10_000;
-  /** Grace period (ms) before safety-net auto-relay fires for spawn-per-exec agents */
-  private readonly SAFETY_NET_GRACE_MS = 3_000;
+  /** Debounce (ms) before safety-net auto-relay fires — universal for all agents */
+  private readonly SAFETY_NET_DEBOUNCE_MS = 500;
   /** Relay timeout follows the same timeout used for exec-based agents */
   private readonly RELAY_TIMEOUT_MS = _cfg.execTimeoutMs;
   private readonly MAX_OPUS_RESTARTS = 3;
@@ -140,6 +140,10 @@ export class Orchestrator {
    *  message takes priority and Opus should not interfere. Cleared on next user
    *  message or sendToAllDirect. */
   private directModeAgents: Set<AgentId> = new Set();
+  /** Timestamp of last checkpoint forwarded to Opus per agent — used for throttling */
+  private lastCheckpointForward: Map<AgentId, number> = new Map();
+  /** How often (ms) checkpoints are forwarded to Opus per agent */
+  private readonly CHECKPOINT_THROTTLE_MS = _cfg.checkpointThrottleMs;
 
   setConfig(config: Omit<SessionConfig, 'task'>) {
     this.config = config;
@@ -359,18 +363,23 @@ export class Orchestrator {
   }
 
   /** Bind output and status handlers for a worker agent.
-   *  Sonnet uses immediate auto-relay (stream-based); Codex uses timer-based safety-net. */
+   *  All agents use a universal debounce-based safety-net (500ms). */
   private bindWorkerAgent(agentId: AgentId, agent: AgentProcess, cb: OrchestratorCallbacks) {
     const label = agentId.charAt(0).toUpperCase() + agentId.slice(1);
-    // true for spawn-per-exec agents — they fire 'waiting' after EACH exec
-    const usesTimerSafetyNet = agentId === 'codex';
-    // For spawn-per-exec agents, cross-talk mute needs longer threshold before clearing
-    const crossTalkClearThreshold = usesTimerSafetyNet ? 2_000 : 3_000;
+    const crossTalkClearThreshold = 2_000;
 
     agent.onOutput((line) => {
       flog.debug('AGENT', 'Output', { agent: agentId, type: line.type, text: line.text.slice(0, 150) });
       // Keep heartbeat alive — agent is producing output
       this.recordDelegateActivity(agentId);
+      // Checkpoint passthrough — always forward to UI and optionally to Opus
+      if (line.type === 'checkpoint') {
+        cb.onAgentOutput(agentId, line);
+        if (this.expectedDelegates.has(agentId)) {
+          this.forwardCheckpointToOpus(agentId, line.text);
+        }
+        return;
+      }
       // Agent's report already delivered to Opus — mute ALL late output completely
       if (this.deliveredToOpus.has(agentId) && line.type === 'stdout') {
         flog.debug('ORCH', `${label} output MUTED (delivered to Opus): ${line.text.slice(0, 80)}`);
@@ -430,7 +439,7 @@ export class Orchestrator {
       // Keep heartbeat alive — agent status changed
       this.recordDelegateActivity(agentId);
       // Cancel safety-net timer when agent starts a new exec — it's still working
-      if (s === 'running' && usesTimerSafetyNet) {
+      if (s === 'running') {
         if (this.safetyNetTimers.has(agentId)) {
           flog.info('ORCH', `Safety-net cancelled for ${agentId} — agent resumed running`);
           this.clearSafetyNetTimer(agentId);
@@ -449,8 +458,8 @@ export class Orchestrator {
             if (this.pendingReportsForOpus.size >= this.expectedDelegates.size && this.expectedDelegates.size > 0) {
               this.deliverCombinedReportsToOpus();
             }
-          } else if (usesTimerSafetyNet) {
-            flog.info('ORCH', `Cross-talk mute kept for ${agentId} (status=${s}, elapsed=${elapsed}ms — too soon, likely stale exec)`);
+          } else {
+            flog.info('ORCH', `Cross-talk mute kept for ${agentId} (status=${s}, elapsed=${elapsed}ms — too soon)`);
           }
         }
       }
@@ -516,30 +525,24 @@ export class Orchestrator {
           this.flushOpusBuffer(this.callbacks);
         }
       }
-      // Safety net: auto-relay buffer when agent finishes relay without [TO:OPUS]
+      // Safety net: auto-relay buffer when agent finishes relay without [TO:OPUS].
+      // Universal debounce (500ms) for all agents — prevents false auto-relay
+      // when spawn-per-exec agents (Codex) fire 'waiting' between execs.
       if (s === 'waiting' && this.agentsOnRelay.has(agentId) && !this.awaitingCrossTalkReply.has(agentId)) {
-        if (usesTimerSafetyNet) {
-          // Spawn-per-exec: use timer with grace period (agent may fire 'waiting' multiple times).
-          // Always clear any previous timer (including retry timers) to prevent duplicates.
-          this.clearSafetyNetTimer(agentId);
-          const timer = setTimeout(() => {
-            this.safetyNetTimers.delete(agentId);
-            if (!this.agentsOnRelay.has(agentId) || this.pendingReportsForOpus.has(agentId)) return;
-            // If the agent is still running (new exec started), do NOT flush yet —
-            // re-schedule so we wait for the agent to truly finish.
-            const agentInstance = this.getAgent(agentId);
-            if (agentInstance.status === 'running') {
-              flog.info('ORCH', `Safety-net deferred for ${agentId} — agent still running (new exec in progress)`);
-              // Don't create nested timers — let the next 'waiting' status re-trigger this block
-              return;
-            }
-            this.autoRelayBuffer(agentId);
-          }, this.SAFETY_NET_GRACE_MS);
-          this.safetyNetTimers.set(agentId, timer);
-        } else {
-          // Stream-based (Sonnet): immediate auto-relay is safe
+        this.clearSafetyNetTimer(agentId);
+        const timer = setTimeout(() => {
+          this.safetyNetTimers.delete(agentId);
+          if (!this.agentsOnRelay.has(agentId) || this.pendingReportsForOpus.has(agentId)) return;
+          // If the agent is still running (new exec started), do NOT flush yet —
+          // let the next 'waiting' status re-trigger this block.
+          const agentInstance = this.getAgent(agentId);
+          if (agentInstance.status === 'running') {
+            flog.info('ORCH', `Safety-net deferred for ${agentId} — agent still running`);
+            return;
+          }
           this.autoRelayBuffer(agentId);
-        }
+        }, this.SAFETY_NET_DEBOUNCE_MS);
+        this.safetyNetTimers.set(agentId, timer);
       }
       cb.onAgentStatus(agentId, s);
     });
@@ -852,6 +855,7 @@ export class Orchestrator {
     // so that setDirectMode() called before restart() is preserved. It is cleared
     // explicitly in sendUserMessage(), sendToAllDirect(), and stop().
     this.lastDelegationContent.clear();
+    this.lastCheckpointForward.clear();
     this.relayDrafts.clear();
     for (const timer of this.relayDraftTimers.values()) clearTimeout(timer);
     this.relayDraftTimers.clear();
@@ -1359,6 +1363,20 @@ export class Orchestrator {
     }
   }
 
+  /** Forward a checkpoint from a worker agent to Opus via sendUrgent.
+   *  Throttled per agent to avoid flooding Opus with too many checkpoints. */
+  private forwardCheckpointToOpus(agentId: AgentId, text: string) {
+    const now = Date.now();
+    const lastForward = this.lastCheckpointForward.get(agentId) ?? 0;
+    if (now - lastForward < this.CHECKPOINT_THROTTLE_MS) return;
+    this.lastCheckpointForward.set(agentId, now);
+    const tag = `[CHECKPOINT:${agentId.toUpperCase()}]`;
+    if (this.opus.status === 'running') {
+      this.opus.sendUrgent(`${tag} ${text}`);
+    }
+    flog.debug('ORCH', `Forwarded checkpoint to Opus: ${tag} ${text.slice(0, 80)}`);
+  }
+
   /** Extract buffered text for an agent and handle auto-relay or combined delivery */
   private autoRelayBuffer(agent: AgentId) {
     const buffer = this.relayBuffer.get(agent) ?? [];
@@ -1525,6 +1543,7 @@ export class Orchestrator {
     this.expectedDelegates.clear();
     this.pendingReportsForOpus.clear();
     this.crossTalkCount = 0;
+    this.lastCheckpointForward.clear();
     // Clear @tous mode — Opus buffering returns to normal
     this.opusAllMode = false;
     // Clear delegate heartbeat — delivery complete
