@@ -38,13 +38,12 @@ export abstract class BaseAppServerAgent implements AgentProcess {
   private systemPromptSent = false;
   private contextReminder = '';
   /**
-   * When the first turn fuses the system prompt, the server echoes back
-   * the user message as an item/completed (type=message or agentMessage).
-   * We must suppress that echo so the system prompt doesn't leak to the UI.
-   * This flag is set true when the fused turn starts, and cleared after
-   * the first user-message echo is consumed.
+   * Counter of user-message echoes to suppress.
+   * The server echoes back the user input as an item/completed for EVERY turn.
+   * Each startTurn() increments this counter; each consumed echo decrements it.
+   * This handles the case where multiple turns are started rapidly (e.g. resume + send).
    */
-  private suppressNextUserEcho = false;
+  private suppressUserEchoCount = 0;
   /**
    * Accumulates streaming deltas from item/agentMessage/delta.
    * Instead of emitting each token as a separate line (which makes "Salut . Que veux -tu ..."
@@ -235,6 +234,7 @@ export abstract class BaseAppServerAgent implements AgentProcess {
       const resumeMsg = options?.muted
         ? '[Session reprise] Tu es en standby. Attends une tache.'
         : '[Session reprise] Continue ton travail.';
+      this.suppressUserEchoCount++;
       this.startTurn(resumeMsg);
     } else {
       // First start — store system prompt, fuse with first send()
@@ -262,7 +262,7 @@ export abstract class BaseAppServerAgent implements AgentProcess {
     }
 
     // The server echoes back the user message as item/completed for EVERY turn — suppress it
-    this.suppressNextUserEcho = true;
+    this.suppressUserEchoCount++;
 
     // Drain urgent queue
     if (this.urgentQueue.length > 0) {
@@ -599,8 +599,8 @@ export abstract class BaseAppServerAgent implements AgentProcess {
     // Agent message — final text
     if (itemType === 'agent_message' || itemType === 'agentMessage') {
       // Suppress the first echo of the fused system prompt + task
-      if (this.suppressNextUserEcho) {
-        this.suppressNextUserEcho = false;
+      if (this.suppressUserEchoCount > 0) {
+        this.suppressUserEchoCount--;
         this.agentMessageBuffer = '';
         this.hadAgentMessageDeltas = false;
         flog.debug('AGENT', `${this.logTag}: Suppressed user-message echo (fused system prompt)`);
@@ -621,8 +621,8 @@ export abstract class BaseAppServerAgent implements AgentProcess {
     // OpenAI Responses API message types
     if (itemType === 'message' || itemType === 'output_message') {
       // Suppress the first echo of the fused system prompt + task
-      if (this.suppressNextUserEcho) {
-        this.suppressNextUserEcho = false;
+      if (this.suppressUserEchoCount > 0) {
+        this.suppressUserEchoCount--;
         this.agentMessageBuffer = '';
         this.hadAgentMessageDeltas = false;
         flog.debug('AGENT', `${this.logTag}: Suppressed user-message echo (fused system prompt)`);
@@ -698,8 +698,8 @@ export abstract class BaseAppServerAgent implements AgentProcess {
 
     // Generic content array — but not if we're suppressing a user echo
     if (Array.isArray(item.content)) {
-      if (this.suppressNextUserEcho) {
-        this.suppressNextUserEcho = false;
+      if (this.suppressUserEchoCount > 0) {
+        this.suppressUserEchoCount--;
         flog.debug('AGENT', `${this.logTag}: Suppressed user-message echo (content array, fused system prompt)`);
         return;
       }
@@ -712,8 +712,8 @@ export abstract class BaseAppServerAgent implements AgentProcess {
     }
 
     // Catch-all text extraction — but not if we're suppressing a user echo
-    if (this.suppressNextUserEcho) {
-      this.suppressNextUserEcho = false;
+    if (this.suppressUserEchoCount > 0) {
+      this.suppressUserEchoCount--;
       flog.debug('AGENT', `${this.logTag}: Suppressed user-message echo (catch-all, fused system prompt)`);
       return;
     }
