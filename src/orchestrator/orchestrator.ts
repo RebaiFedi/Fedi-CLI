@@ -127,12 +127,17 @@ export class Orchestrator {
   private relayDraftTimers: Map<AgentId, ReturnType<typeof setTimeout>> = new Map();
   /** How many consecutive empty-content flushes we've deferred (per agent). */
   private relayDraftEmptyRetries: Map<AgentId, number> = new Map();
-  private readonly RELAY_DRAFT_FLUSH_MS = 60;
+  private readonly RELAY_DRAFT_FLUSH_MS = 150;
   /** Max consecutive empty retries before we give up and flush (prevents leaks). */
-  private readonly RELAY_DRAFT_MAX_EMPTY_RETRIES = 8;
+  private readonly RELAY_DRAFT_MAX_EMPTY_RETRIES = 12;
   /** When true, Opus stdout is NOT buffered even when delegates are pending.
    *  Set by sendToAllDirect so the user sees Opus working in real-time (@tous mode). */
   private opusAllMode = false;
+  /** Agents the user is talking to directly (@codex, @claude).
+   *  While set, relays FROM Opus TO this agent are BLOCKED — the user's direct
+   *  message takes priority and Opus should not interfere. Cleared on next user
+   *  message or sendToAllDirect. */
+  private directModeAgents: Set<AgentId> = new Set();
 
   setConfig(config: Omit<SessionConfig, 'task'>) {
     this.config = config;
@@ -628,8 +633,9 @@ export class Orchestrator {
   }
 
   sendUserMessage(text: string) {
-    // Normal user message to Opus — exit @tous mode
+    // Normal user message to Opus — exit @tous mode and direct mode
     this.opusAllMode = false;
+    this.directModeAgents.clear();
     // If Opus is actively running, inject LIVE instead of queuing behind PQueue
     if (this.opus.status === 'running') {
       this.sendUserMessageLive(text, 'opus');
@@ -650,6 +656,14 @@ export class Orchestrator {
     }
   }
 
+  /** Mark an agent as being in direct-mode (user is speaking to it via @agent).
+   *  While active, relays from Opus to this agent are blocked. */
+  setDirectMode(agent: AgentId) {
+    if (agent !== 'opus') {
+      this.directModeAgents.add(agent);
+    }
+  }
+
   sendToAgent(agent: AgentId, text: string) {
     // User speaking directly to agent — clear relay mute and flush buffer
     this.agentsOnRelay.delete(agent);
@@ -658,6 +672,10 @@ export class Orchestrator {
     this.expectedDelegates.delete(agent);
     this.pendingReportsForOpus.delete(agent);
     this.deliveredToOpus.delete(agent);
+    // Block Opus from relaying TO this agent — user has priority
+    if (agent !== 'opus') {
+      this.directModeAgents.add(agent);
+    }
     // Cancel safety-net timer
     const timer = this.safetyNetTimers.get(agent);
     if (timer) { clearTimeout(timer); this.safetyNetTimers.delete(agent); }
@@ -688,6 +706,7 @@ export class Orchestrator {
     this.pendingReportsForOpus.clear();
     this.deliveredToOpus.clear();
     this.relayDrafts.clear();
+    this.directModeAgents.clear();
     this.crossTalkCount = 0;
     // Cancel all safety-net timers
     for (const timer of this.safetyNetTimers.values()) clearTimeout(timer);
@@ -755,6 +774,9 @@ export class Orchestrator {
     this.deliveredToOpus.clear();
     this.crossTalkCount = 0;
     this.opusAllMode = false;
+    // NOTE: directModeAgents is NOT cleared here — it must survive across restart()
+    // so that setDirectMode() called before restart() is preserved. It is cleared
+    // explicitly in sendUserMessage(), sendToAllDirect(), and stop().
     this.lastDelegationContent.clear();
     this.relayDrafts.clear();
     for (const timer of this.relayDraftTimers.values()) clearTimeout(timer);
@@ -809,6 +831,13 @@ export class Orchestrator {
   private routeRelayMessage(from: AgentId, target: AgentId, rawContent: string) {
     const content = rawContent.trim();
     if (!content) return;
+
+    // Block Opus→agent relays when the user is speaking directly to that agent.
+    // This prevents Opus from interfering with @codex / @claude direct messages.
+    if (from === 'opus' && this.directModeAgents.has(target)) {
+      flog.info('RELAY', `BLOCKED ${from}->${target} (user speaking directly to ${target}): ${content.slice(0, 80)}`);
+      return;
+    }
 
     flog.info('RELAY', `${from}->${target}: ${content.slice(0, 80)}`);
 
@@ -916,19 +945,18 @@ export class Orchestrator {
     const content = draft.parts.join('\n').trim();
 
     if (!content) {
-      if (!force) {
-        // Timer-based flush with empty content — more data may still be arriving.
-        // Re-schedule instead of dropping, up to a maximum retry count.
-        const retries = this.relayDraftEmptyRetries.get(from) ?? 0;
-        if (retries < this.RELAY_DRAFT_MAX_EMPTY_RETRIES) {
-          this.relayDraftEmptyRetries.set(from, retries + 1);
-          flog.debug('RELAY', `Draft for ${from}->${draft.target} still empty, retry ${retries + 1}/${this.RELAY_DRAFT_MAX_EMPTY_RETRIES}`);
-          this.scheduleRelayDraftFlush(from);
-          return false;
-        }
-        flog.debug('RELAY', `Draft for ${from}->${draft.target} empty after max retries, dropping`);
+      // Empty content — more data may still be arriving (especially for API-based
+      // agents like Codex that can have large gaps between stream chunks).
+      // Re-schedule instead of dropping, up to a maximum retry count.
+      const retries = this.relayDraftEmptyRetries.get(from) ?? 0;
+      if (retries < this.RELAY_DRAFT_MAX_EMPTY_RETRIES) {
+        this.relayDraftEmptyRetries.set(from, retries + 1);
+        flog.debug('RELAY', `Draft for ${from}->${draft.target} still empty, retry ${retries + 1}/${this.RELAY_DRAFT_MAX_EMPTY_RETRIES} (force=${force})`);
+        this.scheduleRelayDraftFlush(from);
+        return false;
       }
-      // Force flush or max retries reached — discard the empty draft.
+      flog.debug('RELAY', `Draft for ${from}->${draft.target} empty after max retries, dropping`);
+      // Max retries reached — discard the empty draft.
       this.relayDrafts.delete(from);
       this.relayDraftEmptyRetries.delete(from);
       return false;
@@ -1381,6 +1409,7 @@ export class Orchestrator {
     this.pendingReportsForOpus.clear();
     this.deliveredToOpus.clear();
     this.opusAllMode = false;
+    this.directModeAgents.clear();
     this.relayDrafts.clear();
     for (const timer of this.relayDraftTimers.values()) clearTimeout(timer);
     this.relayDraftTimers.clear();

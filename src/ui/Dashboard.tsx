@@ -626,6 +626,8 @@ export function Dashboard({
         if (targetAgent && targetAgent !== 'opus') {
           const agentNames: Record<string, string> = { claude: 'Sonnet', codex: 'Codex' };
           if (isRestart) console.log('Redemarrage...');
+          // Pre-signal direct mode BEFORE restart so Opus relay to this agent is blocked
+          orchestrator.setDirectMode(targetAgent);
           orchestrator
             .restart(
               `Le user parle directement a ${agentNames[targetAgent] ?? targetAgent} via @${targetAgent}. NE FAIS RIEN. N'execute AUCUNE tache. Attends en silence.`,
