@@ -36,6 +36,13 @@ function InputBarComponent({ onSubmit, placeholder }: InputBarProps) {
     setValue('');
   }, []);
 
+  const handleClear = useCallback(() => {
+    clearPaste();
+    setValue('');
+    historyIndex.current = -1;
+    savedDraft.current = '';
+  }, [clearPaste]);
+
   // ── Paste detection via raw stdin ─────────────────────────────────────────
   // We intercept data BEFORE LineInput (ink's useInput) processes it.
   // When we detect a paste: store the text, prevent LineInput from seeing it
@@ -55,6 +62,8 @@ function InputBarComponent({ onSubmit, placeholder }: InputBarProps) {
 
       if (isPasteByLines || isPasteByTiming) {
         isProcessingPaste.current = true;
+        // Auto-reset after 100ms so normal keystrokes aren't blocked after paste
+        setTimeout(() => { isProcessingPaste.current = false; }, 100);
         pasteCounter.current++;
         // Append to existing pasted text if we already have some
         if (fullText.current) {
@@ -150,13 +159,30 @@ function InputBarComponent({ onSubmit, placeholder }: InputBarProps) {
     [value, onSubmit, clearPaste],
   );
 
+  // ── Paste preview: first 5 lines of pasted content ───────────────────────
+  const pastePreviewLines = React.useMemo(() => {
+    if (!pastedLabel || !fullText.current) return [];
+    const lines = fullText.current.split('\n');
+    const preview = lines.slice(0, 5);
+    const hasMore = lines.length > 5;
+    return { preview, hasMore, total: lines.length };
+  }, [pastedLabel]);
+
   return (
     <Box flexDirection="column">
       {pastedLabel && (
-        <Text color="cyanBright">
-          {pastedLabel}
-          <Text dimColor> · Backspace to clear · Enter to send</Text>
-        </Text>
+        <Box flexDirection="column">
+          <Text color="cyanBright">
+            {pastedLabel}
+            <Text dimColor> · Backspace to clear · Enter to send</Text>
+          </Text>
+          {pastePreviewLines && pastePreviewLines.preview.map((line, i) => (
+            <Text key={i} dimColor>{'  '}{line}</Text>
+          ))}
+          {pastePreviewLines && pastePreviewLines.hasMore && (
+            <Text dimColor>{'  '}... ({pastePreviewLines.total - 5} more lines)</Text>
+          )}
+        </Box>
       )}
       <LineInput
         value={value}
@@ -164,6 +190,7 @@ function InputBarComponent({ onSubmit, placeholder }: InputBarProps) {
         onSubmit={handleSubmit}
         onHistoryPrev={handleHistoryPrev}
         onHistoryNext={handleHistoryNext}
+        onClear={handleClear}
         placeholder={
           pastedLabel ? 'Add a comment or press Enter to send' : (placeholder ?? 'Type your message...')
         }

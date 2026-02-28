@@ -95,6 +95,13 @@ export function Dashboard({
   const pendingActions = useRef<Map<AgentId, string[]>>(new Map());
   /** Last time we printed an action summary for each agent — throttle to avoid spam */
   const lastActionPrint = useRef<Map<AgentId, number>>(new Map());
+  /**
+   * Buffer of [TASK:done] tags emitted by agent sub-agents (claude/codex) during
+   * their current turn. We accumulate them and apply all at once when the agent
+   * finishes (idle/waiting/stopped) so the progress bar jumps 0/N → N/N in one
+   * render instead of stepping 1/N, 2/N … N/N.
+   */
+  const pendingAgentDones = useRef<Map<AgentId, string[]>>(new Map());
   /** Debounce timer for clearing the thinking spinner (avoids flicker between agent transitions) */
   const thinkingClearTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   /** Prevents double-shutdown on repeated SIGINT — must be a ref to survive re-renders */
@@ -289,9 +296,45 @@ export function Dashboard({
     }
   });
 
+  /**
+   * Apply a list of done-texts to the current todos list (pure updater).
+   * Used both for immediate (opus/user) and batched (claude/codex) completion.
+   */
+  const applyDones = useCallback((dones: string[]) => {
+    if (dones.length === 0) return;
+    setTodos((prev) => {
+      let updated = [...prev];
+      for (const done of dones) {
+        const lower = done.toLowerCase();
+        // 1. Exact substring match (done text inside todo text)
+        let idx = updated.findIndex((t) => !t.done && t.text.toLowerCase().includes(lower));
+        // 2. Reverse match (todo text inside done text)
+        if (idx === -1) {
+          idx = updated.findIndex((t) => !t.done && lower.includes(t.text.toLowerCase()));
+        }
+        // 3. Fuzzy word match (at least 1 significant word overlap for short texts, 2 for longer)
+        if (idx === -1) {
+          const doneWords = lower.split(/\s+/).filter((w) => w.length > 3);
+          const threshold = doneWords.length <= 2 ? 1 : 2;
+          idx = updated.findIndex((t) => {
+            if (t.done) return false;
+            const todoLower = t.text.toLowerCase();
+            const matchCount = doneWords.filter((w) => todoLower.includes(w)).length;
+            return matchCount >= threshold;
+          });
+        }
+        if (idx !== -1) updated[idx] = { ...updated[idx]!, done: true };
+      }
+      return updated;
+    });
+  }, []);
+
   const processTaskTags = useCallback((agent: AgentId, text: string) => {
     const { adds, dones } = extractTasks(text);
-    if (adds.length > 0 || dones.length > 0) {
+    if (adds.length === 0 && dones.length === 0) return;
+
+    // ── Adds: always immediate (any agent) ───────────────────────────────────
+    if (adds.length > 0) {
       setTodos((prev) => {
         let updated = [...prev];
         let hasNewItems = false;
@@ -302,31 +345,22 @@ export function Dashboard({
           }
         }
         if (hasNewItems) setTodosHiddenAt(0);
-        for (const done of dones) {
-          const lower = done.toLowerCase();
-          // 1. Exact substring match (done text inside todo text)
-          let idx = updated.findIndex((t) => !t.done && t.text.toLowerCase().includes(lower));
-          // 2. Reverse match (todo text inside done text)
-          if (idx === -1) {
-            idx = updated.findIndex((t) => !t.done && lower.includes(t.text.toLowerCase()));
-          }
-          // 3. Fuzzy word match (at least 1 significant word overlap for short texts, 2 for longer)
-          if (idx === -1) {
-            const doneWords = lower.split(/\s+/).filter((w) => w.length > 3);
-            const threshold = doneWords.length <= 2 ? 1 : 2;
-            idx = updated.findIndex((t) => {
-              if (t.done) return false;
-              const todoLower = t.text.toLowerCase();
-              const matchCount = doneWords.filter((w) => todoLower.includes(w)).length;
-              return matchCount >= threshold;
-            });
-          }
-          if (idx !== -1) updated[idx] = { ...updated[idx], done: true };
-        }
         return updated;
       });
     }
-  }, []);
+
+    // ── Dones: batch for sub-agents (claude/codex), immediate for opus/user ──
+    if (dones.length > 0) {
+      if (agent === 'claude' || agent === 'codex') {
+        // Accumulate — will be flushed as a single update when agent finishes
+        const existing = pendingAgentDones.current.get(agent) ?? [];
+        pendingAgentDones.current.set(agent, [...existing, ...dones]);
+      } else {
+        // Opus or user-triggered: apply immediately
+        applyDones(dones);
+      }
+    }
+  }, [applyDones]);
 
   useEffect(() => {
     orchestrator.setConfig({ projectDir, claudePath, codexPath });
@@ -385,6 +419,17 @@ export function Dashboard({
           status === 'error' ||
           status === 'stopped'
         ) {
+          // ── Flush batched [TASK:done] for sub-agents (claude/codex) ─────────
+          // Apply all accumulated completions in a single setState call so the
+          // progress bar jumps from 0/N straight to N/N (no intermediate steps).
+          if (agent === 'claude' || agent === 'codex') {
+            const buffered = pendingAgentDones.current.get(agent);
+            if (buffered && buffered.length > 0) {
+              pendingAgentDones.current.set(agent, []);
+              applyDones(buffered);
+            }
+          }
+
           if (flushTimer.current) {
             clearTimeout(flushTimer.current);
             flushBuffer();
@@ -515,6 +560,7 @@ export function Dashboard({
     processTaskTags,
     enqueueOutput,
     flushBuffer,
+    applyDones,
   ]);
 
   const handleInput = useCallback(
@@ -585,6 +631,7 @@ export function Dashboard({
           setStopped(false);
           stoppedRef.current = false;
           setTodos([]);
+          pendingAgentDones.current.clear();
           if (isRestart) console.log('Redemarrage...');
           // Pass the real message as Opus startup task so Opus also participates
           orchestrator
@@ -623,6 +670,7 @@ export function Dashboard({
         setStopped(false);
         stoppedRef.current = false;
         setTodos([]);
+        pendingAgentDones.current.clear();
         if (targetAgent && targetAgent !== 'opus') {
           const agentNames: Record<string, string> = { claude: 'Sonnet', codex: 'Codex' };
           if (isRestart) console.log('Redemarrage...');

@@ -17,6 +17,8 @@ interface LineInputProps {
   onHistoryPrev?: () => void;
   /** Called when down arrow is pressed on the last line (for history navigation) */
   onHistoryNext?: () => void;
+  /** Called when Escape or Ctrl+L is pressed — clear input and paste */
+  onClear?: () => void;
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
@@ -118,6 +120,7 @@ export function LineInput({
   onSubmit,
   onHistoryPrev,
   onHistoryNext,
+  onClear,
 }: LineInputProps) {
   const { stdout } = useStdout();
   const [cursorOffset, setCursorOffset] = useState(value.length);
@@ -146,6 +149,15 @@ export function LineInput({
       (input: string, key: Key) => {
         // Let Ink / app handle these globally
         if ((key.ctrl && input === 'c') || key.tab || (key.shift && key.tab)) return;
+
+        // ── Clear all (Escape or Ctrl+L) ──
+        if (key.escape || (key.ctrl && input === 'l')) {
+          onChange('');
+          setCursorOffset(0);
+          setViewportTop(0);
+          onClear?.();
+          return;
+        }
 
         // ── Submit ──
         if (key.return) {
@@ -223,10 +235,28 @@ export function LineInput({
               nextValue = value.slice(0, safeOffset - 1) + value.slice(safeOffset);
               nextOffset = safeOffset - 1;
             }
+          } else {
+            // Cursor at position 0 — nothing to delete, but emit onChange('')
+            // so InputBar can detect the backspace and trigger clearPaste.
+            onChange(value);
+            return;
           }
         } else if (key.delete) {
-          if (safeOffset < value.length) {
-            nextValue = value.slice(0, safeOffset) + value.slice(safeOffset + 1);
+          // Terminal sends \x7f for physical Backspace — Ink maps it to key.delete.
+          // Treat it identically to key.backspace: delete the char to the LEFT.
+          if (safeOffset > 0) {
+            if (key.ctrl || key.meta) {
+              const wordStart = findWordLeft(value, safeOffset);
+              nextValue = value.slice(0, wordStart) + value.slice(safeOffset);
+              nextOffset = wordStart;
+            } else {
+              nextValue = value.slice(0, safeOffset - 1) + value.slice(safeOffset);
+              nextOffset = safeOffset - 1;
+            }
+          } else {
+            // Same as backspace at position 0: signal InputBar to clearPaste.
+            onChange(value);
+            return;
           }
         } else if (key.ctrl && input === 'w') {
           if (safeOffset > 0) {
@@ -265,7 +295,7 @@ export function LineInput({
           return top;
         });
       },
-      [value, safeOffset, wrapWidth, multiline, maxVisibleLines, onChange, onSubmit, onHistoryPrev, onHistoryNext],
+      [value, safeOffset, wrapWidth, multiline, maxVisibleLines, onChange, onSubmit, onHistoryPrev, onHistoryNext, onClear],
     ),
     { isActive: focus },
   );
