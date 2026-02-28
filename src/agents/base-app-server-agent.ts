@@ -259,9 +259,10 @@ export abstract class BaseAppServerAgent implements AgentProcess {
       flog.info('AGENT', `${this.logTag}: Fused system prompt with first task`);
       this.pendingSystemPrompt = null;
       this.systemPromptSent = true;
-      // The server will echo the user message back as item/completed — suppress it
-      this.suppressNextUserEcho = true;
     }
+
+    // The server echoes back the user message as item/completed for EVERY turn — suppress it
+    this.suppressNextUserEcho = true;
 
     // Drain urgent queue
     if (this.urgentQueue.length > 0) {
