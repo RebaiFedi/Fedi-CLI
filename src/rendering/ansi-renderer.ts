@@ -1,5 +1,5 @@
 import chalk from 'chalk';
-import type { DisplayEntry } from '../agents/types.js';
+import type { DisplayEntry, ToolAction } from '../agents/types.js';
 import { stripAnsi } from '../utils/strip-ansi.js';
 import { THEME } from '../config/theme.js';
 import { INDENT, MAX_READABLE_WIDTH } from '../config/constants.js';
@@ -42,37 +42,83 @@ function isTableLine(text: string): boolean {
          t.startsWith('┌') || t.startsWith('├') || t.startsWith('└');
 }
 
-// ── Action line formatter ────────────────────────────────────────────────────
-// Parses "Read · /path/to/file" or "Bash · command" style actions and formats
-// them with icon + color to look pro.
+// ── Tool icons & colors ─────────────────────────────────────────────────────
 
-const ACTION_PATTERNS: Array<{ re: RegExp; icon: string; label?: string }> = [
-  { re: /^(Read|reading|Lire|lecture)\s*[·:·]\s*/i, icon: '  ↳', label: 'Read' },
-  { re: /^(Glob|glob)\s*[·:·]\s*/i, icon: '  ↳', label: 'Glob' },
-  { re: /^(Grep|grep)\s*[·:·]\s*/i, icon: '  ↳', label: 'Grep' },
-  { re: /^(Write|write|Écriture|ecriture)\s*[·:·]\s*/i, icon: '  ↳', label: 'Write' },
-  { re: /^(Edit|edit|Modifier)\s*[·:·]\s*/i, icon: '  ↳', label: 'Edit' },
-  { re: /^(Bash|bash|cmd|exec)\s*[·:·]\s*/i, icon: '  ↳', label: 'Exec' },
-  { re: /^(WebFetch|fetch|Fetch)\s*[·:·]\s*/i, icon: '  ↳', label: 'Fetch' },
-  { re: /^(Agent|agent)\s*[·:·]\s*/i, icon: '  ↳', label: 'Agent' },
-  { re: /^(TodoWrite|todo)\s*[·:·]\s*/i, icon: '  ↳', label: 'Todo' },
+const TOOL_STYLES: Record<ToolAction, { icon: string; label: string; color: string }> = {
+  read:   { icon: '📄', label: 'Read',   color: '#38BDF8' },  // sky blue
+  write:  { icon: '✏️',  label: 'Write',  color: '#A78BFA' },  // violet
+  create: { icon: '✨', label: 'Create', color: '#34D399' },  // emerald
+  edit:   { icon: '📝', label: 'Edit',   color: '#FBBF24' },  // amber
+  delete: { icon: '🗑️',  label: 'Delete', color: '#F87171' },  // red
+  bash:   { icon: '▶',  label: 'Exec',   color: '#6EE7B7' },  // green
+  glob:   { icon: '🔍', label: 'Search', color: '#93C5FD' },  // blue
+  grep:   { icon: '🔎', label: 'Grep',   color: '#93C5FD' },  // blue
+  fetch:  { icon: '🌐', label: 'Fetch',  color: '#67E8F9' },  // cyan
+  agent:  { icon: '🤖', label: 'Agent',  color: '#C4B5FD' },  // purple
+  todo:   { icon: '☑️',  label: 'Todo',   color: '#FCD34D' },  // yellow
+  list:   { icon: '📂', label: 'List',   color: '#38BDF8' },
+  search: { icon: '🔍', label: 'Search', color: '#93C5FD' },
+};
+
+// ── Action line formatter (fallback for actions without rich meta) ───────────
+
+const ACTION_PATTERNS: Array<{ re: RegExp; tool: ToolAction }> = [
+  { re: /^(Read|reading|Lire|lecture)\s*[·:·]\s*/i, tool: 'read' },
+  { re: /^(Glob|glob)\s*[·:·]\s*/i, tool: 'glob' },
+  { re: /^(Grep|grep)\s*[·:·]\s*/i, tool: 'grep' },
+  { re: /^(Write|write|Écriture|ecriture)\s*[·:·]\s*/i, tool: 'write' },
+  { re: /^(Edit|edit|Modifier)\s*[·:·]\s*/i, tool: 'edit' },
+  { re: /^(Bash|bash|cmd|exec)\s*[·:·]\s*/i, tool: 'bash' },
+  { re: /^(WebFetch|fetch|Fetch)\s*[·:·]\s*/i, tool: 'fetch' },
+  { re: /^(Agent|agent)\s*[·:·]\s*/i, tool: 'agent' },
+  { re: /^(TodoWrite|todo)\s*[·:·]\s*/i, tool: 'todo' },
 ];
 
 function formatActionLine(text: string, maxW: number): string {
   const trimmed = text.trim();
 
-  for (const { re, icon, label } of ACTION_PATTERNS) {
+  for (const { re, tool } of ACTION_PATTERNS) {
     if (re.test(trimmed)) {
       const value = trimmed.replace(re, '').trim();
-      const labelStr = chalk.hex(THEME.actionIcon)(label ?? icon);
+      const style = TOOL_STYLES[tool];
+      const labelStr = chalk.hex(style.color).bold(style.label);
       const short = value.length > maxW - 20 ? value.slice(0, maxW - 23) + '…' : value;
-      return `${icon} ${labelStr} ${chalk.hex(THEME.actionValue)(short)}`;
+      return `  ${chalk.hex(style.color)(style.icon)} ${labelStr} ${chalk.hex(THEME.actionValue)(short)}`;
     }
   }
 
   // Generic action — dim with left marker
   const short = trimmed.length > maxW - 6 ? trimmed.slice(0, maxW - 9) + '…' : trimmed;
   return `  ${chalk.dim('↳')} ${chalk.hex(THEME.actionText)(short)}`;
+}
+
+// ── Tool header formatter (rich metadata) ────────────────────────────────────
+
+function formatToolHeader(text: string, tool: ToolAction, maxW: number): string[] {
+  const style = TOOL_STYLES[tool];
+  // Extract the file/command from the raw text (format: "▸ verb path/to/file")
+  const detail = text.replace(/^▸\s*\S+\s*/, '').trim();
+  const short = detail.length > maxW - 20 ? detail.slice(0, maxW - 23) + '…' : detail;
+
+  const icon = chalk.hex(style.color)(style.icon);
+  const label = chalk.hex(style.color).bold(style.label);
+  const value = chalk.hex('#E2E8F0')(short);
+
+  return [`${INDENT}  ${icon} ${label} ${value}`];
+}
+
+// ── Diff line formatters ─────────────────────────────────────────────────────
+
+function formatDiffOld(text: string, maxW: number): string {
+  const clipped = text.length > maxW - 8 ? text.slice(0, maxW - 11) + '…' : text;
+  const border = chalk.hex('#7F1D1D')('│');
+  return `${INDENT}    ${border} ${chalk.hex('#EF4444')(`- ${clipped}`)}`;
+}
+
+function formatDiffNew(text: string, maxW: number): string {
+  const clipped = text.length > maxW - 8 ? text.slice(0, maxW - 11) + '…' : text;
+  const border = chalk.hex('#14532D')('│');
+  return `${INDENT}    ${border} ${chalk.hex('#22C55E')(`+ ${clipped}`)}`;
 }
 
 // ── Entry renderer ───────────────────────────────────────────────────────────
@@ -102,6 +148,21 @@ export function entryToAnsiLines(
     return wordWrap(raw, wrapW, contIndent);
   }
 
+  // Rich tool header (from toolMeta)
+  if (e.kind === 'tool-header') {
+    const tool = e.tool ?? 'read';
+    return formatToolHeader(e.text, tool, maxW);
+  }
+
+  // Diff lines
+  if (e.kind === 'diff-old') {
+    return [formatDiffOld(e.text, maxW)];
+  }
+  if (e.kind === 'diff-new') {
+    return [formatDiffNew(e.text, maxW)];
+  }
+
+  // Legacy action (without rich metadata)
   if (e.kind === 'action') {
     const formatted = formatActionLine(e.text, maxW);
     return [`${INDENT}${formatted}`];
@@ -113,16 +174,16 @@ export function entryToAnsiLines(
     const lines = e.text.split('\n');
     return lines.map((l) => {
       const visLen = stripAnsi(l).length;
-      const clipped = visLen > maxW - 4 ? l.slice(0, maxW - 7) + '…' : l;
-      return `${INDENT}${border} ${chalk.hex(THEME.info)(clipped)}`;
+      const clipped = visLen > maxW - 6 ? l.slice(0, maxW - 9) + '…' : l;
+      return `${INDENT} ${border} ${chalk.hex(THEME.info)(clipped)}`;
     });
   }
 
   if (e.kind === 'separator') {
-    // Thin horizontal rule
+    // Thin horizontal rule — code block delimiters or markdown hr
     const width = Math.min(maxW, 48);
     const rule = chalk.hex(THEME.separator)('─'.repeat(width));
-    return [`${INDENT}${rule}`];
+    return [`${INDENT} ${rule}`];
   }
 
   if (e.kind === 'heading') {
@@ -130,7 +191,8 @@ export function entryToAnsiLines(
     // Add a subtle leading marker for headings
     const marker = chalk.hex(THEME.muted)('▌ ');
     const raw = `${marker}${col.bold(e.text)}`;
-    return wordWrap(raw, maxW, contIndent).map((l, i) => (i === 0 ? `${INDENT}${l}` : l));
+    const headingLines = wordWrap(raw, maxW, contIndent).map((l, i) => (i === 0 ? `${INDENT}${l}` : l));
+    return ['', ...headingLines];
   }
 
   // Regular text

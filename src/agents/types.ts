@@ -32,10 +32,30 @@ export const MAX_RELAY_DEPTH = 5;
 
 // ── Agent output line ───────────────────────────────────────────────────────
 
+export type ToolAction =
+  | 'read' | 'write' | 'create' | 'edit' | 'delete'
+  | 'bash' | 'glob' | 'grep'
+  | 'fetch' | 'agent' | 'todo'
+  | 'list' | 'search';
+
+export interface ToolMeta {
+  tool: ToolAction;
+  file?: string;
+  command?: string;
+  pattern?: string;
+  exitCode?: number;
+  /** Edit diff — old lines removed */
+  oldLines?: string[];
+  /** Edit diff — new lines added */
+  newLines?: string[];
+}
+
 export interface OutputLine {
   text: string;
   timestamp: number;
   type: 'stdout' | 'stderr' | 'system' | 'relay' | 'info' | 'checkpoint';
+  /** Rich tool metadata for professional action display */
+  toolMeta?: ToolMeta;
 }
 
 // ── Session config ──────────────────────────────────────────────────────────
@@ -91,9 +111,12 @@ export interface SessionData {
 
 export interface DisplayEntry {
   text: string;
-  kind: 'text' | 'action' | 'heading' | 'separator' | 'empty' | 'code' | 'info';
+  kind: 'text' | 'action' | 'heading' | 'separator' | 'empty' | 'code' | 'info'
+    | 'tool-header' | 'diff-old' | 'diff-new';
   bold?: boolean;
   color?: string;
+  /** Tool type for tool-header entries */
+  tool?: ToolAction;
 }
 
 export interface ChatMessage {

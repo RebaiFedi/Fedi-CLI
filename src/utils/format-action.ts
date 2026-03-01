@@ -6,16 +6,18 @@ export function formatAction(action: string, detail?: string): string | null {
   if (a === 'write' && detail) return `▸ write ${shortPath(detail)}`;
   if (a === 'edit' && detail) return `▸ edit ${shortPath(detail)}`;
   if (a === 'glob' && detail) return `▸ search ${detail}`;
-  if (a === 'grep' && detail) return `▸ grep ${detail.slice(0, 40)}`;
-  if (a === 'bash' && detail) return `▸ ${cleanCommand(detail)}`;
+  if (a === 'grep' && detail) return `▸ grep ${detail.slice(0, 60)}`;
+  if (a === 'bash' && detail) return `▸ exec ${cleanCommand(detail)}`;
   if (a === 'file_change' && detail) return `▸ write ${shortPath(detail)}`;
   if (a === 'list_directory' && detail) return `▸ list ${shortPath(detail)}`;
   if (a === 'read_file' && detail) return `▸ read ${shortPath(detail)}`;
   if (a === 'write_file' && detail) return `▸ write ${shortPath(detail)}`;
   if (a === 'create_file' && detail) return `▸ create ${shortPath(detail)}`;
+  if (a === 'create' && detail) return `▸ create ${shortPath(detail)}`;
+  if (a === 'delete' && detail) return `▸ delete ${shortPath(detail)}`;
 
   if (detail?.startsWith('$') || detail?.startsWith('/bin/')) {
-    return `▸ ${cleanCommand(detail)}`;
+    return `▸ exec ${cleanCommand(detail)}`;
   }
 
   if (action) return `▸ ${action}`;
@@ -59,5 +61,5 @@ function cleanCommand(cmd: string): string {
   if (/^printf\b/.test(c)) return 'reading files';
   if (/^sed\b/.test(c)) return 'editing file';
 
-  return c.length > 40 ? c.slice(0, 37) + '...' : c;
+  return c.length > 50 ? c.slice(0, 47) + '...' : c;
 }

@@ -92,17 +92,19 @@ export function renderMarkdown(raw: string): StyledLine[] {
     if (/^```/.test(trimmed)) {
       inCodeBlock = !inCodeBlock;
       if (inCodeBlock) {
-        // Opening — show language tag if present
+        // Opening — show language tag if present, add blank line before
         const lang = trimmed.slice(3).trim();
+        lines.push({ text: '' });
         lines.push({
           text: lang
-            ? `── ${lang} ──────────────────────────`
+            ? `── ${lang} ${'─'.repeat(Math.max(4, 30 - lang.length))}`
             : '──────────────────────────────────',
           dim: true,
         });
       } else {
-        // Closing
+        // Closing — add blank line after
         lines.push({ text: '──────────────────────────────────', dim: true });
+        lines.push({ text: '' });
       }
       continue;
     }
@@ -160,21 +162,21 @@ export function renderMarkdown(raw: string): StyledLine[] {
     // Blockquote > text
     const blockquote = trimmed.match(/^>\s*(.*)/);
     if (blockquote) {
-      lines.push({ text: `  ${clean(blockquote[1])}`, dim: false });
+      lines.push({ text: `  │ ${clean(blockquote[1])}`, dim: false });
       continue;
     }
 
     // Bullet list - or *
     const bullet = trimmed.match(/^[-*]\s+(.+)/);
     if (bullet) {
-      lines.push({ text: `› ${clean(bullet[1])}` });
+      lines.push({ text: `  › ${clean(bullet[1])}` });
       continue;
     }
 
     // Numbered list
     const numbered = trimmed.match(/^(\d+)\.\s+(.+)/);
     if (numbered) {
-      lines.push({ text: `${numbered[1]}. ${clean(numbered[2])}` });
+      lines.push({ text: `  ${numbered[1]}. ${clean(numbered[2])}` });
       continue;
     }
 

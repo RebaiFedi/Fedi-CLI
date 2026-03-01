@@ -1,4 +1,4 @@
-import type { DisplayEntry, OutputLine } from '../agents/types.js';
+import type { DisplayEntry, OutputLine, ToolMeta } from '../agents/types.js';
 import { renderMarkdown } from '../utils/render-markdown.js';
 
 // ── Filters ─────────────────────────────────────────────────────────────────
@@ -11,6 +11,37 @@ export const TASK_DONE_RE = /\[TASK:done\]\s*(.+)/i;
 export const TASK_TAG_LINE_RE = /^\s*\[TASK:(add|done)\]\s*/i;
 export const CMD_OUTPUT_HEADER_RE = /^={3,}\s*.+\s*={3,}$/;
 
+// ── Rich tool entries from ToolMeta ─────────────────────────────────────────
+
+function toolMetaToEntries(text: string, meta: ToolMeta): DisplayEntry[] {
+  const entries: DisplayEntry[] = [];
+  // Tool header with type tag
+  entries.push({ text, kind: 'tool-header', tool: meta.tool });
+  // Show diff for edit operations
+  if (meta.tool === 'edit' && (meta.oldLines?.length || meta.newLines?.length)) {
+    const maxDiffLines = 8;
+    if (meta.oldLines && meta.oldLines.length > 0) {
+      const lines = meta.oldLines.slice(0, maxDiffLines);
+      for (const l of lines) {
+        entries.push({ text: l, kind: 'diff-old' });
+      }
+      if (meta.oldLines.length > maxDiffLines) {
+        entries.push({ text: `… ${meta.oldLines.length - maxDiffLines} more lines`, kind: 'diff-old' });
+      }
+    }
+    if (meta.newLines && meta.newLines.length > 0) {
+      const lines = meta.newLines.slice(0, maxDiffLines);
+      for (const l of lines) {
+        entries.push({ text: l, kind: 'diff-new' });
+      }
+      if (meta.newLines.length > maxDiffLines) {
+        entries.push({ text: `… ${meta.newLines.length - maxDiffLines} more lines`, kind: 'diff-new' });
+      }
+    }
+  }
+  return entries;
+}
+
 // ── OutputLine → DisplayEntry[] ─────────────────────────────────────────────
 
 export function outputToEntries(line: OutputLine): DisplayEntry[] {
@@ -19,7 +50,11 @@ export function outputToEntries(line: OutputLine): DisplayEntry[] {
     if (/\[CODEX:/.test(line.text)) return [];
     return [{ text: line.text, kind: 'action' }];
   }
-  if (line.type === 'system') return [{ text: line.text, kind: 'action' }];
+  if (line.type === 'system') {
+    // Use rich tool display if metadata is available
+    if (line.toolMeta) return toolMetaToEntries(line.text, line.toolMeta);
+    return [{ text: line.text, kind: 'action' }];
+  }
   if (line.type === 'info') return [{ text: line.text, kind: 'info' }];
   if (line.type === 'relay') return [];
 

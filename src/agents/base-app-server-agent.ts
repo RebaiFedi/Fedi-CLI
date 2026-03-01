@@ -1,6 +1,6 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { createInterface } from 'node:readline';
-import type { AgentProcess, AgentId, AgentStatus, OutputLine, SessionConfig } from './types.js';
+import type { AgentProcess, AgentId, AgentStatus, OutputLine, SessionConfig, ToolMeta, ToolAction } from './types.js';
 import { flog } from '../utils/log.js';
 import { formatAction } from '../utils/format-action.js';
 
@@ -659,7 +659,8 @@ export abstract class BaseAppServerAgent implements AgentProcess {
         const formatted = formatAction('bash', command);
         if (formatted) {
           const suffix = exitCode !== undefined && exitCode !== 0 ? ` (exit ${exitCode})` : '';
-          this.emit({ text: `${formatted}${suffix}`, timestamp: Date.now(), type: 'system' });
+          const meta: ToolMeta = { tool: 'bash', command, exitCode };
+          this.emit({ text: `${formatted}${suffix}`, timestamp: Date.now(), type: 'system', toolMeta: meta });
         }
         if (exitCode !== undefined && exitCode !== 0) {
           const stderr = typeof item.stderr === 'string' ? item.stderr : undefined;
@@ -685,7 +686,21 @@ export abstract class BaseAppServerAgent implements AgentProcess {
             const formatted = formatAction(label, file);
             if (formatted) {
               const suffix = itemStatus && itemStatus !== 'completed' ? ` (${itemStatus})` : '';
-              this.emit({ text: `${formatted}${suffix}`, timestamp: Date.now(), type: 'system' });
+              const toolAction: ToolAction = label as ToolAction;
+              const meta: ToolMeta = { tool: toolAction, file };
+              // Extract diff content if available
+              const diff = typeof change.diff === 'string' ? change.diff : undefined;
+              if (diff && toolAction === 'edit') {
+                const oldLines: string[] = [];
+                const newLines: string[] = [];
+                for (const dl of diff.split('\n')) {
+                  if (dl.startsWith('-') && !dl.startsWith('---')) oldLines.push(dl.slice(1));
+                  else if (dl.startsWith('+') && !dl.startsWith('+++')) newLines.push(dl.slice(1));
+                }
+                if (oldLines.length > 0) meta.oldLines = oldLines;
+                if (newLines.length > 0) meta.newLines = newLines;
+              }
+              this.emit({ text: `${formatted}${suffix}`, timestamp: Date.now(), type: 'system', toolMeta: meta });
             }
             this.emitCheckpoint(`[CODEX:checkpoint] File ${kind ?? 'change'}: ${file}`);
           }
@@ -700,7 +715,10 @@ export abstract class BaseAppServerAgent implements AgentProcess {
         : typeof item.path === 'string' ? item.path : undefined;
       if (filename) {
         const formatted = formatAction('read', filename);
-        if (formatted) this.emit({ text: formatted, timestamp: Date.now(), type: 'system' });
+        if (formatted) {
+          const meta: ToolMeta = { tool: 'read', file: filename };
+          this.emit({ text: formatted, timestamp: Date.now(), type: 'system', toolMeta: meta });
+        }
         this.emitCheckpoint(`[CODEX:checkpoint] Read: ${filename}`);
       }
       return;

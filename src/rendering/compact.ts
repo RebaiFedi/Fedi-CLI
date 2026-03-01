@@ -12,20 +12,23 @@ export function compact(entries: DisplayEntry[]): DisplayEntry[] {
 }
 
 export function addActionSpacing(raw: DisplayEntry[]): DisplayEntry[] {
-  const isBlock = (k: string) => k === 'action' || k === 'info';
+  const isToolBlock = (k: string) =>
+    k === 'action' || k === 'info' || k === 'tool-header' || k === 'diff-old' || k === 'diff-new';
   const out: DisplayEntry[] = [];
   for (let i = 0; i < raw.length; i++) {
     out.push(raw[i]);
-    if (isBlock(raw[i].kind) && i + 1 < raw.length) {
+    // Add spacing after a tool block ends (last diff line or standalone action)
+    if (isToolBlock(raw[i].kind) && i + 1 < raw.length) {
       const next = raw[i + 1];
-      if (!isBlock(next.kind) && next.kind !== 'empty') {
+      if (!isToolBlock(next.kind) && next.kind !== 'empty') {
         out.push({ text: '', kind: 'empty' });
       }
     }
+    // Add spacing before a tool block starts
     if (
       i + 1 < raw.length &&
-      isBlock(raw[i + 1].kind) &&
-      !isBlock(raw[i].kind) &&
+      (raw[i + 1].kind === 'action' || raw[i + 1].kind === 'tool-header') &&
+      !isToolBlock(raw[i].kind) &&
       raw[i].kind !== 'empty'
     ) {
       out.push({ text: '', kind: 'empty' });
@@ -43,11 +46,9 @@ export function compactOutputLines(lines: string[]): string[] {
 
     if (isEmpty && out.length > 0) {
       const prevTrimmed = stripAnsi(out[out.length - 1]).trim();
-      const nextTrimmed = i + 1 < lines.length ? stripAnsi(lines[i + 1]).trim() : '';
       const prevIsEmpty = prevTrimmed === '';
-      const prevIsSeparator = /^[-\u2500]{3,}$/.test(prevTrimmed);
-      const nextIsSeparator = /^[-\u2500]{3,}$/.test(nextTrimmed);
-      if (prevIsEmpty || prevIsSeparator || nextIsSeparator) continue;
+      // Only collapse consecutive empty lines — preserve paragraph spacing
+      if (prevIsEmpty) continue;
     }
     out.push(line);
   }

@@ -13,6 +13,7 @@ import type {
 import type { Orchestrator } from '../orchestrator/orchestrator.js';
 import { InputBar } from './InputBar.js';
 import { flog } from '../utils/log.js';
+import { stripAnsi } from '../utils/strip-ansi.js';
 import { THEME, agentHex, agentDisplayName, agentChalkColor, agentIcon } from '../config/theme.js';
 import { getMaxMessages, getFlushInterval, INDENT } from '../config/constants.js';
 import { outputToEntries, extractTasks } from '../rendering/output-transform.js';
@@ -204,8 +205,10 @@ export function Dashboard({
         if (allActions.length > 0) {
           const icon = agentIcon(agent as import('../agents/types.js').AgentId);
           const label = chalk.hex(agentHex(agent))(`${icon} ${agentDisplayName(agent)}`);
+          const termW = process.stdout.columns || 80;
+          const maxActionW = Math.max(30, termW - INDENT.length - 25);
           for (const action of allActions) {
-            const short = action.length > 60 ? action.slice(0, 57) + '…' : action;
+            const short = action.length > maxActionW ? action.slice(0, maxActionW - 3) + '…' : action;
             outputLines.push(`${INDENT}${label} ${chalk.dim('·')} ${chalk.hex(THEME.actionText)(short)}`);
           }
           pendingActions.current.set(agent, []);
@@ -220,13 +223,15 @@ export function Dashboard({
         if (msg) {
           const agentSwitched = lastPrintedAgent.current && lastPrintedAgent.current !== agent;
           if (agentSwitched) {
-            outputLines.push('');
             const icon = agentIcon(agent as import('../agents/types.js').AgentId);
             const agName = chalk.hex(agentHex(agent)).bold(`${icon} ${agentDisplayName(agent)}`);
             const termW = process.stdout.columns || 80;
-            const headerLine = `${INDENT}${agName}`;
-            outputLines.push(headerLine);
-            outputLines.push(`${INDENT}${chalk.hex(THEME.panelBorder)('─'.repeat(Math.min(termW - 4, 60)))}`);
+            const headerWidth = Math.min(termW - INDENT.length * 2, 60);
+            outputLines.push('');
+            outputLines.push('');
+            outputLines.push(`${INDENT}${agName}`);
+            outputLines.push(`${INDENT}${chalk.hex(THEME.panelBorder)('─'.repeat(headerWidth))}`);
+            outputLines.push('');
           }
           lastPrintedAgent.current = agent;
           msg.lines.push(...entries);
@@ -239,6 +244,7 @@ export function Dashboard({
       }
 
       if (lastPrintedAgent.current && lastPrintedAgent.current !== agent) {
+        outputLines.push('');
         outputLines.push('');
       }
       lastPrintedAgent.current = agent;
@@ -262,8 +268,11 @@ export function Dashboard({
       const icon = agentIcon(agent as import('../agents/types.js').AgentId);
       const name = chalk.hex(agentHex(agent)).bold(`${icon} ${agentDisplayName(agent)}`);
       const termW = process.stdout.columns || 80;
+      const headerWidth = Math.min(termW - INDENT.length * 2, 60);
+      outputLines.push('');
       outputLines.push(`${INDENT}${name}`);
-      outputLines.push(`${INDENT}${chalk.hex(THEME.panelBorder)('─'.repeat(Math.min(termW - 4, 60)))}`);
+      outputLines.push(`${INDENT}${chalk.hex(THEME.panelBorder)('─'.repeat(headerWidth))}`);
+      outputLines.push('');
       flushPendingActions(agent, agentColor);
       outputLines.push(...entriesToAnsiOutputLines(contentEntries, agentColor));
       const last = contentEntries[contentEntries.length - 1];
@@ -286,6 +295,11 @@ export function Dashboard({
         const elapsed = Math.floor(sinceLastAction / 1000);
         outputLines.push(`${INDENT}${label} ${chalk.hex(THEME.actionIcon)('·')} ${chalk.dim(`thinking… ${elapsed}s`)}`);
       }
+    }
+
+    // Trim leading empty lines from the batch
+    while (outputLines.length > 0 && stripAnsi(outputLines[0]).trim() === '') {
+      outputLines.shift();
     }
 
     if (outputLines.length > 0) {
@@ -353,7 +367,7 @@ export function Dashboard({
       // Stop all agents — fire-and-forget but agents are killed immediately
       orchestrator.stop().catch((err) => flog.error('UI', `Stop error: ${err}`));
       console.log(
-        '\n' + chalk.dim('  Agents arretes. Tapez un message pour relancer, ou Ctrl+C pour quitter.'),
+        '\n' + chalk.dim(`${INDENT}Agents arretes. Tapez un message pour relancer, ou Ctrl+C pour quitter.\n`),
       );
     }
   });
@@ -527,6 +541,8 @@ export function Dashboard({
                   if (msg) msg.status = 'done';
                   currentMsgRef.current.delete(agent);
                   lastEntryKind.current.delete(agent);
+                  // Add spacing after agent message closes
+                  console.log('');
                 }
               }, 3000);
               msgCloseTimers.current.set(agent, timer);
@@ -538,6 +554,8 @@ export function Dashboard({
               if (msg) msg.status = 'done';
               currentMsgRef.current.delete(agent);
               lastEntryKind.current.delete(agent);
+              // Add spacing after agent message closes
+              console.log('');
             }
           }
         }

@@ -253,7 +253,31 @@ export abstract class BaseSonnetAgent implements AgentProcess {
     }
     const formatted = formatAction(toolName, detail);
     if (formatted) {
-      this.emit({ text: formatted, timestamp: Date.now(), type: 'system' });
+      // Build rich tool metadata
+      const toolMap: Record<string, import('./types.js').ToolAction> = {
+        Read: 'read', Write: 'write', Edit: 'edit', Bash: 'bash',
+        Glob: 'glob', Grep: 'grep', WebFetch: 'fetch', Agent: 'agent',
+        TodoWrite: 'todo',
+      };
+      const tool = toolMap[toolName];
+      if (tool) {
+        const meta: import('./types.js').ToolMeta = { tool };
+        if (detail && (tool === 'read' || tool === 'write' || tool === 'edit')) {
+          meta.file = detail;
+        }
+        if (tool === 'bash' && detail) meta.command = detail;
+        if ((tool === 'glob' || tool === 'grep') && detail) meta.pattern = detail;
+        // Capture Edit diff content
+        if (tool === 'edit') {
+          const oldStr = str('old_string');
+          const newStr = str('new_string');
+          if (oldStr) meta.oldLines = oldStr.split('\n');
+          if (newStr) meta.newLines = newStr.split('\n');
+        }
+        this.emit({ text: formatted, timestamp: Date.now(), type: 'system', toolMeta: meta });
+      } else {
+        this.emit({ text: formatted, timestamp: Date.now(), type: 'system' });
+      }
     }
   }
 

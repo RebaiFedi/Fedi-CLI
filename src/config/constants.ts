@@ -14,8 +14,8 @@ export function getMaxMessages() {
 export function getFlushInterval() {
   return getCfg().flushIntervalMs;
 }
-export const INDENT = '';
-export const BUBBLE_SIDE_MARGIN = 0;
+export const INDENT = '  ';
+export const BUBBLE_SIDE_MARGIN = 2;
 export const MAX_READABLE_WIDTH = 120;
 export const DOT_ACTIVE = '\u2022';
 export const MAX_VISIBLE_TODOS = 4;

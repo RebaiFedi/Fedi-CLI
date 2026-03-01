@@ -16,8 +16,8 @@ export const THEME = {
   actionText: '#94A3B8',
   actionValue: '#CBD5E1',
   codeBlock: '#1E293B',
-  codeBorder: '#334155',
-  separator: '#1E293B',
+  codeBorder: '#475569',
+  separator: '#334155',
   // Agent header accents (dimmer background shade)
   opusDim: '#78350F',
   sonnetDim: '#0C4A6E',
