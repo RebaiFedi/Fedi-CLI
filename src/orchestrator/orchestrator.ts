@@ -156,6 +156,11 @@ export class Orchestrator {
   /** Track whether Opus has already responded in @tous non-delegation mode.
    *  Prevents duplicate content from multi-turn auto-continuation. */
   private opusAllModeResponded = false;
+  /** When true, the next opus→agent relay is a LIVE message forwarding (not a new delegation).
+   *  This bypasses the "duplicate delegation" block in routeRelayMessage().
+   *  Set by sendUserMessage() when user sends a message while agents are on relay.
+   *  Consumed (reset to false) after the relay is processed. */
+  private liveRelayAllowed = false;
 
   setConfig(config: Omit<SessionConfig, 'task'>) {
     this.config = config;
@@ -248,6 +253,30 @@ export class Orchestrator {
         if (this.opusAllModePendingText) {
           this.sendToWorkersDirectly(this.opusAllModePendingText);
           this.opusAllModePendingText = null;
+        }
+      }
+      // Safety-net: if Opus finished without routing a LIVE message via relay tag,
+      // inject the user's message directly to all active delegates as fallback.
+      if (s === 'waiting' && this.liveRelayAllowed) {
+        this.liveRelayAllowed = false;
+        flog.warn('ORCH', 'Opus finished without routing LIVE message — injecting directly to active delegates');
+        for (const delegate of this.agentsOnRelay) {
+          const delegateAgent = this.getAgent(delegate);
+          if (delegateAgent.status === 'running') {
+            // Get the last user message from bus history
+            const history = this.bus.getHistory();
+            let lastUserMsg: typeof history[number] | undefined;
+            for (let i = history.length - 1; i >= 0; i--) {
+              if (history[i].from === 'user' && history[i].to === 'opus') {
+                lastUserMsg = history[i];
+                break;
+              }
+            }
+            if (lastUserMsg) {
+              flog.info('ORCH', `Fallback LIVE inject to ${delegate}: ${lastUserMsg.content.slice(0, 80)}`);
+              delegateAgent.sendUrgent(`[LIVE MESSAGE DU USER] ${lastUserMsg.content}`);
+            }
+          }
         }
       }
       cb.onAgentStatus('opus', s);
@@ -413,6 +442,15 @@ export class Orchestrator {
       flog.debug('AGENT', 'Output', { agent: agentId, type: line.type, text: line.text.slice(0, 150) });
       // Keep heartbeat alive — agent is producing output
       this.recordDelegateActivity(agentId);
+      // Detect Claude CLI API errors (e.g. output token limit exceeded) and show user-friendly message
+      if (line.type === 'stdout' && line.text.includes('API Error:')) {
+        flog.warn('ORCH', `${label} API error detected: ${line.text.slice(0, 150)}`);
+        cb.onAgentOutput(agentId, {
+          text: `${label}: limite de tokens atteinte — reprise en cours...`,
+          timestamp: Date.now(),
+          type: 'info',
+        });
+      }
       // Agent's report already delivered to Opus — mute ALL late output completely
       // (including checkpoints — they cause stale agent headers in the UI)
       if (this.deliveredToOpus.has(agentId)) {
@@ -677,7 +715,7 @@ Ce fichier contient les regles COMPLETES de chaque agent. Il est lu automatiquem
 ### Rapports — Attente et Synthese
 - ATTENDS TOUS les rapports avant de repondre au user. JAMAIS de rapport partiel.
 - Si tu recois un rapport d'un agent en premier, ATTENDS l'autre en silence.
-- Quand tu recois les rapports de tes agents: ecris UN rapport final COMPLET et fusionne pour le user.
+- Quand tu recois les rapports de tes agents: ecris UN rapport final complet et structure pour le user. Decris le travail fait en detail MAIS sans blocs de code source. REPONDS RAPIDEMENT.
 - Le user n'a RIEN vu avant — c'est la PREMIERE fois qu'il verra un rapport.
 - NE DIS PAS "le rapport est deja la" ou "voir ci-dessus" — le user ne voit RIEN avant ce message.
 - UN SEUL RAPPORT FINAL. Fusionne les rapports en UN rapport unifie et concis.
@@ -718,14 +756,15 @@ Ce fichier contient les regles COMPLETES de chaque agent. Il est lu automatiquem
 - Etape OPTIONNELLE pour les implementations complexes.
 
 ### Messages Live
-- [LIVE MESSAGE DU USER]: message URGENT du user en temps reel. Lis-le et integre-le.
+- [LIVE MESSAGE DU USER] ou [LIVE MESSAGE DU USER — via Opus]: message URGENT du user en temps reel. Lis-le et integre-le.
 - [CHECKPOINT:CODEX] / [CHECKPOINT:SONNET]: mise a jour de progres. Ne reponds pas a chaque. Si probleme detecte, envoie un message LIVE a l'agent.
 
 ### Messages du User PENDANT une Delegation (CRITIQUE)
 - Quand tu as DEJA delegue et que le user envoie un message (precision, correction):
-- Le systeme TRANSMET AUTOMATIQUEMENT le message en LIVE a l'agent qui travaille.
-- NE re-delegue PAS. L'agent recoit deja le message. Pas de nouveau tag de delegation.
-- Reponds BRIEVEMENT au user: "Bien note, c'est transmis." puis ATTENDS le rapport.
+- Tu DOIS TRANSMETTRE le message a l'agent concerne via le tag de delegation habituel.
+- Le systeme detecte que c'est un LIVE message et l'injecte directement a l'agent qui travaille.
+- DECIDE quel agent est concerne: UI/design → Sonnet, API/backend → Codex, les deux → les deux.
+- Ecris le tag suivi du message, puis UNE phrase au user ("Bien note, c'est transmis.") et STOP.
 
 ### Ne Jamais Citer les Tags au User
 - Quand tu PARLES AU USER, NE JAMAIS ecrire les tags tels quels.
@@ -817,7 +856,7 @@ Ce fichier contient les regles COMPLETES de chaque agent. Il est lu automatiquem
 - Besoin de modifier un fichier de Codex → demande-lui via cross-talk.
 
 ### Messages Live
-- [LIVE MESSAGE DU USER]: instruction URGENTE. Lis et integre immediatement.
+- [LIVE MESSAGE DU USER] ou [LIVE MESSAGE DU USER — via Opus]: instruction URGENTE. Lis et integre immediatement.
 
 ### Ne Lis PAS les Fichiers Memory
 - NE LIS JAMAIS memory/ ou MEMORY.md au demarrage.
@@ -895,7 +934,7 @@ Ce fichier contient les regles COMPLETES de chaque agent. Il est lu automatiquem
 - Besoin de modifier un fichier de Sonnet → demande-lui via cross-talk.
 
 ### Messages Live et Progression
-- [LIVE MESSAGE DU USER]: instruction URGENTE. Lis et integre immediatement.
+- [LIVE MESSAGE DU USER] ou [LIVE MESSAGE DU USER — via Opus]: instruction URGENTE. Lis et integre immediatement.
 - Le systeme envoie automatiquement des checkpoints a Opus pendant que tu travailles.
 - Si Opus/user t'envoie un message LIVE pendant ton travail, integre-le immediatement.
 
@@ -1071,21 +1110,26 @@ Ce fichier contient les regles COMPLETES de chaque agent. Il est lu automatiquem
     // Permanent rules — always injected
     lines.push('- Tu es Opus, DIRECTEUR. Tu DELEGUES: frontend→Sonnet, backend→Codex. Tu ne travailles JAMAIS seul sauf si le user dit "toi-meme" ou [FALLBACK].');
     lines.push('- Apres [TO:SONNET]/[TO:CODEX]: UNE phrase puis STOP. ZERO outil (Read, Glob, Grep, Bash, Write, Edit).');
-    lines.push('- Quand tu recois les rapports de tes agents: ecris UN rapport final fusionne COMPLET pour le user. Le user n\'a RIEN vu avant — c\'est la PREMIERE fois.');
+    lines.push('- Quand tu recois les rapports de tes agents: ecris UN rapport final complet et structure pour le user. Decris le travail en detail MAIS sans blocs de code source. Le user n\'a RIEN vu avant. REPONDS RAPIDEMENT.');
     // Situational rules — delegation active
     if (this.expectedDelegates.size > 0) {
       const agents = [...this.expectedDelegates].map(a => a.charAt(0).toUpperCase() + a.slice(1)).join(' et ');
       const received = this.pendingReportsForOpus.size;
       const total = this.expectedDelegates.size;
       lines.push(`- MAINTENANT: ${agents} travaille(nt) (${received}/${total} rapports recus). ATTENDS en silence. AUCUN outil.`);
-      // When user sends a message while agents work, tell Opus the message was already forwarded
+      // When user sends a message while agents work, Opus must ROUTE it to the right agent
       const activeOnRelay = [...this.agentsOnRelay].filter(a => {
         const ag = this.getAgent(a);
         return ag.status === 'running';
       });
       if (activeOnRelay.length > 0) {
-        const activeNames = activeOnRelay.map(a => a.charAt(0).toUpperCase() + a.slice(1)).join(' et ');
-        lines.push(`- Le message du user a DEJA ete transmis en LIVE a ${activeNames}. NE re-delegue PAS. L'agent integre deja la precision. Reponds BRIEVEMENT au user ("Bien note, c'est transmis a ${activeNames}.") puis ATTENDS le rapport.`);
+        const activeNames = activeOnRelay.map(a => a.charAt(0).toUpperCase() + a.slice(1));
+        if (activeNames.length === 1) {
+          lines.push(`- Le user envoie un message PENDANT que ${activeNames[0]} travaille. Tu DOIS TRANSMETTRE ce message a ${activeNames[0]} via le tag de delegation habituel. Le systeme va l'injecter en LIVE a l'agent. Ecris le tag suivi du message du user (reformule si besoin). Puis UNE phrase au user ("Bien note, c'est transmis a ${activeNames[0]}.") et STOP.`);
+        } else {
+          const allNames = activeNames.join(' et ');
+          lines.push(`- Le user envoie un message PENDANT que ${allNames} travaillent. DECIDE quel agent est concerne par le message du user. Transmets-le UNIQUEMENT a l'agent concerne via le tag de delegation. Si ca concerne les deux, transmets aux deux. Puis UNE phrase au user et STOP.`);
+        }
       }
     }
     return lines.join('\n');
@@ -1174,19 +1218,19 @@ Ce fichier contient les regles COMPLETES de chaque agent. Il est lu automatiquem
       this.flushOpusBuffer(this.callbacks);
     }
 
-    // ── Forward LIVE to active delegates ──
-    // When agents are working on a delegation, the user's message is a live
-    // correction/precision that agents need to see RIGHT NOW — not after Opus
-    // re-delegates (which would be blocked as "duplicate delegation" anyway).
-    // This is like Claude Code's behavior: user sends a message mid-work and
-    // the agent integrates it immediately.
-    for (const delegate of this.agentsOnRelay) {
-      const agent = this.getAgent(delegate);
-      if (agent.status === 'running') {
-        flog.info('ORCH', `Forwarding user message LIVE to ${delegate} (active on relay): ${text.slice(0, 80)}`);
-        agent.sendUrgent(`[LIVE MESSAGE DU USER] ${text}`);
-        this.bus.record({ from: 'user', to: delegate, content: text });
-      }
+    // ── LIVE message routing via Opus ──
+    // When agents are working on a delegation, the user's message is a
+    // correction/precision. Instead of broadcasting directly to all agents,
+    // we let Opus decide WHICH agent should receive it. Opus will write
+    // [TO:SONNET] or [TO:CODEX] to route the message, which produces a
+    // visible "Opus to Sonnet" relay in the chat. This is smarter than
+    // broadcasting because if 2 agents work and the message only concerns
+    // one, only that agent gets it.
+    // We set a flag so routeRelayMessage() allows the relay through
+    // (normally it blocks duplicate opus->agent relays).
+    if (this.agentsOnRelay.size > 0) {
+      this.liveRelayAllowed = true;
+      flog.info('ORCH', `User message while ${[...this.agentsOnRelay].join(', ')} on relay — Opus will route LIVE`);
     }
 
     // If Opus is actively running, inject LIVE instead of queuing behind PQueue
@@ -1371,6 +1415,7 @@ Ce fichier contient les regles COMPLETES de chaque agent. Il est lu automatiquem
     this.crossTalkCount = 0;
     this.opusAllMode = false;
     this.opusAllModeResponded = false;
+    this.liveRelayAllowed = false;
     if (this.opusAllModeWorkerTimer) {
       clearTimeout(this.opusAllModeWorkerTimer);
       this.opusAllModeWorkerTimer = null;
@@ -1520,9 +1565,32 @@ Ce fichier contient les regles COMPLETES de chaque agent. Il est lu automatiquem
     if (from === 'opus' && target !== 'opus') {
       // Block duplicate delegation: if Opus already delegated to this agent in this
       // round and the agent is still working (on relay), skip the duplicate.
-      // This happens when Opus mentions [TO:SONNET] twice in the same response
-      // (e.g. first the real delegation, then a re-statement of it later in the text).
+      // EXCEPTION: liveRelayAllowed = Opus is forwarding a user's LIVE message
+      // (not a new task). In that case, inject the message directly via sendUrgent
+      // and show the relay in the UI, but do NOT re-register as a new delegation.
       if (this.agentsOnRelay.has(target) && this.expectedDelegates.has(target)) {
+        if (this.liveRelayAllowed) {
+          // LIVE message forwarding — inject directly, show relay, don't re-delegate
+          this.liveRelayAllowed = false;
+          flog.info('RELAY', `LIVE relay opus->${target}: ${content.slice(0, 80)}`);
+          const targetAgent = this.getAgent(target);
+          if (targetAgent.status === 'running') {
+            targetAgent.sendUrgent(`[LIVE MESSAGE DU USER — via Opus] ${content}`);
+          } else {
+            this.bus.send({ from: 'opus', to: target, content: `[LIVE MESSAGE DU USER — via Opus] ${content}` });
+          }
+          // Emit relay event for UI display ("Opus to Sonnet" with the message content)
+          this.recordRelay();
+          this.bus.emit('relay', {
+            id: randomUUID(),
+            from: 'opus' as const,
+            to: target,
+            content,
+            relayCount: 0,
+            timestamp: Date.now(),
+          });
+          return;
+        }
         flog.info('RELAY', `BLOCKED duplicate delegation opus->${target} (agent already on relay): ${content.slice(0, 80)}`);
         return;
       }
@@ -2136,8 +2204,12 @@ Ce fichier contient les regles COMPLETES de chaque agent. Il est lu automatiquem
 
     const agentNames = [...this.pendingReportsForOpus.keys()].map(a => a.charAt(0).toUpperCase() + a.slice(1));
     const parts: string[] = [];
+    const REPORT_MAX_CHARS = 5000; // Truncate very long reports (e.g. agents dumping code)
     for (const [agent, report] of this.pendingReportsForOpus) {
-      parts.push(`[FROM:${agent.toUpperCase()}] ${report}`);
+      const trimmed = report.length > REPORT_MAX_CHARS
+        ? report.slice(0, REPORT_MAX_CHARS) + '\n... [rapport tronqué — contenu complet dans les fichiers]'
+        : report;
+      parts.push(`[FROM:${agent.toUpperCase()}] ${trimmed}`);
     }
     const reportsBody = parts.join('\n\n---\n\n');
 
@@ -2159,11 +2231,13 @@ Ce fichier contient les regles COMPLETES de chaque agent. Il est lu automatiquem
     const combined = `[RAPPORTS RECUS — ${agentNames.join(' + ')}] Tous les rapports sont arrivés.
 
 INSTRUCTIONS CRITIQUES:
-1. Tu dois MAINTENANT écrire le rapport final fusionné pour le user
-2. Le user n'a RIEN vu encore — c'est la PREMIERE fois qu'il verra un rapport
+1. Ecris un rapport final complet et structure pour le user — fusionne les rapports de tes agents
+2. Le user n'a RIEN vu avant — c'est la PREMIERE fois qu'il verra un rapport
 3. NE DIS PAS "le rapport est déjà là" ou "voir ci-dessus" — le user ne voit RIEN avant ce message
-4. Ecris un rapport COMPLET et structuré qui fusionne TOUTES les analyses
-5. Pour les TABLEAUX: utilise la syntaxe markdown avec pipes |${opusSection}\n\n${reportsBody}`;
+4. Decris en detail: quels fichiers crees/modifies, les fonctionnalites, les choix techniques
+5. MAIS: NE RECOPIE PAS de blocs de code source. Ton rapport est une DESCRIPTION, pas du code
+6. REPONDS RAPIDEMENT — le user attend. Synthetise et envoie
+7. Pour les TABLEAUX: utilise la syntaxe markdown avec pipes |${opusSection}\n\n${reportsBody}`;
     flog.info('ORCH', `Delivering combined report to Opus (${this.pendingReportsForOpus.size} delegates): ${combined.slice(0, 200)}`);
 
     // Track delivered agents — late output from these will be muted completely.

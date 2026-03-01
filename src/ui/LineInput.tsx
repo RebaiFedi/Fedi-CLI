@@ -255,8 +255,13 @@ export function LineInput({
             return;
           }
         } else if (key.delete) {
-          // Terminal sends \x7f for physical Backspace — Ink maps it to key.delete.
-          // Treat it identically to key.backspace: delete the char to the LEFT.
+          // On most terminals, physical Backspace sends \x7f which Ink maps
+          // to key.delete (not key.backspace). Ink also maps the real Forward
+          // Delete key (\x1b[3~) to key.delete. Since Ink strips the raw
+          // input for non-alphanumeric keys (input=''), we CANNOT distinguish
+          // them here. Treat key.delete as backward delete (same as Backspace)
+          // because that's what 99% of key.delete events actually are.
+          // Forward delete is handled via Ctrl+D below.
           if (safeOffset > 0) {
             if (key.ctrl || key.meta) {
               const wordStart = findWordLeft(value, safeOffset);
@@ -270,6 +275,11 @@ export function LineInput({
             // Same as backspace at position 0: signal InputBar to clearPaste.
             onChange(value);
             return;
+          }
+        } else if (key.ctrl && input === 'd') {
+          // Ctrl+D = forward delete (delete char to the RIGHT of cursor)
+          if (safeOffset < value.length) {
+            nextValue = value.slice(0, safeOffset) + value.slice(safeOffset + 1);
           }
         } else if (key.ctrl && input === 'w') {
           if (safeOffset > 0) {

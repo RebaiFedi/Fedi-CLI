@@ -600,19 +600,22 @@ export function Dashboard({
         // Show cross-talk and delegation messages to the user
         const fromId = msg.from as string;
         const toId = msg.to as string;
+        // Handle 'user' as a special case for LIVE message forwarding
+        const isFromUser = fromId === 'user';
         // Validate agent IDs before using theme functions
         const validAgents = VALID_AGENT_IDS;
         const fromAgent: AgentId = validAgents.has(fromId) ? fromId as AgentId : 'opus';
         const toAgent: AgentId = validAgents.has(toId) ? toId as AgentId : 'opus';
-        const fromName = agentDisplayName(fromAgent);
+        const fromName = isFromUser ? 'User' : agentDisplayName(fromAgent);
         const toName = agentDisplayName(toAgent);
-        const fromColor = agentHex(fromAgent);
+        const fromColor = isFromUser ? THEME.userPrefix : agentHex(fromAgent);
         const toColor = agentHex(toAgent);
         const relayHeader = `${INDENT}${chalk.hex(fromColor).bold(fromName)} ${chalk.dim('to')} ${chalk.hex(toColor).bold(toName)}`;
         // Render relay content through the markdown pipeline (tables, bold, wrapping)
         const fakeOutputLine: OutputLine = { text: msg.content, timestamp: Date.now(), type: 'stdout' };
         const entries = outputToEntries(fakeOutputLine);
-        const relayOut = entriesToAnsiOutputLines(entries, agentChalkColor(fromAgent));
+        const relayChalkColor = isFromUser ? 'cyan' as const : agentChalkColor(fromAgent);
+        const relayOut = entriesToAnsiOutputLines(entries, relayChalkColor);
         console.log(`\n${relayHeader}\n${relayOut.join('\n')}\n`);
       },
       onRelayBlocked: (msg: Message) => {

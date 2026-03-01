@@ -85,7 +85,12 @@ export abstract class BaseSonnetAgent implements AgentProcess {
 
     this.process = spawn(this.cliPath, args, {
       cwd: config.projectDir,
-      env: { ...process.env },
+      env: {
+        ...process.env,
+        // Increase output token limit to avoid "exceeded 32000 output token maximum"
+        // errors that cause long delays during large file generation.
+        CLAUDE_CODE_MAX_OUTPUT_TOKENS: process.env.CLAUDE_CODE_MAX_OUTPUT_TOKENS ?? '128000',
+      },
       stdio: ['pipe', 'pipe', 'pipe'],
     });
 
