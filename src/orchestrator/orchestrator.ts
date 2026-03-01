@@ -654,7 +654,7 @@ export class Orchestrator {
     // (the resumed session already has the system prompt + previous conversation)
     if (this.opus.getSessionId()) {
       const resumeMsg = previousContext
-        ? `[NOUVELLE TACHE DU USER] ${task}\n\nContexte: la session precedente a ete interrompue puis reprise. Tu as tout l'historique dans ta conversation. Continue ton travail.`
+        ? `[NOUVELLE TACHE DU USER] ${task}\n\n[RESET] La session precedente a ete INTERROMPUE par le user (Echap). TOUS les agents (Sonnet, Codex) ont ete STOPPES. Tes delegations precedentes sont ANNULEES — aucun agent ne travaille. Si le user demande une action sur le code/projet, tu DOIS re-deleguer. Ne dis PAS "c'est en cours" ou "j'ai deja lance" — c'est FAUX, les agents sont morts.`
         : `[NOUVELLE TACHE DU USER] ${task}`;
       this.opus.send(resumeMsg);
       flog.info('ORCH', 'Opus resumed session — sent new task as follow-up');

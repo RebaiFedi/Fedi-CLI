@@ -167,8 +167,18 @@ export abstract class BaseSonnetAgent implements AgentProcess {
 
     if (type === 'result' && msg.is_error) {
       const errorMsg = typeof msg.result === 'string' ? msg.result : 'Unknown error';
+      const subType = typeof msg.subtype === 'string' ? msg.subtype : '';
       this.lastError = errorMsg;
-      flog.error('AGENT', `${this.logTag}: Result error: ${errorMsg}`);
+      flog.error('AGENT', `${this.logTag}: Result error: ${errorMsg} (subtype=${subType})`);
+
+      // If the error happened during a resumed session, the session is likely
+      // corrupted from the previous interruption. Clear the sessionId so the
+      // next start() creates a fresh session instead of resuming again.
+      if (this.sessionId && (subType === 'error_during_execution' || errorMsg === 'Unknown error')) {
+        flog.warn('AGENT', `${this.logTag}: Clearing corrupted session ${this.sessionId} — next start will be fresh`);
+        this.sessionId = null;
+      }
+
       // Detect quota/usage limit errors and show user-friendly message
       if (errorMsg.includes('out of extra usage') || errorMsg.includes('rate limit')) {
         const resetMatch = errorMsg.match(/resets?\s+(.+)/i);
