@@ -564,10 +564,11 @@ export abstract class BaseAppServerAgent implements AgentProcess {
     const itemType = typeof item.type === 'string' ? item.type : undefined;
 
     if (itemType === 'commandExecution') {
-      // Only emit checkpoint on start — the system action line is emitted on item/completed (with exit code)
+      // Emit checkpoint for relay/orchestrator tracking.
+      // "Running:" checkpoints are suppressed in UI (codexCheckpointToAction returns null)
+      // to avoid duplicating the item/completed system line.
       const command = typeof item.command === 'string' ? item.command : undefined;
       if (command) {
-        // Detect file creation via heredoc — emit as file create checkpoint instead of exec
         const fileCreateInfo = this.detectFileCreateCommand(command);
         if (fileCreateInfo) {
           this.emitCheckpoint(`[CODEX:checkpoint] File create: ${fileCreateInfo.file}`);
@@ -579,18 +580,9 @@ export abstract class BaseAppServerAgent implements AgentProcess {
       // Reset diff buffer for new file change
       this.pendingFileChangeDiff = null;
       this.pendingFileChangePath = null;
-      // Only emit checkpoint on start — the system action line is emitted on item/completed
-      const startChanges: Array<Record<string, unknown>> = Array.isArray(item.changes)
-        ? item.changes as Array<Record<string, unknown>>
-        : (item.filename || item.path) ? [item as Record<string, unknown>] : [];
-      for (const change of startChanges) {
-        const file = typeof change.path === 'string' ? change.path
-          : typeof change.filename === 'string' ? change.filename : undefined;
-        const kind = typeof change.kind === 'string' ? change.kind : undefined;
-        if (file) {
-          this.emitCheckpoint(`[CODEX:checkpoint] File ${kind ?? 'change'}: ${file}`);
-        }
-      }
+      // Don't emit checkpoint here — item/completed will emit the definitive
+      // system line with the correct label (create vs edit) and diff preview.
+      // Emitting here would show a premature "~ Edit" before the real "+ Create".
     } else if (itemType === 'fileRead' || itemType === 'file_read' || itemType === 'read_file') {
       // Only emit checkpoint on start — the system action line is emitted on item/completed
       const filename = typeof item.filename === 'string' ? item.filename

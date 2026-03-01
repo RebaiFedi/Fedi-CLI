@@ -450,6 +450,10 @@ export class Orchestrator {
           this.agentsOnCrossTalk.delete(agentId);
         } else {
           this.detectRelayPatterns(agentId, line.text);
+          // Reset relay timeout on tool activity (non-stdout = tool actions)
+          if (this.agentsOnRelay.has(agentId) && line.type !== 'stdout' && line.type !== 'stderr') {
+            this.relayStartTime.set(agentId, Date.now());
+          }
           if (this.agentsOnRelay.has(agentId) && line.type === 'stdout') {
             flog.debug('BUFFER', 'On cross-talk + relay for opus', { agent: agentId });
             // Pass task tags through so todo list updates in real-time
@@ -463,12 +467,25 @@ export class Orchestrator {
         }
       }
       if (this.agentsOnRelay.has(agentId)) {
+        // Reset relay timeout on any non-stdout activity (tool actions = still working)
+        if (line.type !== 'stdout' && line.type !== 'stderr') {
+          this.relayStartTime.set(agentId, Date.now());
+        }
         const start = this.relayStartTime.get(agentId) ?? 0;
-        // RELAY_TIMEOUT_MS <= 0 means no relay timeout — wait indefinitely
-        if (this.RELAY_TIMEOUT_MS > 0 && Date.now() - start > this.RELAY_TIMEOUT_MS) {
-          flog.warn('ORCH', `${label} relay timeout (${this.RELAY_TIMEOUT_MS / 1000}s) — forcing auto-relay`);
+        const elapsed = Date.now() - start;
+        // Only trigger relay timeout if:
+        // 1. Timeout is configured (> 0)
+        // 2. Time has elapsed
+        // 3. Agent is NOT actively running (if running, it's still working — don't interrupt)
+        const agentInstance = this.getAgent(agentId);
+        const isActive = agentInstance.status === 'running';
+        if (this.RELAY_TIMEOUT_MS > 0 && elapsed > this.RELAY_TIMEOUT_MS && !isActive) {
+          flog.warn('ORCH', `${label} relay timeout (${Math.round(elapsed / 1000)}s, status=${agentInstance.status}) — forcing auto-relay`);
           this.autoRelayBuffer(agentId);
         } else {
+          if (this.RELAY_TIMEOUT_MS > 0 && elapsed > this.RELAY_TIMEOUT_MS && isActive) {
+            flog.debug('ORCH', `${label} relay past ${Math.round(this.RELAY_TIMEOUT_MS / 1000)}s but agent still running — NOT timing out`);
+          }
           this.detectRelayPatterns(agentId, line.text);
           if (line.type === 'stdout') {
             flog.debug('BUFFER', 'On relay for opus', { agent: agentId });
@@ -774,7 +791,7 @@ Quand tu delegues a Sonnet/Codex via [TO:SONNET]/[TO:CODEX]:
     const from = fromAgent.toUpperCase();
     if (agentId === 'sonnet') {
       if (from === 'OPUS') {
-        return '[RAPPEL] Tu es Sonnet, ingenieur frontend. FAIS LE TRAVAIL D\'ABORD (Write, Edit, Bash...), puis QUAND TU AS FINI envoie [TO:OPUS] avec le resume. [TO:OPUS] = DERNIERE action, JAMAIS la premiere. Ne parle PAS au user.';
+        return '[RAPPEL] Tu es Sonnet, ingenieur frontend. Dis BRIEVEMENT ce que tu vas faire (1-2 phrases), puis FAIS LE TRAVAIL (Write, Edit, Bash...), puis QUAND TU AS FINI envoie [TO:OPUS] avec le resume. [TO:OPUS] = DERNIERE action, JAMAIS la premiere. Ne parle PAS au user.';
       }
       if (from === 'USER') {
         return '[RAPPEL] Tu es Sonnet, ingenieur frontend. Le user te parle directement. Reponds au user. PAS de [TO:OPUS].';
@@ -782,7 +799,7 @@ Quand tu delegues a Sonnet/Codex via [TO:SONNET]/[TO:CODEX]:
     }
     if (agentId === 'codex') {
       if (from === 'OPUS') {
-        return '[RAPPEL] Tu es Codex, ingenieur backend. FAIS LE TRAVAIL D\'ABORD, puis QUAND TU AS FINI envoie [TO:OPUS] avec le resume. [TO:OPUS] = DERNIERE action, JAMAIS la premiere. Ne parle PAS au user.';
+        return '[RAPPEL] Tu es Codex, ingenieur backend. Dis BRIEVEMENT ce que tu vas faire (1-2 phrases), puis FAIS LE TRAVAIL, puis QUAND TU AS FINI envoie [TO:OPUS] avec le resume. [TO:OPUS] = DERNIERE action, JAMAIS la premiere. Ne parle PAS au user.';
       }
       if (from === 'USER') {
         return '[RAPPEL] Tu es Codex, ingenieur backend. Le user te parle directement. Reponds au user. PAS de [TO:OPUS].';
@@ -1648,13 +1665,23 @@ Quand tu delegues a Sonnet/Codex via [TO:SONNET]/[TO:CODEX]:
         this.bus.relay(agent, 'opus', textLines);
       }
     } else {
-      // Check if the agent had an API error
+      // Check if the agent is still running — if so, it's still working,
+      // the empty buffer just means it hasn't produced stdout yet (e.g. generating a large Write).
+      // DON'T trigger fallback for an active agent!
       const agentInstance = this.getAgent(agent);
+      if (agentInstance.status === 'running') {
+        flog.info('ORCH', `${agent} relay buffer empty but agent still RUNNING — NOT failing over (agent is still working)`);
+        // Re-add to relay so it can continue
+        this.agentsOnRelay.add(agent);
+        this.relayStartTime.set(agent, Date.now());
+        return;
+      }
+
       const lastErr = agentInstance.lastError ?? null;
       const placeholder = lastErr
         ? `(erreur: ${lastErr})`
         : '(pas de rapport)';
-      flog.warn('ORCH', `${agent} finished on relay — no buffered text to relay (${placeholder})`);
+      flog.warn('ORCH', `${agent} finished on relay — no buffered text to relay (${placeholder}), status=${agentInstance.status}`);
 
       // ── Orchestrator-level fallback: try to redelegate to another agent ──
       const hadExpected = this.expectedDelegates.has(agent);

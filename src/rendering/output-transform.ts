@@ -62,9 +62,9 @@ function toolMetaToEntries(text: string, meta: ToolMeta): DisplayEntry[] {
 /** Convert a Codex checkpoint detail string into a clean ▸ action format.
  *  Returns null if the checkpoint is not user-relevant. */
 function codexCheckpointToAction(detail: string): string | null {
-  // "Running: npm install" → "▸ exec npm install"
-  const runMatch = detail.match(/^Running:\s*(.+)/i);
-  if (runMatch) return `▸ exec ${runMatch[1].slice(0, 80)}`;
+  // "Running:" and "Command:" are duplicates of the item/completed system action — suppress
+  if (/^Running:/i.test(detail)) return null;
+  if (/^Command:/i.test(detail)) return null;
 
   // "File create: src/app.ts" → "▸ create src/app.ts"
   const fileMatch = detail.match(/^File\s+(create|add|edit|delete|change):\s*(.+)/i);
@@ -79,9 +79,6 @@ function codexCheckpointToAction(detail: string): string | null {
   // "Read: src/utils.ts" → "▸ read src/utils.ts"
   const readMatch = detail.match(/^(?:Reading|Read):\s*(.+)/i);
   if (readMatch) return `▸ read ${readMatch[1].trim()}`;
-
-  // "Command: git status (exit 0)" → skip (duplicate of the item/completed system action)
-  if (/^Command:/i.test(detail)) return null;
 
   // Generic fallback — show as-is
   return `▸ ${detail.slice(0, 80)}`;
