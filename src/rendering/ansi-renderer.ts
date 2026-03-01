@@ -168,7 +168,8 @@ export function entryToAnsiLines(
   _agentColor: 'green' | 'yellow' | 'magenta' | 'cyan',
 ): string[] {
   const termW = process.stdout.columns || 80;
-  const maxW = Math.max(20, Math.min(termW - INDENT.length, MAX_READABLE_WIDTH));
+  const rightMargin = 2; // small right margin so text doesn't touch terminal edge
+  const maxW = Math.max(20, Math.min(termW - INDENT.length - rightMargin, MAX_READABLE_WIDTH));
   const wrapW = INDENT.length + maxW;
   const contIndent = INDENT + '  ';
 

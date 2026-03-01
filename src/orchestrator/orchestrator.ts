@@ -116,8 +116,10 @@ export class Orchestrator {
   private readonly DELEGATE_HEARTBEAT_INTERVAL_MS = 10_000;
   /** Debounce (ms) before safety-net auto-relay fires — universal for all agents */
   private readonly SAFETY_NET_DEBOUNCE_MS = 500;
-  /** Relay timeout follows the same timeout used for exec-based agents */
+  /** Relay timeout for Sonnet (Claude-based agents) */
   private readonly RELAY_TIMEOUT_MS = _cfg.execTimeoutMs;
+  /** Relay timeout for Codex — 0 = no timeout (wait indefinitely). Codex is slower, let it work. */
+  private readonly CODEX_RELAY_TIMEOUT_MS = _cfg.codexTimeoutMs;
   private readonly MAX_OPUS_RESTARTS = 3;
   /** Cross-talk message counter — reset each round, blocks after MAX */
   private crossTalkCount = 0;
@@ -473,18 +475,20 @@ export class Orchestrator {
         }
         const start = this.relayStartTime.get(agentId) ?? 0;
         const elapsed = Date.now() - start;
+        // Per-agent relay timeout: Codex gets its own (longer or disabled) timeout
+        const relayTimeout = agentId === 'codex' ? this.CODEX_RELAY_TIMEOUT_MS : this.RELAY_TIMEOUT_MS;
         // Only trigger relay timeout if:
         // 1. Timeout is configured (> 0)
         // 2. Time has elapsed
         // 3. Agent is NOT actively running (if running, it's still working — don't interrupt)
         const agentInstance = this.getAgent(agentId);
         const isActive = agentInstance.status === 'running';
-        if (this.RELAY_TIMEOUT_MS > 0 && elapsed > this.RELAY_TIMEOUT_MS && !isActive) {
+        if (relayTimeout > 0 && elapsed > relayTimeout && !isActive) {
           flog.warn('ORCH', `${label} relay timeout (${Math.round(elapsed / 1000)}s, status=${agentInstance.status}) — forcing auto-relay`);
           this.autoRelayBuffer(agentId);
         } else {
-          if (this.RELAY_TIMEOUT_MS > 0 && elapsed > this.RELAY_TIMEOUT_MS && isActive) {
-            flog.debug('ORCH', `${label} relay past ${Math.round(this.RELAY_TIMEOUT_MS / 1000)}s but agent still running — NOT timing out`);
+          if (relayTimeout > 0 && elapsed > relayTimeout && isActive) {
+            flog.debug('ORCH', `${label} relay past ${Math.round(relayTimeout / 1000)}s but agent still running — NOT timing out`);
           }
           this.detectRelayPatterns(agentId, line.text);
           if (line.type === 'stdout') {
@@ -1455,12 +1459,16 @@ Quand tu delegues a Sonnet/Codex via [TO:SONNET]/[TO:CODEX]:
         }
 
         // Agent is not running AND has been idle too long — truly stuck
-        // DELEGATE_IDLE_TIMEOUT_MS <= 0 means no timeout — never consider agents stuck
-        if (this.DELEGATE_IDLE_TIMEOUT_MS > 0 && idleMs >= this.DELEGATE_IDLE_TIMEOUT_MS) {
+        // Per-agent idle timeout: Codex gets codexTimeoutMs (0 = no timeout by default)
+        const idleTimeout = delegate === 'codex' && this.CODEX_RELAY_TIMEOUT_MS >= 0
+          ? this.CODEX_RELAY_TIMEOUT_MS
+          : this.DELEGATE_IDLE_TIMEOUT_MS;
+        // idleTimeout <= 0 means no timeout — never consider this agent stuck
+        if (idleTimeout > 0 && idleMs >= idleTimeout) {
           flog.warn('ORCH', `Heartbeat: ${delegate} idle for ${Math.round(idleMs / 1000)}s (status=${agent.status}) — timing out`);
           timedOut.push(delegate);
         } else {
-          flog.debug('ORCH', `Heartbeat: ${delegate} idle ${Math.round(idleMs / 1000)}s/${Math.round(this.DELEGATE_IDLE_TIMEOUT_MS / 1000)}s (status=${agent.status})`);
+          flog.debug('ORCH', `Heartbeat: ${delegate} idle ${Math.round(idleMs / 1000)}s/${idleTimeout > 0 ? Math.round(idleTimeout / 1000) + 's' : '∞'} (status=${agent.status})`);
         }
       }
 

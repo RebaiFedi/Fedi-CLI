@@ -16,6 +16,7 @@ export function getFlushInterval() {
 }
 export const INDENT = '  ';
 export const BUBBLE_SIDE_MARGIN = 2;
-export const MAX_READABLE_WIDTH = 120;
+/** Max text width — no hard cap, let terminal width decide (with small right margin) */
+export const MAX_READABLE_WIDTH = 9999;
 export const DOT_ACTIVE = '\u2022';
 export const MAX_VISIBLE_TODOS = 4;

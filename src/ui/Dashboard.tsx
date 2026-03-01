@@ -17,7 +17,7 @@ import { stripAnsi } from '../utils/strip-ansi.js';
 import { THEME, agentHex, agentDisplayName, agentChalkColor } from '../config/theme.js';
 import { getMaxMessages, getFlushInterval, INDENT } from '../config/constants.js';
 import { outputToEntries, extractTasks } from '../rendering/output-transform.js';
-import { entriesToAnsiOutputLines, wordWrap } from '../rendering/ansi-renderer.js';
+import { entriesToAnsiOutputLines } from '../rendering/ansi-renderer.js';
 import { compactOutputLines } from '../rendering/compact.js';
 import { ThinkingSpinner } from './ThinkingSpinner.js';
 import { TodoPanel, type TodoItem } from './TodoPanel.js';
@@ -609,28 +609,10 @@ export function Dashboard({
         const fromColor = agentHex(fromAgent);
         const toColor = agentHex(toAgent);
         const relayHeader = `${INDENT}${chalk.hex(fromColor).bold(fromName)} ${chalk.dim('to')} ${chalk.hex(toColor).bold(toName)}`;
-        const termW = process.stdout.columns || 80;
-        const pad = `${INDENT}  `;
-        const wrapPad = `${pad}  `;
-        // Split content by newlines, word-wrap each line on PLAIN text, then colorize
-        const contentLines = msg.content.split('\n');
-        const relayOut: string[] = [];
-        for (const line of contentLines) {
-          if (!line.trim()) {
-            relayOut.push('');
-            continue;
-          }
-          // Word-wrap on plain text (no ANSI) to get correct line breaks
-          const plainWrapped = wordWrap(`${pad}${line}`, termW, wrapPad);
-          // Apply color AFTER wrapping so each line gets its own ANSI codes
-          relayOut.push(...plainWrapped.map(l => {
-            // Preserve the padding (plain text), colorize only the content part
-            const padLen = l.length - l.trimStart().length;
-            const padding = l.slice(0, padLen);
-            const content = l.slice(padLen);
-            return `${padding}${chalk.hex('#94A3B8')(content)}`;
-          }));
-        }
+        // Render relay content through the markdown pipeline (tables, bold, wrapping)
+        const fakeOutputLine: OutputLine = { text: msg.content, timestamp: Date.now(), type: 'stdout' };
+        const entries = outputToEntries(fakeOutputLine);
+        const relayOut = entriesToAnsiOutputLines(entries, agentChalkColor(fromAgent));
         console.log(`\n${relayHeader}\n${relayOut.join('\n')}\n`);
       },
       onRelayBlocked: (msg: Message) => {
