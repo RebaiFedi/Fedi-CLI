@@ -24,11 +24,11 @@ export const THEME = {
   codexDim: '#14532D',
 } as const;
 
-// Agent icons for terminal display
+// Agent icons for terminal display (used in status pills only)
 export const AGENT_ICONS: Record<AgentId, string> = {
-  opus: '◆',
-  sonnet: '◈',
-  codex: '◉',
+  opus: '●',
+  sonnet: '●',
+  codex: '●',
 };
 
 const AGENT_HEX: Record<AgentId, string> = {
@@ -59,5 +59,5 @@ export function agentChalkColor(agent: AgentId): 'green' | 'yellow' | 'magenta' 
 }
 
 export function agentIcon(agent: AgentId): string {
-  return AGENT_ICONS[agent] ?? '◆';
+  return AGENT_ICONS[agent] ?? '●';
 }

@@ -84,7 +84,8 @@ function InputBarComponent({ onSubmit, placeholder, projectDir }: InputBarProps)
   // ── Paste callback from LineInput ─────────────────────────────────────────
   const handlePaste = useCallback((text: string) => {
     pasteCounter.current++;
-    setPastedText((prev) => prev ? prev + text : text);
+    // Each paste replaces the previous (no concatenation)
+    setPastedText(text);
   }, []);
 
   // ── Build paste badge ─────────────────────────────────────────────────────

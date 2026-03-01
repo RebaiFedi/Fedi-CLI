@@ -14,10 +14,10 @@ import type { Orchestrator } from '../orchestrator/orchestrator.js';
 import { InputBar } from './InputBar.js';
 import { flog } from '../utils/log.js';
 import { stripAnsi } from '../utils/strip-ansi.js';
-import { THEME, agentHex, agentDisplayName, agentChalkColor, agentIcon } from '../config/theme.js';
+import { THEME, agentHex, agentDisplayName, agentChalkColor } from '../config/theme.js';
 import { getMaxMessages, getFlushInterval, INDENT } from '../config/constants.js';
 import { outputToEntries, extractTasks } from '../rendering/output-transform.js';
-import { entriesToAnsiOutputLines } from '../rendering/ansi-renderer.js';
+import { entriesToAnsiOutputLines, wordWrap } from '../rendering/ansi-renderer.js';
 import { compactOutputLines } from '../rendering/compact.js';
 import { ThinkingSpinner } from './ThinkingSpinner.js';
 import { TodoPanel, type TodoItem } from './TodoPanel.js';
@@ -177,15 +177,29 @@ export function Dashboard({
       pendingActions.current.set(agent, []);
     };
 
+    // Helper: emit agent header line when agent changes or first output
+    const emitAgentHeader = (agent: AgentId) => {
+      const agName = chalk.hex(agentHex(agent)).bold(agentDisplayName(agent));
+      if (lastPrintedAgent.current && lastPrintedAgent.current !== agent) {
+        outputLines.push('');
+      }
+      outputLines.push(`${INDENT}${agName}`);
+      lastPrintedAgent.current = agent;
+    };
+
     for (const { agent, entries } of items) {
       if (entries.length === 0) continue;
       const agentColor = agentChalkColor(agent);
 
       const contentEntries: DisplayEntry[] = [];
       const newActions: string[] = [];
+      const inlineToolEntries: DisplayEntry[] = [];
+      const hasOpenMsg = !!currentMsgRef.current.get(agent);
       for (const e of entries) {
         if (e.kind === 'action') {
           newActions.push(e.text);
+        } else if (!hasOpenMsg && (e.kind === 'tool-header' || e.kind === 'diff-old' || e.kind === 'diff-new')) {
+          inlineToolEntries.push(e);
         } else {
           contentEntries.push(e);
         }
@@ -194,44 +208,60 @@ export function Dashboard({
       if (newActions.length > 0) {
         const existing = pendingActions.current.get(agent) ?? [];
         const combined = [...existing, ...newActions];
-        // Cap at 100 actions per agent to prevent memory leak
         pendingActions.current.set(agent, combined.length > 100 ? combined.slice(-100) : combined);
         lastActionTime.current.set(agent, Date.now());
       }
 
-      if (contentEntries.length === 0) {
-        // Actions only — print every action live, no throttle
+      // ── Actions only (no content, no tool entries) ──────────────────────────
+      if (contentEntries.length === 0 && inlineToolEntries.length === 0) {
         const allActions = pendingActions.current.get(agent) ?? [];
         if (allActions.length > 0) {
-          const icon = agentIcon(agent as import('../agents/types.js').AgentId);
-          const label = chalk.hex(agentHex(agent))(`${icon} ${agentDisplayName(agent)}`);
-          const termW = process.stdout.columns || 80;
-          const maxActionW = Math.max(30, termW - INDENT.length - 25);
-          for (const action of allActions) {
-            const short = action.length > maxActionW ? action.slice(0, maxActionW - 3) + '…' : action;
-            outputLines.push(`${INDENT}${label} ${chalk.dim('·')} ${chalk.hex(THEME.actionText)(short)}`);
+          // Print header if agent changed
+          if (lastPrintedAgent.current !== agent) {
+            emitAgentHeader(agent);
           }
+          // Render each action indented under the agent header
+          const rendered = entriesToAnsiOutputLines(
+            allActions.map((a) => ({ text: a, kind: 'action' as const })),
+            agentColor,
+          );
+          outputLines.push(...rendered);
           pendingActions.current.set(agent, []);
         }
         continue;
       }
 
+      // ── Inline tool entries (tool-header/diff without open message) ─────────
+      if (inlineToolEntries.length > 0 && contentEntries.length === 0) {
+        // Print header if agent changed
+        if (lastPrintedAgent.current !== agent) {
+          emitAgentHeader(agent);
+        }
+        // Flush pending actions first
+        const allActions = pendingActions.current.get(agent) ?? [];
+        if (allActions.length > 0) {
+          const rendered = entriesToAnsiOutputLines(
+            allActions.map((a) => ({ text: a, kind: 'action' as const })),
+            agentColor,
+          );
+          outputLines.push(...rendered);
+          pendingActions.current.set(agent, []);
+        }
+        // Render tool entries indented under the agent
+        outputLines.push(...entriesToAnsiOutputLines(inlineToolEntries, agentColor));
+        lastActionTime.current.set(agent, Date.now());
+        continue;
+      }
+
+      // ── Content entries (text, headings, code, etc.) ────────────────────────
       const prevKind = lastEntryKind.current.get(agent);
       const currentId = currentMsgRef.current.get(agent);
       if (currentId) {
         const msg = chatMessagesMap.current.get(currentId);
         if (msg) {
-          const agentSwitched = lastPrintedAgent.current && lastPrintedAgent.current !== agent;
-          if (agentSwitched) {
-            const icon = agentIcon(agent as import('../agents/types.js').AgentId);
-            const agName = chalk.hex(agentHex(agent)).bold(`${icon} ${agentDisplayName(agent)}`);
-            const termW = process.stdout.columns || 80;
-            const headerWidth = Math.min(termW - INDENT.length * 2, 60);
-            outputLines.push('');
-            outputLines.push('');
-            outputLines.push(`${INDENT}${agName}`);
-            outputLines.push(`${INDENT}${chalk.hex(THEME.panelBorder)('─'.repeat(headerWidth))}`);
-            outputLines.push('');
+          // Append to existing open message
+          if (lastPrintedAgent.current !== agent) {
+            emitAgentHeader(agent);
           }
           lastPrintedAgent.current = agent;
           msg.lines.push(...entries);
@@ -243,11 +273,8 @@ export function Dashboard({
         }
       }
 
-      if (lastPrintedAgent.current && lastPrintedAgent.current !== agent) {
-        outputLines.push('');
-        outputLines.push('');
-      }
-      lastPrintedAgent.current = agent;
+      // Create new message block with header
+      emitAgentHeader(agent);
 
       const id = randomUUID();
       currentMsgRef.current.set(agent, id);
@@ -265,15 +292,6 @@ export function Dashboard({
         }
       }
 
-      const icon = agentIcon(agent as import('../agents/types.js').AgentId);
-      const name = chalk.hex(agentHex(agent)).bold(`${icon} ${agentDisplayName(agent)}`);
-      const termW = process.stdout.columns || 80;
-      const headerWidth = Math.min(termW - INDENT.length * 2, 60);
-      outputLines.push('');
-      outputLines.push('');
-      outputLines.push(`${INDENT}${name}`);
-      outputLines.push(`${INDENT}${chalk.hex(THEME.panelBorder)('─'.repeat(headerWidth))}`);
-      outputLines.push('');
       flushPendingActions(agent, agentColor);
       outputLines.push(...entriesToAnsiOutputLines(contentEntries, agentColor));
       const last = contentEntries[contentEntries.length - 1];
@@ -288,23 +306,32 @@ export function Dashboard({
       if (status !== 'running') continue;
       const sinceLastAction = now - lastTime;
       const lastHb = lastHeartbeatTime.current.get(agent) ?? 0;
-      // Show heartbeat every 5s if agent hasn't emitted actions in 5+ seconds
       if (sinceLastAction >= 5000 && now - lastHb >= 5000) {
         lastHeartbeatTime.current.set(agent, now);
-        const icon = agentIcon(agent as import('../agents/types.js').AgentId);
-        const label = chalk.hex(agentHex(agent))(`${icon} ${agentDisplayName(agent)}`);
+        const hbLabel = chalk.hex(agentHex(agent)).bold(agentDisplayName(agent));
         const elapsed = Math.floor(sinceLastAction / 1000);
-        outputLines.push(`${INDENT}${label} ${chalk.hex(THEME.actionIcon)('·')} ${chalk.dim(`thinking… ${elapsed}s`)}`);
+        if (lastPrintedAgent.current && lastPrintedAgent.current !== agent) {
+          outputLines.push('');
+        }
+        outputLines.push(`${INDENT}${hbLabel} ${chalk.dim(`thinking… ${elapsed}s`)}`);
+        lastPrintedAgent.current = agent as AgentId;
       }
     }
 
-    // Trim leading empty lines from the batch
-    while (outputLines.length > 0 && stripAnsi(outputLines[0]).trim() === '') {
-      outputLines.shift();
+    // Trim excessive leading empty lines — keep at most 1 for inter-batch
+    // agent separation (we need it when agents switch between flushes)
+    const compacted = compactOutputLines(outputLines);
+    // Allow a single leading blank line (for agent switch spacing), trim rest
+    while (compacted.length > 1 && stripAnsi(compacted[0]).trim() === '' && stripAnsi(compacted[1]).trim() === '') {
+      compacted.shift();
+    }
+    // If no previous output was printed, trim the remaining leading blank too
+    if (!lastPrintedAgent.current && compacted.length > 0 && stripAnsi(compacted[0]).trim() === '') {
+      compacted.shift();
     }
 
-    if (outputLines.length > 0) {
-      const final = compactOutputLines(outputLines).join('\n');
+    if (compacted.length > 0) {
+      const final = compacted.join('\n');
       flog.debug('UI', 'Output displayed', { preview: final.slice(0, 120) });
       // Single console.log call — Ink erases+redraws its zone only once
       console.log(final);
@@ -314,14 +341,15 @@ export function Dashboard({
   const enqueueOutput = useCallback(
     (agent: AgentId, entries: DisplayEntry[]) => {
       const isFirstChunk = !currentMsgRef.current.has(agent);
-      const isActionOnly = entries.length > 0 && entries.every((e) => e.kind === 'action');
+      const isActionLike = entries.length > 0 && entries.every((e) =>
+        e.kind === 'action' || e.kind === 'tool-header' || e.kind === 'diff-old' || e.kind === 'diff-new');
       outputBuffer.current.push({ agent, entries });
       if (isFirstChunk) {
         // Flush immediately on first token for perceived speed
         if (flushTimer.current) clearTimeout(flushTimer.current);
         flushTimer.current = setTimeout(flushBuffer, 0);
-      } else if (isActionOnly) {
-        // Actions (read, bash, etc.) — flush quickly for live visibility
+      } else if (isActionLike) {
+        // Actions and tool headers — flush quickly for live visibility
         if (!flushTimer.current) {
           flushTimer.current = setTimeout(flushBuffer, 80);
         }
@@ -580,14 +608,30 @@ export function Dashboard({
         const toName = agentDisplayName(toAgent);
         const fromColor = agentHex(fromAgent);
         const toColor = agentHex(toAgent);
-        const preview = msg.content.length > 120
-          ? msg.content.slice(0, 117) + '...'
-          : msg.content;
-        const fromIcon = agentIcon(fromAgent);
-        const toIcon = agentIcon(toAgent);
-        const relayHeader = `${INDENT}${chalk.hex(fromColor).bold(`${fromIcon} ${fromName}`)} ${chalk.hex(THEME.muted)('→')} ${chalk.hex(toColor).bold(`${toIcon} ${toName}`)}`;
-        const relayBody = `${INDENT}  ${chalk.hex('#94A3B8')(preview)}`;
-        console.log(`\n${relayHeader}\n${relayBody}\n`);
+        const relayHeader = `${INDENT}${chalk.hex(fromColor).bold(fromName)} ${chalk.dim('to')} ${chalk.hex(toColor).bold(toName)}`;
+        const termW = process.stdout.columns || 80;
+        const pad = `${INDENT}  `;
+        const wrapPad = `${pad}  `;
+        // Split content by newlines, word-wrap each line on PLAIN text, then colorize
+        const contentLines = msg.content.split('\n');
+        const relayOut: string[] = [];
+        for (const line of contentLines) {
+          if (!line.trim()) {
+            relayOut.push('');
+            continue;
+          }
+          // Word-wrap on plain text (no ANSI) to get correct line breaks
+          const plainWrapped = wordWrap(`${pad}${line}`, termW, wrapPad);
+          // Apply color AFTER wrapping so each line gets its own ANSI codes
+          relayOut.push(...plainWrapped.map(l => {
+            // Preserve the padding (plain text), colorize only the content part
+            const padLen = l.length - l.trimStart().length;
+            const padding = l.slice(0, padLen);
+            const content = l.slice(padLen);
+            return `${padding}${chalk.hex('#94A3B8')(content)}`;
+          }));
+        }
+        console.log(`\n${relayHeader}\n${relayOut.join('\n')}\n`);
       },
       onRelayBlocked: (msg: Message) => {
         flog.info('UI', `Relay blocked: ${msg.from}->${msg.to}`);

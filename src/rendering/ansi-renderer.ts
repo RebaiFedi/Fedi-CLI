@@ -10,9 +10,29 @@ import { compact, addActionSpacing } from './compact.js';
  * Continuation lines are prefixed with `contIndent`.
  */
 export function wordWrap(text: string, maxWidth: number, contIndent: string): string[] {
+  // Handle embedded newlines: split first, wrap each line individually
+  if (text.includes('\n')) {
+    const parts = text.split('\n');
+    const result: string[] = [];
+    for (let p = 0; p < parts.length; p++) {
+      const wrapped = wordWrapSingleLine(parts[p], maxWidth, contIndent);
+      // First part keeps original formatting, subsequent parts get contIndent
+      if (p === 0) {
+        result.push(...wrapped);
+      } else {
+        result.push(...wrapped.map((l, i) => (i === 0 ? `${contIndent}${l}` : l)));
+      }
+    }
+    return result;
+  }
+  return wordWrapSingleLine(text, maxWidth, contIndent);
+}
+
+function wordWrapSingleLine(text: string, maxWidth: number, contIndent: string): string[] {
   const visibleLen = stripAnsi(text).length;
   if (visibleLen <= maxWidth || maxWidth < 10) return [text];
 
+  const contIndentLen = stripAnsi(contIndent).length;
   const words = text.split(/( +)/);
   const lines: string[] = [];
   let currentLine = '';
@@ -24,7 +44,8 @@ export function wordWrap(text: string, maxWidth: number, contIndent: string): st
       lines.push(currentLine);
       const trimmed = word.replace(/^ +/, '');
       currentLine = trimmed;
-      currentVisible = stripAnsi(trimmed).length;
+      // Continuation lines have contIndent prepended, so account for its width
+      currentVisible = contIndentLen + stripAnsi(trimmed).length;
     } else {
       currentLine += word;
       currentVisible += wordVisible;
@@ -44,7 +65,7 @@ function isTableLine(text: string): boolean {
 
 // ── Tool icons & colors ─────────────────────────────────────────────────────
 
-const TOOL_STYLES: Record<ToolAction, { icon: string; label: string; color: string }> = {
+export const TOOL_STYLES: Record<ToolAction, { icon: string; label: string; color: string }> = {
   read:   { icon: '>', label: 'Read',   color: '#38BDF8' },
   write:  { icon: '>', label: 'Write',  color: '#A78BFA' },
   create: { icon: '+', label: 'Create', color: '#34D399' },
@@ -88,6 +109,12 @@ const ACTION_PATTERNS: Array<{ re: RegExp; tool: ToolAction }> = [
 function formatActionLine(text: string, maxW: number): string {
   const trimmed = text.trim();
 
+  // Status snippets (✦ prefix) — handled by entryToAnsiLines with word-wrap
+  if (trimmed.startsWith('✦ ')) {
+    const snippet = trimmed.slice(2);
+    return `  ${chalk.hex(THEME.muted)('│')} ${chalk.hex('#CBD5E1')(snippet)}`;
+  }
+
   for (const { re, tool } of ACTION_PATTERNS) {
     if (re.test(trimmed)) {
       const value = trimmed.replace(re, '').trim();
@@ -120,16 +147,18 @@ function formatToolHeader(text: string, tool: ToolAction, maxW: number): string[
 
 // ── Diff line formatters ─────────────────────────────────────────────────────
 
-function formatDiffOld(text: string, maxW: number): string {
-  const clipped = text.length > maxW - 8 ? text.slice(0, maxW - 11) + '…' : text;
+function formatDiffOld(text: string, maxW: number, lineNum?: number): string {
+  const clipped = text.length > maxW - 12 ? text.slice(0, maxW - 15) + '…' : text;
   const border = chalk.hex('#7F1D1D')('│');
-  return `${INDENT}    ${border} ${chalk.hex('#EF4444')(`- ${clipped}`)}`;
+  const numStr = lineNum != null ? chalk.hex('#7F1D1D')(String(lineNum).padStart(4)) + ' ' : '';
+  return `${INDENT}    ${numStr}${border} ${chalk.hex('#EF4444')(`- ${clipped}`)}`;
 }
 
-function formatDiffNew(text: string, maxW: number): string {
-  const clipped = text.length > maxW - 8 ? text.slice(0, maxW - 11) + '…' : text;
+function formatDiffNew(text: string, maxW: number, lineNum?: number): string {
+  const clipped = text.length > maxW - 12 ? text.slice(0, maxW - 15) + '…' : text;
   const border = chalk.hex('#14532D')('│');
-  return `${INDENT}    ${border} ${chalk.hex('#22C55E')(`+ ${clipped}`)}`;
+  const numStr = lineNum != null ? chalk.hex('#14532D')(String(lineNum).padStart(4)) + ' ' : '';
+  return `${INDENT}    ${numStr}${border} ${chalk.hex('#22C55E')(`+ ${clipped}`)}`;
 }
 
 // ── Entry renderer ───────────────────────────────────────────────────────────
@@ -165,16 +194,25 @@ export function entryToAnsiLines(
     return formatToolHeader(e.text, tool, maxW);
   }
 
-  // Diff lines
+  // Diff lines (with optional line numbers)
   if (e.kind === 'diff-old') {
-    return [formatDiffOld(e.text, maxW)];
+    return [formatDiffOld(e.text, maxW, e.lineNum)];
   }
   if (e.kind === 'diff-new') {
-    return [formatDiffNew(e.text, maxW)];
+    return [formatDiffNew(e.text, maxW, e.lineNum)];
   }
 
   // Legacy action (without rich metadata)
   if (e.kind === 'action') {
+    // Status snippets (✦) get word-wrapped instead of truncated
+    if (e.text.trim().startsWith('✦ ')) {
+      const snippet = e.text.trim().slice(2);
+      const border = chalk.hex(THEME.muted)('│');
+      const styled = chalk.hex('#CBD5E1')(snippet);
+      const prefix = `${INDENT}  ${border} `;
+      const raw = `${prefix}${styled}`;
+      return wordWrap(raw, wrapW, `${INDENT}  ${border} `);
+    }
     const formatted = formatActionLine(e.text, maxW);
     return [`${INDENT}${formatted}`];
   }
@@ -199,11 +237,10 @@ export function entryToAnsiLines(
 
   if (e.kind === 'heading') {
     const col = e.color === 'cyan' ? chalk.hex(THEME.sonnet) : chalk.hex(THEME.text);
-    // Add a subtle leading marker for headings
     const marker = chalk.hex(THEME.muted)('▌ ');
     const raw = `${marker}${col.bold(e.text)}`;
     const headingLines = wordWrap(raw, maxW, contIndent).map((l, i) => (i === 0 ? `${INDENT}${l}` : l));
-    return ['', ...headingLines];
+    return headingLines;
   }
 
   // Regular text

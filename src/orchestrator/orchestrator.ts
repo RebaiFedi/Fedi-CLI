@@ -1,5 +1,7 @@
 import PQueue from 'p-queue';
 import { randomUUID } from 'node:crypto';
+import { writeFileSync, existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { SonnetAgent } from '../agents/sonnet.js';
 import { CodexAgent } from '../agents/codex.js';
 import { OpusAgent } from '../agents/opus.js';
@@ -92,6 +94,10 @@ export class Orchestrator {
   ]);
   /** Timestamp when relay started for each agent — used for safety timeout */
   private relayStartTime: Map<AgentId, number> = new Map();
+  /** Last time a status snippet was emitted for each agent — throttle to avoid UI spam */
+  private lastStatusSnippetTime: Map<AgentId, number> = new Map();
+  /** Minimum interval (ms) between status snippets for the same agent */
+  private readonly STATUS_SNIPPET_INTERVAL_MS = 1200;
   /** Agents that Opus delegated to — we wait for ALL before delivering to Opus */
   private expectedDelegates: Set<AgentId> = new Set();
   /** Buffered reports from delegates — delivered to Opus as one combined message */
@@ -190,19 +196,25 @@ export class Orchestrator {
       this.detectRelayPatterns('opus', line.text);
 
       // When Opus has delegated to agents and is waiting for their reports,
-      // buffer his stdout so his analysis/report doesn't appear before the
-      // combined report.  This applies in ALL modes including @tous — Opus's
-      // text output (report, tables, synthesis) must wait until all delegates
-      // have finished so the user sees ONE final report, not a premature one.
-      // Actions (system), checkpoints, and info lines still pass through so
-      // the user sees Opus is working.
-      if (this.expectedDelegates.size > 0 && line.type === 'stdout') {
-        const stripped = line.text
-          .replace(/\[TASK:(add|done)\][^\n]*/gi, '')
-          .trim();
-        if (stripped.length > 0) {
-          flog.debug('BUFFER', `Opus stdout BUFFERED (${this.expectedDelegates.size} delegates pending): ${stripped.slice(0, 80)}`, { agent: 'opus' });
-          this.relayBuffer.get('opus')!.push(line);
+      // buffer ALL his output (stdout + tool actions) so the user only sees
+      // the agents' work, not Opus doing things in parallel.
+      // In @tous mode, Opus IS supposed to work — only buffer stdout (report text).
+      if (this.expectedDelegates.size > 0) {
+        if (line.type === 'stdout') {
+          const stripped = line.text
+            .replace(/\[TASK:(add|done)\][^\n]*/gi, '')
+            .trim();
+          if (stripped.length > 0) {
+            flog.debug('BUFFER', `Opus stdout BUFFERED (${this.expectedDelegates.size} delegates pending): ${stripped.slice(0, 80)}`, { agent: 'opus' });
+            this.relayBuffer.get('opus')!.push(line);
+            this.maybeEmitStatusSnippet('opus', line.text, cb);
+            return;
+          }
+        }
+        // In normal delegation (not @tous), also hide Opus tool actions
+        // Opus shouldn't be using tools when agents are working
+        if (!this.opusAllMode && line.type === 'system') {
+          flog.debug('BUFFER', `Opus action HIDDEN (delegates pending, not @tous): ${line.text.slice(0, 80)}`, { agent: 'opus' });
           return;
         }
       }
@@ -413,6 +425,8 @@ export class Orchestrator {
         flog.debug('ORCH', `${label} stdout BLOCKED (@tous delegation active): ${line.text.slice(0, 80)}`);
         this.detectRelayPatterns(agentId, line.text);
         this.relayBuffer.get(agentId)!.push(line);
+        // Emit a throttled status snippet so the user sees what the agent is thinking
+        this.maybeEmitStatusSnippet(agentId, line.text, cb);
         return;
       }
       // Checkpoint passthrough — always forward to UI, but NEVER to Opus while
@@ -441,6 +455,8 @@ export class Orchestrator {
             // Pass task tags through so todo list updates in real-time
             if (/\[TASK:(add|done)\]/i.test(line.text)) cb.onAgentOutput(agentId, line);
             this.relayBuffer.get(agentId)!.push(line);
+            // Emit a throttled status snippet so the user sees what the agent is thinking
+            this.maybeEmitStatusSnippet(agentId, line.text, cb);
           }
           if (line.type !== 'stdout') cb.onAgentOutput(agentId, line);
           return;
@@ -459,6 +475,8 @@ export class Orchestrator {
             // Pass task tags through so todo list updates in real-time
             if (/\[TASK:(add|done)\]/i.test(line.text)) cb.onAgentOutput(agentId, line);
             this.relayBuffer.get(agentId)!.push(line);
+            // Emit a throttled status snippet so the user sees what the agent is thinking
+            this.maybeEmitStatusSnippet(agentId, line.text, cb);
           } else {
             cb.onAgentOutput(agentId, line);
           }
@@ -583,6 +601,52 @@ export class Orchestrator {
     });
   }
 
+  /** Marker to identify Fedi-CLI-managed CLAUDE.md */
+  private static readonly CLAUDE_MD_MARKER = '<!-- fedi-cli-managed -->';
+
+  /** Create or update CLAUDE.md in the project directory so Claude CLI agents
+   *  respect the orchestration rules (delegation, report flow, etc.). */
+  private ensureClaudeMd(projectDir: string) {
+    const path = join(projectDir, 'CLAUDE.md');
+    const content = `${Orchestrator.CLAUDE_MD_MARKER}
+# Fedi CLI — Regles Agent
+
+## OPUS: ZERO OUTIL APRES DELEGATION
+Quand tu delegues a Sonnet/Codex via [TO:SONNET]/[TO:CODEX]:
+- INTERDIT d'appeler Read, Glob, Grep, Bash, Write, Edit, WebFetch
+- ZERO outil. ATTENDS les rapports en silence
+- Ecris UNE phrase ("J'ai lance X.") puis STOP TOTAL
+- Si tu appelles un outil apres avoir delegue = ERREUR GRAVE (conflits de fichiers)
+- EXCEPTION: mode @tous, [FALLBACK], ou le user dit "toi-meme"
+
+## SONNET / CODEX: FAIRE LE TRAVAIL AVANT [TO:OPUS]
+- [FROM:OPUS] → FAIS LE TRAVAIL D'ABORD (Write, Edit, Bash) → quand FINI → [TO:OPUS] resume
+- [TO:OPUS] = DERNIERE action, JAMAIS la premiere
+- "Je vais le faire" n'est PAS un rapport. Fais le travail puis rapporte ce que tu as fait.
+- [FROM:USER] → reponds directement, PAS de [TO:OPUS]
+
+## SUIVRE LES INSTRUCTIONS
+- "analyse" = analyse seulement, ZERO modification
+- "cree/fix/modifie" = LA tu peux modifier
+- Fais EXACTEMENT ce qu'on te demande. PAS PLUS, PAS MOINS.
+`;
+    try {
+      if (existsSync(path)) {
+        const existing = readFileSync(path, 'utf-8');
+        // Only overwrite if it's our managed file (has marker)
+        if (!existing.includes(Orchestrator.CLAUDE_MD_MARKER)) {
+          flog.debug('ORCH', 'CLAUDE.md exists but is user-managed — skipping');
+          return;
+        }
+        if (existing === content) return; // Already up to date
+      }
+      writeFileSync(path, content, 'utf-8');
+      flog.info('ORCH', `Created/updated CLAUDE.md in ${projectDir}`);
+    } catch (err) {
+      flog.warn('ORCH', `Failed to write CLAUDE.md: ${err}`);
+    }
+  }
+
   private async ensureWorkerStarted(agentId: WorkerAgentId) {
     if (!this.config) return;
     if (!this.isAgentEnabled(agentId)) return;
@@ -629,6 +693,10 @@ export class Orchestrator {
 
     const config = this.config;
     flog.info('ORCH', `Starting Opus with task: ${task.slice(0, 80)}`);
+
+    // Ensure CLAUDE.md exists in the project directory so Claude CLI agents
+    // pick up the rules when they start. Only write if missing or outdated.
+    this.ensureClaudeMd(config.projectDir);
 
     // Create persistent session
     await this.sessionManager?.createSession(task, config.projectDir);
@@ -706,7 +774,7 @@ export class Orchestrator {
     const from = fromAgent.toUpperCase();
     if (agentId === 'sonnet') {
       if (from === 'OPUS') {
-        return '[RAPPEL] Tu es Sonnet, ingenieur frontend. Travaille puis envoie [TO:OPUS] rapport. Ne parle PAS au user.';
+        return '[RAPPEL] Tu es Sonnet, ingenieur frontend. FAIS LE TRAVAIL D\'ABORD (Write, Edit, Bash...), puis QUAND TU AS FINI envoie [TO:OPUS] avec le resume. [TO:OPUS] = DERNIERE action, JAMAIS la premiere. Ne parle PAS au user.';
       }
       if (from === 'USER') {
         return '[RAPPEL] Tu es Sonnet, ingenieur frontend. Le user te parle directement. Reponds au user. PAS de [TO:OPUS].';
@@ -714,7 +782,7 @@ export class Orchestrator {
     }
     if (agentId === 'codex') {
       if (from === 'OPUS') {
-        return '[RAPPEL] Tu es Codex, ingenieur backend. Travaille puis envoie [TO:OPUS] rapport. Ne parle PAS au user.';
+        return '[RAPPEL] Tu es Codex, ingenieur backend. FAIS LE TRAVAIL D\'ABORD, puis QUAND TU AS FINI envoie [TO:OPUS] avec le resume. [TO:OPUS] = DERNIERE action, JAMAIS la premiere. Ne parle PAS au user.';
       }
       if (from === 'USER') {
         return '[RAPPEL] Tu es Codex, ingenieur backend. Le user te parle directement. Reponds au user. PAS de [TO:OPUS].';
@@ -952,6 +1020,7 @@ export class Orchestrator {
       ['opus', []],
     ]);
     this.relayStartTime.clear();
+    this.lastStatusSnippetTime.clear();
     this.relayTimestamps = [];
     this.expectedDelegates.clear();
     this.pendingReportsForOpus.clear();
@@ -1106,6 +1175,7 @@ export class Orchestrator {
       this.deliveredToOpus.delete(target);
       this.agentsOnRelay.add(target);
       this.relayStartTime.set(target, Date.now());
+      this.lastStatusSnippetTime.delete(target); // Reset so first snippet shows immediately
       this.expectedDelegates.add(target);
       // Store delegation content for auto-fallback if agent fails
       this.lastDelegationContent.set(target, content);
@@ -1133,6 +1203,15 @@ export class Orchestrator {
         this.agentsOnCrossTalk.delete(from);
       }
       flog.info('ORCH', `Buffered report from ${from} (${this.pendingReportsForOpus.size}/${this.expectedDelegates.size} received)`);
+      // Emit a brief preview of the report so the user sees what the agent sent
+      const reportPreview = this.extractStatusSnippet(content);
+      if (reportPreview && this.callbacks) {
+        this.callbacks.onAgentOutput(from, {
+          text: `✦ ${reportPreview}`,
+          timestamp: Date.now(),
+          type: 'system',
+        });
+      }
       // Check if all delegates have reported
       if (this.pendingReportsForOpus.size >= this.expectedDelegates.size) {
         this.deliverCombinedReportsToOpus();
@@ -1483,6 +1562,68 @@ export class Orchestrator {
       clearTimeout(prevTimer);
       this.safetyNetTimers.delete(agentId);
     }
+  }
+
+  /** Extract a short status snippet from agent stdout text for live UI display.
+   *  Returns null if the text is not meaningful (relay tags, task tags, empty). */
+  private extractStatusSnippet(text: string): string | null {
+    const trimmed = text.trim();
+    if (!trimmed || trimmed.length < 5) return null;
+    // Skip relay/task/system tags
+    if (/^\[(TO|FROM|TASK|RAPPEL|CODEX|SONNET|OPUS|FALLBACK):/i.test(trimmed)) return null;
+    // Skip code blocks, markdown artifacts
+    if (/^```/.test(trimmed)) return null;
+    // Skip lines that are ONLY punctuation or formatting (no letters)
+    if (/^[─═\-*>|]+$/.test(trimmed)) return null;
+    // Skip internal instructions that leaked through
+    if (/^(Tu es|You are|REGLE|RULE|IMPORTANT)/i.test(trimmed)) return null;
+    // Skip tool action lines (already shown as actions)
+    if (/^▸\s/.test(trimmed)) return null;
+
+    // Take the first line that looks like natural language
+    const lines = trimmed.split('\n');
+    let firstLine = '';
+    for (const l of lines) {
+      let lt = l.trim();
+      if (!lt || /^[─═\-*>|`]+$/.test(lt)) continue;
+      if (/^\[(TO|FROM|TASK|RAPPEL):/i.test(lt)) continue;
+      if (/^▸\s/.test(lt)) continue;
+      // Strip markdown heading prefixes (## Title → Title)
+      lt = lt.replace(/^#{1,6}\s+/, '');
+      if (lt.length < 3) continue;
+      firstLine = lt;
+      break;
+    }
+    if (!firstLine || firstLine.length < 5) return null;
+
+    // No hard cap — let the renderer word-wrap as needed
+    const capped = firstLine;
+
+    // Skip very short or meaningless snippets
+    if (capped.replace(/[^a-zA-Zà-ÿ0-9]/g, '').length < 4) return null;
+
+    return capped;
+  }
+
+  /** Emit a throttled status snippet for an agent on relay — gives the user
+   *  ambient visibility into what the agent is thinking/writing. */
+  private maybeEmitStatusSnippet(agentId: AgentId, text: string, cb: OrchestratorCallbacks) {
+    const now = Date.now();
+    const lastTime = this.lastStatusSnippetTime.get(agentId) ?? 0;
+    if (now - lastTime < this.STATUS_SNIPPET_INTERVAL_MS) return;
+
+    const snippet = this.extractStatusSnippet(text);
+    if (!snippet) return;
+
+    this.lastStatusSnippetTime.set(agentId, now);
+    // Emit as 'system' type → becomes kind:'action' → shows in lightweight
+    // action-only path with agent label prefix. Prefix with ✦ so Dashboard
+    // can render it as dimmed thinking text instead of a tool action.
+    cb.onAgentOutput(agentId, {
+      text: `✦ ${snippet}`,
+      timestamp: now,
+      type: 'system',
+    });
   }
 
   /** Extract buffered text for an agent and handle auto-relay or combined delivery */

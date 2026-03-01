@@ -274,6 +274,13 @@ export abstract class BaseSonnetAgent implements AgentProcess {
           if (oldStr) meta.oldLines = oldStr.split('\n');
           if (newStr) meta.newLines = newStr.split('\n');
         }
+        // Capture Write/Create content preview
+        if (tool === 'write') {
+          const content = str('content');
+          if (content) {
+            meta.newLines = content.split('\n');
+          }
+        }
         this.emit({ text: formatted, timestamp: Date.now(), type: 'system', toolMeta: meta });
       } else {
         this.emit({ text: formatted, timestamp: Date.now(), type: 'system' });

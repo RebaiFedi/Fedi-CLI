@@ -53,6 +53,10 @@ export abstract class BaseAppServerAgent implements AgentProcess {
   /** Tracks whether we received any deltas for the current agentMessage item.
    *  If true, item/completed should skip emitting text (already covered by deltas). */
   private hadAgentMessageDeltas = false;
+  /** Buffer for file change diff content from outputDelta or turn/diff events */
+  private pendingFileChangeDiff: string | null = null;
+  /** File path for the current pending file change */
+  private pendingFileChangePath: string | null = null;
 
   /** Human-readable tag for log messages */
   protected abstract get logTag(): string;
@@ -501,13 +505,17 @@ export abstract class BaseAppServerAgent implements AgentProcess {
       case 'item/tool/requestUserInput':
         this.handleToolUserInput(msg);
         break;
+      case 'item/fileChange/outputDelta':
+        this.handleFileChangeOutputDelta(params);
+        break;
       case 'turn/diff/updated':
+        this.handleTurnDiffUpdated(params);
+        break;
       case 'turn/plan/updated':
       case 'item/plan/delta':
       case 'item/reasoning/textDelta':
       case 'item/reasoning/summaryTextDelta':
       case 'item/reasoning/summaryPartAdded':
-      case 'item/fileChange/outputDelta':
       case 'item/mcpToolCall/progress':
       case 'thread/started':
       case 'thread/status/changed':
@@ -559,18 +567,28 @@ export abstract class BaseAppServerAgent implements AgentProcess {
       // Only emit checkpoint on start — the system action line is emitted on item/completed (with exit code)
       const command = typeof item.command === 'string' ? item.command : undefined;
       if (command) {
-        this.emitCheckpoint(`[CODEX:checkpoint] Running: ${command.slice(0, 100)}`);
+        // Detect file creation via heredoc — emit as file create checkpoint instead of exec
+        const fileCreateInfo = this.detectFileCreateCommand(command);
+        if (fileCreateInfo) {
+          this.emitCheckpoint(`[CODEX:checkpoint] File create: ${fileCreateInfo.file}`);
+        } else {
+          this.emitCheckpoint(`[CODEX:checkpoint] Running: ${command.slice(0, 100)}`);
+        }
       }
     } else if (itemType === 'fileChange' || itemType === 'file_change') {
+      // Reset diff buffer for new file change
+      this.pendingFileChangeDiff = null;
+      this.pendingFileChangePath = null;
       // Only emit checkpoint on start — the system action line is emitted on item/completed
-      if (Array.isArray(item.changes)) {
-        for (const change of item.changes as Array<Record<string, unknown>>) {
-          const file = typeof change.path === 'string' ? change.path
-            : typeof change.filename === 'string' ? change.filename : undefined;
-          const kind = typeof change.kind === 'string' ? change.kind : undefined;
-          if (file) {
-            this.emitCheckpoint(`[CODEX:checkpoint] File ${kind ?? 'change'}: ${file}`);
-          }
+      const startChanges: Array<Record<string, unknown>> = Array.isArray(item.changes)
+        ? item.changes as Array<Record<string, unknown>>
+        : (item.filename || item.path) ? [item as Record<string, unknown>] : [];
+      for (const change of startChanges) {
+        const file = typeof change.path === 'string' ? change.path
+          : typeof change.filename === 'string' ? change.filename : undefined;
+        const kind = typeof change.kind === 'string' ? change.kind : undefined;
+        if (file) {
+          this.emitCheckpoint(`[CODEX:checkpoint] File ${kind ?? 'change'}: ${file}`);
         }
       }
     } else if (itemType === 'fileRead' || itemType === 'file_read' || itemType === 'read_file') {
@@ -656,11 +674,24 @@ export abstract class BaseAppServerAgent implements AgentProcess {
       const exitCode = typeof item.exitCode === 'number' ? item.exitCode
         : typeof item.exit_code === 'number' ? item.exit_code : undefined;
       if (command) {
-        const formatted = formatAction('bash', command);
-        if (formatted) {
-          const suffix = exitCode !== undefined && exitCode !== 0 ? ` (exit ${exitCode})` : '';
-          const meta: ToolMeta = { tool: 'bash', command, exitCode };
-          this.emit({ text: `${formatted}${suffix}`, timestamp: Date.now(), type: 'system', toolMeta: meta });
+        // Detect file creation via heredoc: cat > file <<'EOF' ... EOF
+        const fileCreateInfo = this.detectFileCreateCommand(command);
+        if (fileCreateInfo && (exitCode === undefined || exitCode === 0)) {
+          // Emit as a file create with content preview (like Sonnet's Write)
+          const createFormatted = formatAction('create', fileCreateInfo.file);
+          if (createFormatted) {
+            const meta: ToolMeta = { tool: 'create', file: fileCreateInfo.file };
+            if (fileCreateInfo.lines.length > 0) meta.newLines = fileCreateInfo.lines;
+            flog.debug('AGENT', `${this.logTag}: Detected file create via bash: ${fileCreateInfo.file} (${fileCreateInfo.lines.length} lines)`);
+            this.emit({ text: createFormatted, timestamp: Date.now(), type: 'system', toolMeta: meta });
+          }
+        } else {
+          const formatted = formatAction('bash', command);
+          if (formatted) {
+            const suffix = exitCode !== undefined && exitCode !== 0 ? ` (exit ${exitCode})` : '';
+            const meta: ToolMeta = { tool: 'bash', command, exitCode };
+            this.emit({ text: `${formatted}${suffix}`, timestamp: Date.now(), type: 'system', toolMeta: meta });
+          }
         }
         if (exitCode !== undefined && exitCode !== 0) {
           const stderr = typeof item.stderr === 'string' ? item.stderr : undefined;
@@ -676,33 +707,81 @@ export abstract class BaseAppServerAgent implements AgentProcess {
 
     // File change completed — changes: [{ path, kind, diff }]
     if (itemType === 'fileChange' || itemType === 'file_change') {
-      if (Array.isArray(item.changes)) {
-        for (const change of item.changes as Array<Record<string, unknown>>) {
+      flog.debug('AGENT', `${this.logTag}: fileChange raw keys=${Object.keys(item).join(',')} changes=${Array.isArray(item.changes)} hasFilename=${!!item.filename} hasPath=${!!item.path} hasDiff=${!!item.diff}`);
+      // Some API versions put file/diff at item level instead of inside changes[]
+      const changes: Array<Record<string, unknown>> = Array.isArray(item.changes)
+        ? item.changes as Array<Record<string, unknown>>
+        : (item.filename || item.path || item.diff)
+          ? [item as Record<string, unknown>]
+          : [];
+      if (changes.length > 0) {
+        for (const change of changes) {
           const file = typeof change.path === 'string' ? change.path
             : typeof change.filename === 'string' ? change.filename : undefined;
           const kind = typeof change.kind === 'string' ? change.kind : undefined;
+          flog.debug('AGENT', `${this.logTag}: fileChange detail: kind=${kind} file=${file} keys=${Object.keys(change).join(',')}`);
           if (file) {
-            const label = kind === 'add' ? 'create' : kind === 'delete' ? 'delete' : 'edit';
+            // Use diff from change object, or fall back to buffered outputDelta diff
+            const diff = typeof change.diff === 'string' ? change.diff
+              : (this.pendingFileChangeDiff ?? undefined);
+            flog.debug('AGENT', `${this.logTag}: fileChange diff source: change.diff=${typeof change.diff === 'string'} pending=${!!this.pendingFileChangeDiff} hasDiff=${!!diff} diffLen=${diff?.length ?? 0}`);
+
+            // Parse diff lines
+            const oldLines: string[] = [];
+            const newLines: string[] = [];
+            if (diff) {
+              for (const dl of diff.split('\n')) {
+                if (dl.startsWith('-') && !dl.startsWith('---')) oldLines.push(dl.slice(1));
+                else if (dl.startsWith('+') && !dl.startsWith('+++')) newLines.push(dl.slice(1));
+              }
+            }
+
+            // Detect create vs edit
+            let label: 'create' | 'edit' | 'delete';
+            if (kind === 'add' || kind === 'create') {
+              label = 'create';
+            } else if (kind === 'delete' || kind === 'remove') {
+              label = 'delete';
+            } else if (diff && oldLines.length === 0) {
+              // No old lines → file creation (all additions)
+              label = 'create';
+            } else if (diff && oldLines.length > 0) {
+              label = 'edit';
+            } else {
+              label = 'edit';
+            }
+
+            const meta: ToolMeta = { tool: label, file };
+
+            // Populate diff content
+            if (oldLines.length > 0) meta.oldLines = oldLines;
+            if (newLines.length > 0) {
+              meta.newLines = newLines;
+            } else if (diff && diff.trim().length > 0 && oldLines.length === 0 && newLines.length === 0) {
+              // Diff has no +/- prefixes → raw file content (file creation)
+              meta.newLines = diff.split('\n');
+              label = 'create';
+              meta.tool = 'create';
+              flog.debug('AGENT', `${this.logTag}: fileChange diff is raw content, treating as create`);
+            }
+
+            // Fallback: content/new_content fields for create
+            if (!meta.newLines?.length && label === 'create') {
+              const content = typeof change.content === 'string' ? change.content
+                : typeof change.new_content === 'string' ? change.new_content : undefined;
+              if (content) meta.newLines = content.split('\n');
+            }
+
+            flog.debug('AGENT', `${this.logTag}: fileChange result: label=${label} old=${meta.oldLines?.length ?? 0} new=${meta.newLines?.length ?? 0}`);
+
             const formatted = formatAction(label, file);
             if (formatted) {
               const suffix = itemStatus && itemStatus !== 'completed' ? ` (${itemStatus})` : '';
-              const toolAction: ToolAction = label as ToolAction;
-              const meta: ToolMeta = { tool: toolAction, file };
-              // Extract diff content if available
-              const diff = typeof change.diff === 'string' ? change.diff : undefined;
-              if (diff && toolAction === 'edit') {
-                const oldLines: string[] = [];
-                const newLines: string[] = [];
-                for (const dl of diff.split('\n')) {
-                  if (dl.startsWith('-') && !dl.startsWith('---')) oldLines.push(dl.slice(1));
-                  else if (dl.startsWith('+') && !dl.startsWith('+++')) newLines.push(dl.slice(1));
-                }
-                if (oldLines.length > 0) meta.oldLines = oldLines;
-                if (newLines.length > 0) meta.newLines = newLines;
-              }
               this.emit({ text: `${formatted}${suffix}`, timestamp: Date.now(), type: 'system', toolMeta: meta });
             }
-            this.emitCheckpoint(`[CODEX:checkpoint] File ${kind ?? 'change'}: ${file}`);
+            // Clear pending diff buffer after use
+            this.pendingFileChangeDiff = null;
+            this.pendingFileChangePath = null;
           }
         }
       }
@@ -767,6 +846,81 @@ export abstract class BaseAppServerAgent implements AgentProcess {
     const delta = typeof params.delta === 'string' ? params.delta : undefined;
     if (delta) {
       flog.debug('AGENT', `${this.logTag}: command output: ${delta.slice(0, 120)}`);
+    }
+  }
+
+  /** Detect file creation commands (cat > file <<'EOF'..., tee file <<'EOF'..., printf > file)
+   *  Returns { file, lines } if detected, null otherwise. */
+  private detectFileCreateCommand(command: string): { file: string; lines: string[] } | null {
+    // Strip /bin/bash -lc wrapper and quotes
+    let cmd = command.trim();
+    cmd = cmd.replace(/^\/bin\/(?:ba)?sh\s+-lc\s+/, '');
+    // Remove outer quotes (single or double)
+    if ((cmd.startsWith('"') && cmd.endsWith('"')) || (cmd.startsWith("'") && cmd.endsWith("'"))) {
+      cmd = cmd.slice(1, -1);
+    }
+    // Strip leading cd '...' && or cd "..." &&
+    cmd = cmd.replace(/^cd\s+['"][^'"]*['"]\s*&&\s*/, '');
+    cmd = cmd.replace(/^cd\s+\S+\s*&&\s*/, '');
+    cmd = cmd.trim();
+
+    // Pattern 1: cat > file <<'EOF' or cat > file << 'EOF' or cat > file <<EOF
+    const catMatch = cmd.match(/^cat\s+>\s*(\S+)\s*<<\s*'?(\w+)'?\s*\n([\s\S]*)/);
+    if (catMatch) {
+      const file = catMatch[1];
+      const delimiter = catMatch[2];
+      const rest = catMatch[3];
+      // Extract content up to the delimiter line
+      const delimRe = new RegExp(`^${delimiter}\\s*$`, 'm');
+      const delimIdx = rest.search(delimRe);
+      const content = delimIdx >= 0 ? rest.slice(0, delimIdx) : rest;
+      return { file, lines: content.split('\n') };
+    }
+
+    // Pattern 2: tee file <<'EOF' or tee -a file <<'EOF'
+    const teeMatch = cmd.match(/^tee\s+(?:-a\s+)?(\S+)\s*<<\s*'?(\w+)'?\s*\n([\s\S]*)/);
+    if (teeMatch) {
+      const file = teeMatch[1];
+      const delimiter = teeMatch[2];
+      const rest = teeMatch[3];
+      const delimRe = new RegExp(`^${delimiter}\\s*$`, 'm');
+      const delimIdx = rest.search(delimRe);
+      const content = delimIdx >= 0 ? rest.slice(0, delimIdx) : rest;
+      return { file, lines: content.split('\n') };
+    }
+
+    return null;
+  }
+
+  private handleFileChangeOutputDelta(params: Record<string, unknown>) {
+    // Accumulate diff content from streaming file change events
+    const delta = typeof params.delta === 'string' ? params.delta : undefined;
+    if (delta) {
+      this.pendingFileChangeDiff = (this.pendingFileChangeDiff ?? '') + delta;
+      flog.debug('AGENT', `${this.logTag}: fileChange outputDelta: +${delta.length} chars (total: ${this.pendingFileChangeDiff.length})`);
+    }
+    // Some API versions send the item with file info
+    const item = (params.item && typeof params.item === 'object') ? params.item as Record<string, unknown> : undefined;
+    if (item) {
+      const file = typeof item.filename === 'string' ? item.filename
+        : typeof item.path === 'string' ? item.path : undefined;
+      if (file) this.pendingFileChangePath = file;
+    }
+  }
+
+  private handleTurnDiffUpdated(params: Record<string, unknown>) {
+    // turn/diff/updated contains the full diff for the turn — capture for file change preview
+    flog.debug('AGENT', `${this.logTag}: turn/diff/updated keys=${Object.keys(params).join(',')}`);
+    const diff = typeof params.diff === 'string' ? params.diff : undefined;
+    if (diff) {
+      this.pendingFileChangeDiff = diff;
+      flog.debug('AGENT', `${this.logTag}: turn/diff: ${diff.length} chars`);
+    }
+    // Also check for files array
+    if (Array.isArray(params.files)) {
+      for (const f of params.files as Array<Record<string, unknown>>) {
+        flog.debug('AGENT', `${this.logTag}: turn/diff file: ${JSON.stringify(f).slice(0, 200)}`);
+      }
     }
   }
 

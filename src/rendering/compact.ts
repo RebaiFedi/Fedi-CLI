@@ -14,6 +14,7 @@ export function compact(entries: DisplayEntry[]): DisplayEntry[] {
 export function addActionSpacing(raw: DisplayEntry[]): DisplayEntry[] {
   const isToolBlock = (k: string) =>
     k === 'action' || k === 'info' || k === 'tool-header' || k === 'diff-old' || k === 'diff-new';
+  const isDiffLine = (k: string) => k === 'diff-old' || k === 'diff-new';
   const out: DisplayEntry[] = [];
   for (let i = 0; i < raw.length; i++) {
     out.push(raw[i]);
@@ -24,12 +25,30 @@ export function addActionSpacing(raw: DisplayEntry[]): DisplayEntry[] {
         out.push({ text: '', kind: 'empty' });
       }
     }
+    // Add spacing between distinct tool operations: when a diff/action block
+    // is followed by a new tool-header (= new file operation starting)
+    if (
+      i + 1 < raw.length &&
+      raw[i + 1].kind === 'tool-header' &&
+      (isDiffLine(raw[i].kind) || raw[i].kind === 'action' || raw[i].kind === 'tool-header')
+    ) {
+      out.push({ text: '', kind: 'empty' });
+    }
     // Add spacing before a tool block starts
     if (
       i + 1 < raw.length &&
       (raw[i + 1].kind === 'action' || raw[i + 1].kind === 'tool-header') &&
       !isToolBlock(raw[i].kind) &&
       raw[i].kind !== 'empty'
+    ) {
+      out.push({ text: '', kind: 'empty' });
+    }
+    // Add spacing before headings (paragraph break) — but not if prev is empty/heading
+    if (
+      i + 1 < raw.length &&
+      raw[i + 1].kind === 'heading' &&
+      raw[i].kind !== 'empty' &&
+      raw[i].kind !== 'heading'
     ) {
       out.push({ text: '', kind: 'empty' });
     }

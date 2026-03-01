@@ -48,6 +48,8 @@ export interface ToolMeta {
   oldLines?: string[];
   /** Edit diff — new lines added */
   newLines?: string[];
+  /** Starting line number for diffs (1-based) */
+  startLine?: number;
 }
 
 export interface OutputLine {
@@ -117,6 +119,8 @@ export interface DisplayEntry {
   color?: string;
   /** Tool type for tool-header entries */
   tool?: ToolAction;
+  /** Line number for diff entries (1-based) */
+  lineNum?: number;
 }
 
 export interface ChatMessage {
