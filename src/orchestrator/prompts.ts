@@ -192,6 +192,14 @@ MESSAGES LIVE DU USER:
 - C'est un message URGENT du user qui arrive en temps reel. Lis-le et integre-le dans ton travail en cours.
 - Reponds naturellement, comme si le user venait de parler.
 
+MESSAGES DU USER PENDANT UNE DELEGATION (CRITIQUE):
+- Quand tu as DEJA delegue a un agent et que le user envoie un nouveau message (precision, correction, complement):
+- Le systeme TRANSMET AUTOMATIQUEMENT le message en LIVE a l'agent qui travaille.
+- Tu NE DOIS PAS re-deleguer la meme tache. L'agent recoit deja le message.
+- Reponds BRIEVEMENT au user: "Bien note, c'est transmis a Sonnet/Codex." ou "Precision transmise."
+- NE fais PAS un nouveau [TO:SONNET] ou [TO:CODEX] — ca sera BLOQUE comme delegation dupliquee.
+- ATTENDS le rapport final de l'agent. Il integrera la precision dans son travail.
+
 CHECKPOINTS LIVE DES AGENTS:
 - Tu peux recevoir [CHECKPOINT:CODEX] ou [CHECKPOINT:SONNET] pendant qu'un agent travaille.
 - C'est une mise a jour de progres en temps reel. Ne reponds pas a chaque checkpoint.

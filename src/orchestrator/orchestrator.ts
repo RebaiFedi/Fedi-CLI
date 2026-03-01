@@ -721,6 +721,12 @@ Ce fichier contient les regles COMPLETES de chaque agent. Il est lu automatiquem
 - [LIVE MESSAGE DU USER]: message URGENT du user en temps reel. Lis-le et integre-le.
 - [CHECKPOINT:CODEX] / [CHECKPOINT:SONNET]: mise a jour de progres. Ne reponds pas a chaque. Si probleme detecte, envoie un message LIVE a l'agent.
 
+### Messages du User PENDANT une Delegation (CRITIQUE)
+- Quand tu as DEJA delegue et que le user envoie un message (precision, correction):
+- Le systeme TRANSMET AUTOMATIQUEMENT le message en LIVE a l'agent qui travaille.
+- NE re-delegue PAS. L'agent recoit deja le message. Pas de nouveau tag de delegation.
+- Reponds BRIEVEMENT au user: "Bien note, c'est transmis." puis ATTENDS le rapport.
+
 ### Ne Jamais Citer les Tags au User
 - Quand tu PARLES AU USER, NE JAMAIS ecrire les tags tels quels.
 - Le systeme intercepte les tags = l'agent sera lance par erreur.
@@ -1072,6 +1078,15 @@ Ce fichier contient les regles COMPLETES de chaque agent. Il est lu automatiquem
       const received = this.pendingReportsForOpus.size;
       const total = this.expectedDelegates.size;
       lines.push(`- MAINTENANT: ${agents} travaille(nt) (${received}/${total} rapports recus). ATTENDS en silence. AUCUN outil.`);
+      // When user sends a message while agents work, tell Opus the message was already forwarded
+      const activeOnRelay = [...this.agentsOnRelay].filter(a => {
+        const ag = this.getAgent(a);
+        return ag.status === 'running';
+      });
+      if (activeOnRelay.length > 0) {
+        const activeNames = activeOnRelay.map(a => a.charAt(0).toUpperCase() + a.slice(1)).join(' et ');
+        lines.push(`- Le message du user a DEJA ete transmis en LIVE a ${activeNames}. NE re-delegue PAS. L'agent integre deja la precision. Reponds BRIEVEMENT au user ("Bien note, c'est transmis a ${activeNames}.") puis ATTENDS le rapport.`);
+      }
     }
     return lines.join('\n');
   }
@@ -1158,6 +1173,22 @@ Ce fichier contient les regles COMPLETES de chaque agent. Il est lu automatiquem
     if (this.callbacks) {
       this.flushOpusBuffer(this.callbacks);
     }
+
+    // ── Forward LIVE to active delegates ──
+    // When agents are working on a delegation, the user's message is a live
+    // correction/precision that agents need to see RIGHT NOW — not after Opus
+    // re-delegates (which would be blocked as "duplicate delegation" anyway).
+    // This is like Claude Code's behavior: user sends a message mid-work and
+    // the agent integrates it immediately.
+    for (const delegate of this.agentsOnRelay) {
+      const agent = this.getAgent(delegate);
+      if (agent.status === 'running') {
+        flog.info('ORCH', `Forwarding user message LIVE to ${delegate} (active on relay): ${text.slice(0, 80)}`);
+        agent.sendUrgent(`[LIVE MESSAGE DU USER] ${text}`);
+        this.bus.record({ from: 'user', to: delegate, content: text });
+      }
+    }
+
     // If Opus is actively running, inject LIVE instead of queuing behind PQueue
     if (this.opus.status === 'running') {
       this.sendUserMessageLive(text, 'opus');
