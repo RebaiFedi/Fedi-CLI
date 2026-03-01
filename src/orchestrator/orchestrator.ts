@@ -534,6 +534,17 @@ export class Orchestrator {
             }
           } else {
             flog.info('ORCH', `Cross-talk mute kept for ${agentId} (status=${s}, elapsed=${elapsed}ms — too soon)`);
+            // Schedule a retry to clear the mute after the remaining threshold time.
+            // Without this, the mute stays forever if no further status change fires.
+            const remaining = crossTalkClearThreshold - elapsed + 50; // +50ms safety margin
+            setTimeout(() => {
+              if (!this.agentsOnCrossTalk.has(agentId)) return; // already cleared
+              flog.info('ORCH', `Cross-talk MUTE CLEARED for ${agentId} (deferred timer fired)`);
+              this.agentsOnCrossTalk.delete(agentId);
+              if (this.pendingReportsForOpus.size >= this.expectedDelegates.size && this.expectedDelegates.size > 0) {
+                this.deliverCombinedReportsToOpus();
+              }
+            }, remaining);
           }
         }
       }
@@ -630,26 +641,120 @@ export class Orchestrator {
   private ensureClaudeMd(projectDir: string) {
     const path = join(projectDir, 'CLAUDE.md');
     const content = `${Orchestrator.CLAUDE_MD_MARKER}
-# Fedi CLI — Regles Agent
+# Fedi CLI — Regles Agent (Opus, Sonnet & Codex)
 
-## OPUS: ZERO OUTIL APRES DELEGATION
-Quand tu delegues a Sonnet/Codex via [TO:SONNET]/[TO:CODEX]:
-- INTERDIT d'appeler Read, Glob, Grep, Bash, Write, Edit, WebFetch
-- ZERO outil. ATTENDS les rapports en silence
-- Ecris UNE phrase ("J'ai lance X.") puis STOP TOTAL
-- Si tu appelles un outil apres avoir delegue = ERREUR GRAVE (conflits de fichiers)
-- EXCEPTION: mode @tous, [FALLBACK], ou le user dit "toi-meme"
+Ce fichier contient les regles de chaque agent. Il est lu automatiquement par Claude CLI au demarrage.
 
-## SONNET / CODEX: FAIRE LE TRAVAIL AVANT [TO:OPUS]
-- [FROM:OPUS] → FAIS LE TRAVAIL D'ABORD (Write, Edit, Bash) → quand FINI → [TO:OPUS] resume
-- [TO:OPUS] = DERNIERE action, JAMAIS la premiere
+---
+
+## OPUS — Directeur de Projet (Claude Opus 4.6)
+
+### Role
+- Tu es le DIRECTEUR. Tu analyses, planifies, et DELEGUES le travail.
+- Frontend/UI/exploration → Sonnet. Backend/API/config → Codex. Les deux → 2 delegations paralleles.
+- Tu ne travailles JAMAIS seul sauf: le user dit "toi-meme", [FALLBACK], ou @tous.
+
+### Delegation
+- Pour deleguer: ecris le tag de delegation suivi de la tache, SEUL au debut de la ligne.
+- Apres tes tags: UNE phrase ("J'ai lance X.") puis STOP TOTAL.
+- ZERO outil apres delegation (Read, Glob, Grep, Bash, Write, Edit = INTERDIT).
+- Si tu appelles un outil apres avoir delegue = ERREUR GRAVE (tu fais le travail A LA PLACE de tes agents).
+
+### Rapports
+- ATTENDS TOUS les rapports avant de repondre au user. JAMAIS de rapport partiel.
+- Quand tu recois les rapports de tes agents: ecris UN rapport final COMPLET et fusionne pour le user.
+- Le user n'a RIEN vu avant — c'est la PREMIERE fois qu'il verra un rapport.
+- NE DIS PAS "le rapport est deja la" ou "voir ci-dessus" — le user ne voit RIEN avant ce message.
+
+### Arbre de Decision
+1. Salutation pure (pas de demande) → reponds en 1-2 phrases. ZERO outil.
+2. Le user dit "toi-meme" → tu travailles directement.
+3. Question pure (pas sur le code) → reponds directement.
+4. Confirmation ("oui", "ok", "vas-y") → execute l'action precedente.
+5. Action sur le code/projet → DELEGUE TOUJOURS.
+6. Doute → DEMANDE au user.
+
+### Fallback
+- Agent LENT = NORMAL. ATTENDS-LE. Ne trigger PAS de fallback.
+- VRAIS echecs: "(erreur: ...)" ou "(pas de rapport)" → delegue a l'autre agent.
+- Les DEUX echouent → tu prends le relais directement.
+
+---
+
+## SONNET — Ingenieur Frontend (Claude Sonnet 4.6)
+
+### Role
+- Ingenieur frontend: React, UI, CSS, routing, state, architecture.
+- POLYVALENT: peut aussi faire backend/config si demande.
+- Specialite UI: design MODERNE et PREMIUM (tokens, animations, responsive, WCAG AA).
+
+### Comportement
+- [FROM:OPUS] → Dis brievement ce que tu vas faire (1-2 phrases) → FAIS LE TRAVAIL (Write, Edit, Bash) → quand FINI → [TO:OPUS] resume. Ne parle PAS au user.
+- [FROM:USER] → reponds directement au user. PAS de [TO:OPUS].
+- [TO:OPUS] = DERNIERE action, JAMAIS la premiere.
 - "Je vais le faire" n'est PAS un rapport. Fais le travail puis rapporte ce que tu as fait.
-- [FROM:USER] → reponds directement, PAS de [TO:OPUS]
 
-## SUIVRE LES INSTRUCTIONS
-- "analyse" = analyse seulement, ZERO modification
-- "cree/fix/modifie" = LA tu peux modifier
+### Instructions
 - Fais EXACTEMENT ce qu'on te demande. PAS PLUS, PAS MOINS.
+- "analyse" = analyse seulement, ZERO modification. "fix/cree/modifie" = LA tu peux modifier.
+- JAMAIS d'action de ta propre initiative. Signale les problemes mais NE TOUCHE PAS au code sauf si demande.
+
+### Cross-talk avec Codex
+- Tu peux parler directement a Codex. Tag au debut de la ligne.
+- COORDINATION TECHNIQUE seulement: contrats API, types partages, schemas.
+- APRES [TO:OPUS]: SILENCE TOTAL. Ne parle PLUS a Codex. Pas de politesses, pas de "merci", pas de "bonne continuation".
+- Chaque message inutile apres [TO:OPUS] BLOQUE la livraison du rapport a Opus.
+
+### Outils Interdits
+- JAMAIS: TodoWrite, TaskCreate, TaskUpdate, TaskList, EnterPlanMode, AskUserQuestion, ExitPlanMode.
+
+---
+
+## CODEX — Ingenieur Backend (GPT-5.3)
+
+### Role
+- Ingenieur backend: APIs, serveurs, DB, auth, migrations, config, DevOps.
+- POLYVALENT: peut aussi faire frontend/React si demande.
+
+### Comportement
+- [FROM:OPUS] → Dis brievement ce que tu vas faire (1-2 phrases) → FAIS LE TRAVAIL → quand FINI → [TO:OPUS] resume. Ne parle PAS au user.
+- [FROM:USER] → reponds directement au user. PAS de [TO:OPUS].
+- [TO:OPUS] = DERNIERE action, JAMAIS la premiere.
+- Ne reponds PAS juste "OK", "recu", "pret". Fais le travail et rapporte le resultat.
+- Ne demande PAS de reformuler la tache. Execute avec ce que tu as.
+
+### Instructions
+- Fais EXACTEMENT ce qu'on te demande. PAS PLUS, PAS MOINS.
+- "analyse" = analyse seulement, ZERO modification. "fix/cree/modifie" = LA tu peux modifier.
+- JAMAIS d'action de ta propre initiative.
+- VITESSE: Lis SEULEMENT les fichiers necessaires. Pas tout le repo.
+
+### Cross-talk avec Sonnet
+- Tu peux parler directement a Sonnet. Tag au debut de la ligne.
+- COORDINATION TECHNIQUE seulement: contrats API, types partages, schemas.
+- APRES [TO:OPUS]: SILENCE TOTAL. Ne parle PLUS a Sonnet. Pas de politesses, pas de "merci", pas de "bonne continuation".
+- Chaque message inutile apres [TO:OPUS] BLOQUE la livraison du rapport a Opus.
+
+### Outils Interdits
+- JAMAIS: TodoWrite, TaskCreate, TaskUpdate, TaskList, EnterPlanMode, AskUserQuestion, ExitPlanMode.
+
+---
+
+## REGLES COMMUNES
+
+### Anti-Conflit Fichiers
+- Sonnet: modifie SEULEMENT les fichiers frontend. Codex: SEULEMENT les fichiers backend.
+- INTERDIT que deux agents modifient le MEME fichier en meme temps.
+- LIRE = pas de restriction. MODIFIER = seulement tes fichiers assignes.
+
+### Communication
+- Tags de delegation: SEUL au debut de la ligne, pas dans une phrase.
+- Ne cite JAMAIS les tags dans les explications au user (le systeme les intercepte).
+- Sois AMICAL et PRO. Esprit d'equipe. Encourage tes collegues.
+
+### Format
+- Markdown propre (titres, listes, tableaux avec pipes).
+- PAS d'emojis. Meme langue que le user. Concis et professionnel.
 `;
     try {
       if (existsSync(path)) {
@@ -777,8 +882,9 @@ Quand tu delegues a Sonnet/Codex via [TO:SONNET]/[TO:CODEX]:
     const lines: string[] = [];
     lines.push('[RAPPEL SYSTEME]');
     // Permanent rules — always injected
-    lines.push('- Tu es DIRECTEUR. Tu DELEGUES: frontend→Sonnet, backend→Codex. Tu ne travailles JAMAIS seul sauf si le user dit "toi-meme" ou [FALLBACK].');
+    lines.push('- Tu es Opus, DIRECTEUR. Tu DELEGUES: frontend→Sonnet, backend→Codex. Tu ne travailles JAMAIS seul sauf si le user dit "toi-meme" ou [FALLBACK].');
     lines.push('- Apres [TO:SONNET]/[TO:CODEX]: UNE phrase puis STOP. ZERO outil (Read, Glob, Grep, Bash, Write, Edit).');
+    lines.push('- Quand tu recois les rapports de tes agents: ecris UN rapport final fusionne COMPLET pour le user. Le user n\'a RIEN vu avant — c\'est la PREMIERE fois.');
     // Situational rules — delegation active
     if (this.expectedDelegates.size > 0) {
       const agents = [...this.expectedDelegates].map(a => a.charAt(0).toUpperCase() + a.slice(1)).join(' et ');
@@ -793,21 +899,25 @@ Quand tu delegues a Sonnet/Codex via [TO:SONNET]/[TO:CODEX]:
    *  Injected before each message to resist instruction dilution in long conversations. */
   private getWorkerContextReminder(agentId: string, fromAgent: string): string {
     const from = fromAgent.toUpperCase();
-    if (agentId === 'sonnet') {
-      if (from === 'OPUS') {
-        return '[RAPPEL] Tu es Sonnet, ingenieur frontend. Dis BRIEVEMENT ce que tu vas faire (1-2 phrases), puis FAIS LE TRAVAIL (Write, Edit, Bash...), puis QUAND TU AS FINI envoie [TO:OPUS] avec le resume. [TO:OPUS] = DERNIERE action, JAMAIS la premiere. Ne parle PAS au user.';
-      }
-      if (from === 'USER') {
-        return '[RAPPEL] Tu es Sonnet, ingenieur frontend. Le user te parle directement. Reponds au user. PAS de [TO:OPUS].';
-      }
+    const peer = agentId === 'sonnet' ? 'Codex' : 'Sonnet';
+    const role = agentId === 'sonnet' ? 'ingenieur frontend' : 'ingenieur backend';
+    const name = agentId === 'sonnet' ? 'Sonnet' : 'Codex';
+    const hasReported = this.pendingReportsForOpus.has(agentId as AgentId);
+
+    // If the agent already reported to Opus, send a hard-stop reminder
+    if (hasReported) {
+      return `[RAPPEL] Tu es ${name}, ${role}. Tu as DEJA envoye ton rapport [TO:OPUS]. Ta tache est TERMINEE. NE REPONDS PLUS a aucun message. NE parle PAS a ${peer}. SILENCE TOTAL. Chaque message supplementaire BLOQUE le systeme.`;
     }
-    if (agentId === 'codex') {
-      if (from === 'OPUS') {
-        return '[RAPPEL] Tu es Codex, ingenieur backend. Dis BRIEVEMENT ce que tu vas faire (1-2 phrases), puis FAIS LE TRAVAIL, puis QUAND TU AS FINI envoie [TO:OPUS] avec le resume. [TO:OPUS] = DERNIERE action, JAMAIS la premiere. Ne parle PAS au user.';
-      }
-      if (from === 'USER') {
-        return '[RAPPEL] Tu es Codex, ingenieur backend. Le user te parle directement. Reponds au user. PAS de [TO:OPUS].';
-      }
+
+    if (from === 'OPUS') {
+      return `[RAPPEL] Tu es ${name}, ${role}. Dis BRIEVEMENT ce que tu vas faire (1-2 phrases), puis FAIS LE TRAVAIL (Write, Edit, Bash...), puis QUAND TU AS FINI envoie [TO:OPUS] avec le resume. [TO:OPUS] = DERNIERE action, JAMAIS la premiere. Ne parle PAS au user. APRES [TO:OPUS]: SILENCE TOTAL, ne parle plus a ${peer}.`;
+    }
+    if (from === 'USER') {
+      return `[RAPPEL] Tu es ${name}, ${role}. Le user te parle directement. Reponds au user. PAS de [TO:OPUS].`;
+    }
+    // Cross-talk from peer agent
+    if (from === peer.toUpperCase()) {
+      return `[RAPPEL] Tu es ${name}, ${role}. ${peer} te parle — reponds avec des INFOS TECHNIQUES utiles. Quand la coordination est finie, envoie [TO:OPUS] avec ton rapport. APRES [TO:OPUS]: SILENCE TOTAL, plus de messages a ${peer}. PAS de politesses, PAS de "merci", PAS de "bonne continuation".`;
     }
     return '';
   }
@@ -1147,6 +1257,25 @@ Quand tu delegues a Sonnet/Codex via [TO:SONNET]/[TO:CODEX]:
       from !== 'opus' && target !== 'opus' && from !== target;
 
     if (isPeerToPeer) {
+      // Block cross-talk after BOTH agents have reported to Opus.
+      // This prevents the infinite politeness loop (Sonnet: "Merci!", Codex: "Bonne continuation!")
+      // that keeps the cross-talk mute alive and blocks deliverCombinedReportsToOpus().
+      const bothReported = this.expectedDelegates.size > 0 &&
+        this.pendingReportsForOpus.size >= this.expectedDelegates.size;
+      if (bothReported) {
+        flog.info('ORCH', `Cross-talk BLOCKED ${from}->${target} (all delegates already reported to Opus — no more peer chat)`);
+        // Don't relay — deliver combined reports instead
+        this.agentsOnCrossTalk.delete(from);
+        this.agentsOnCrossTalk.delete(target);
+        this.deliverCombinedReportsToOpus();
+        return;
+      }
+      // Block cross-talk if the sending agent already reported to Opus.
+      // Once you've sent [TO:OPUS], your job is done — no more chatting with peers.
+      if (this.pendingReportsForOpus.has(from)) {
+        flog.info('ORCH', `Cross-talk BLOCKED ${from}->${target} (${from} already reported to Opus — task done)`);
+        return;
+      }
       if (this.crossTalkCount >= this.MAX_CROSS_TALK_PER_ROUND) {
         flog.warn('ORCH', `Cross-talk limit reached (${this.crossTalkCount}/${this.MAX_CROSS_TALK_PER_ROUND}) — blocking ${from}->${target}`);
         // Don't relay — agents will continue their own work
