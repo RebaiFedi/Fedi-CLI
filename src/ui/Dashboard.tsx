@@ -270,6 +270,7 @@ export function Dashboard({
       const termW = process.stdout.columns || 80;
       const headerWidth = Math.min(termW - INDENT.length * 2, 60);
       outputLines.push('');
+      outputLines.push('');
       outputLines.push(`${INDENT}${name}`);
       outputLines.push(`${INDENT}${chalk.hex(THEME.panelBorder)('─'.repeat(headerWidth))}`);
       outputLines.push('');
@@ -586,7 +587,7 @@ export function Dashboard({
         const toIcon = agentIcon(toAgent);
         const relayHeader = `${INDENT}${chalk.hex(fromColor).bold(`${fromIcon} ${fromName}`)} ${chalk.hex(THEME.muted)('→')} ${chalk.hex(toColor).bold(`${toIcon} ${toName}`)}`;
         const relayBody = `${INDENT}  ${chalk.hex('#94A3B8')(preview)}`;
-        console.log(`\n${relayHeader}\n${relayBody}`);
+        console.log(`\n${relayHeader}\n${relayBody}\n`);
       },
       onRelayBlocked: (msg: Message) => {
         flog.info('UI', `Relay blocked: ${msg.from}->${msg.to}`);

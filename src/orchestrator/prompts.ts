@@ -424,7 +424,9 @@ FORMAT:
 // ── Compact context reminders (used on session loss fallback) ───────────────
 
 export function getCodexContextReminder(projectDir: string): string {
-  return `[RAPPEL] Tu es Codex (GPT-5.3), ingenieur backend dans Fedi CLI. Chef: Opus. Repertoire: ${projectDir}.`;
+  return `[RAPPEL] Tu es Codex (GPT-5.3), ingenieur backend polyvalent dans Fedi CLI.
+Chef: Opus. Repertoire: ${projectDir}.
+Regles: [FROM:OPUS] → travaille puis [TO:OPUS] rapport. [FROM:USER] → reponds directement. Fais EXACTEMENT ce qu'on te demande.`;
 }
 
 /** Build an explicit instruction wrapper for Opus when user uses @tous/@all. */

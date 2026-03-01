@@ -45,33 +45,44 @@ function isTableLine(text: string): boolean {
 // ── Tool icons & colors ─────────────────────────────────────────────────────
 
 const TOOL_STYLES: Record<ToolAction, { icon: string; label: string; color: string }> = {
-  read:   { icon: '📄', label: 'Read',   color: '#38BDF8' },  // sky blue
-  write:  { icon: '✏️',  label: 'Write',  color: '#A78BFA' },  // violet
-  create: { icon: '✨', label: 'Create', color: '#34D399' },  // emerald
-  edit:   { icon: '📝', label: 'Edit',   color: '#FBBF24' },  // amber
-  delete: { icon: '🗑️',  label: 'Delete', color: '#F87171' },  // red
-  bash:   { icon: '▶',  label: 'Exec',   color: '#6EE7B7' },  // green
-  glob:   { icon: '🔍', label: 'Search', color: '#93C5FD' },  // blue
-  grep:   { icon: '🔎', label: 'Grep',   color: '#93C5FD' },  // blue
-  fetch:  { icon: '🌐', label: 'Fetch',  color: '#67E8F9' },  // cyan
-  agent:  { icon: '🤖', label: 'Agent',  color: '#C4B5FD' },  // purple
-  todo:   { icon: '☑️',  label: 'Todo',   color: '#FCD34D' },  // yellow
-  list:   { icon: '📂', label: 'List',   color: '#38BDF8' },
-  search: { icon: '🔍', label: 'Search', color: '#93C5FD' },
+  read:   { icon: '>', label: 'Read',   color: '#38BDF8' },
+  write:  { icon: '>', label: 'Write',  color: '#A78BFA' },
+  create: { icon: '+', label: 'Create', color: '#34D399' },
+  edit:   { icon: '~', label: 'Edit',   color: '#FBBF24' },
+  delete: { icon: 'x', label: 'Delete', color: '#F87171' },
+  bash:   { icon: '$', label: 'Exec',   color: '#6EE7B7' },
+  glob:   { icon: '?', label: 'Search', color: '#93C5FD' },
+  grep:   { icon: '/', label: 'Grep',   color: '#93C5FD' },
+  fetch:  { icon: '@', label: 'Fetch',  color: '#67E8F9' },
+  agent:  { icon: '*', label: 'Agent',  color: '#C4B5FD' },
+  todo:   { icon: '-', label: 'Todo',   color: '#FCD34D' },
+  list:   { icon: '>', label: 'List',   color: '#38BDF8' },
+  search: { icon: '?', label: 'Search', color: '#93C5FD' },
 };
 
 // ── Action line formatter (fallback for actions without rich meta) ───────────
 
 const ACTION_PATTERNS: Array<{ re: RegExp; tool: ToolAction }> = [
-  { re: /^(Read|reading|Lire|lecture)\s*[·:·]\s*/i, tool: 'read' },
-  { re: /^(Glob|glob)\s*[·:·]\s*/i, tool: 'glob' },
-  { re: /^(Grep|grep)\s*[·:·]\s*/i, tool: 'grep' },
-  { re: /^(Write|write|Écriture|ecriture)\s*[·:·]\s*/i, tool: 'write' },
-  { re: /^(Edit|edit|Modifier)\s*[·:·]\s*/i, tool: 'edit' },
-  { re: /^(Bash|bash|cmd|exec)\s*[·:·]\s*/i, tool: 'bash' },
-  { re: /^(WebFetch|fetch|Fetch)\s*[·:·]\s*/i, tool: 'fetch' },
-  { re: /^(Agent|agent)\s*[·:·]\s*/i, tool: 'agent' },
-  { re: /^(TodoWrite|todo)\s*[·:·]\s*/i, tool: 'todo' },
+  { re: /^▸\s*read\s+/i, tool: 'read' },
+  { re: /^▸\s*write\s+/i, tool: 'write' },
+  { re: /^▸\s*create\s+/i, tool: 'create' },
+  { re: /^▸\s*edit\s+/i, tool: 'edit' },
+  { re: /^▸\s*delete\s+/i, tool: 'delete' },
+  { re: /^▸\s*exec\s+/i, tool: 'bash' },
+  { re: /^▸\s*search\s+/i, tool: 'glob' },
+  { re: /^▸\s*grep\s+/i, tool: 'grep' },
+  { re: /^▸\s*list\s+/i, tool: 'list' },
+  { re: /^▸\s*/i, tool: 'bash' },
+  // Legacy format: "Read · path" or "Bash : command"
+  { re: /^(Read|reading|Lire|lecture)\s*[·:]\s*/i, tool: 'read' },
+  { re: /^(Glob|glob)\s*[·:]\s*/i, tool: 'glob' },
+  { re: /^(Grep|grep)\s*[·:]\s*/i, tool: 'grep' },
+  { re: /^(Write|write|Écriture|ecriture)\s*[·:]\s*/i, tool: 'write' },
+  { re: /^(Edit|edit|Modifier)\s*[·:]\s*/i, tool: 'edit' },
+  { re: /^(Bash|bash|cmd|exec)\s*[·:]\s*/i, tool: 'bash' },
+  { re: /^(WebFetch|fetch|Fetch)\s*[·:]\s*/i, tool: 'fetch' },
+  { re: /^(Agent|agent)\s*[·:]\s*/i, tool: 'agent' },
+  { re: /^(TodoWrite|todo)\s*[·:]\s*/i, tool: 'todo' },
 ];
 
 function formatActionLine(text: string, maxW: number): string {

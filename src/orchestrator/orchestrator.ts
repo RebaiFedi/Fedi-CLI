@@ -315,6 +315,9 @@ export class Orchestrator {
         if (context) {
           payload += `\n\n--- CONTEXTE ---\n${context}\n--- FIN ---`;
         }
+        // Inject permanent context reminder before every message to Opus
+        const reminder = this.getOpusContextReminder();
+        payload = `${reminder}\n\n${payload}`;
         this.opus.send(payload);
         return Promise.resolve();
       });
@@ -375,6 +378,11 @@ export class Orchestrator {
         let payload = `${prefix} ${msg.content}`;
         if (context) {
           payload += `\n\n--- CONTEXTE ---\n${context}\n--- FIN ---`;
+        }
+        // Inject context reminder for workers to resist dilution in long conversations
+        const workerReminder = this.getWorkerContextReminder(agentId, msg.from);
+        if (workerReminder) {
+          payload = `${workerReminder}\n\n${payload}`;
         }
         this.getAgent(agentId).send(payload);
       });
@@ -673,6 +681,48 @@ export class Orchestrator {
     return this.expectedDelegates.size > 0;
   }
 
+  /** Generate a context reminder injected before EVERY message to Opus.
+   *  Contains permanent rules (always present) + situational rules (delegation active).
+   *  This is the most robust layer against context dilution in long conversations. */
+  private getOpusContextReminder(): string {
+    const lines: string[] = [];
+    lines.push('[RAPPEL SYSTEME]');
+    // Permanent rules — always injected
+    lines.push('- Tu es DIRECTEUR. Tu DELEGUES: frontend→Sonnet, backend→Codex. Tu ne travailles JAMAIS seul sauf si le user dit "toi-meme" ou [FALLBACK].');
+    lines.push('- Apres [TO:SONNET]/[TO:CODEX]: UNE phrase puis STOP. ZERO outil (Read, Glob, Grep, Bash, Write, Edit).');
+    // Situational rules — delegation active
+    if (this.expectedDelegates.size > 0) {
+      const agents = [...this.expectedDelegates].map(a => a.charAt(0).toUpperCase() + a.slice(1)).join(' et ');
+      const received = this.pendingReportsForOpus.size;
+      const total = this.expectedDelegates.size;
+      lines.push(`- MAINTENANT: ${agents} travaille(nt) (${received}/${total} rapports recus). ATTENDS en silence. AUCUN outil.`);
+    }
+    return lines.join('\n');
+  }
+
+  /** Generate a compact context reminder for worker agents (Sonnet/Codex).
+   *  Injected before each message to resist instruction dilution in long conversations. */
+  private getWorkerContextReminder(agentId: string, fromAgent: string): string {
+    const from = fromAgent.toUpperCase();
+    if (agentId === 'sonnet') {
+      if (from === 'OPUS') {
+        return '[RAPPEL] Tu es Sonnet, ingenieur frontend. Travaille puis envoie [TO:OPUS] rapport. Ne parle PAS au user.';
+      }
+      if (from === 'USER') {
+        return '[RAPPEL] Tu es Sonnet, ingenieur frontend. Le user te parle directement. Reponds au user. PAS de [TO:OPUS].';
+      }
+    }
+    if (agentId === 'codex') {
+      if (from === 'OPUS') {
+        return '[RAPPEL] Tu es Codex, ingenieur backend. Travaille puis envoie [TO:OPUS] rapport. Ne parle PAS au user.';
+      }
+      if (from === 'USER') {
+        return '[RAPPEL] Tu es Codex, ingenieur backend. Le user te parle directement. Reponds au user. PAS de [TO:OPUS].';
+      }
+    }
+    return '';
+  }
+
   /** Restart after stop — preserve agent sessions and conversation context */
   async restart(task: string) {
     // Build conversation summary BEFORE resetting bus history
@@ -740,7 +790,10 @@ export class Orchestrator {
   sendUserMessageLive(text: string, target: AgentId) {
     const agent = this.getAgent(target);
     if (agent.status === 'running') {
-      agent.sendUrgent(`[LIVE MESSAGE DU USER] ${text}`);
+      // Inject permanent context reminder for Opus
+      const reminder = target === 'opus' ? this.getOpusContextReminder() : '';
+      const prefix = reminder ? `${reminder}\n\n` : '';
+      agent.sendUrgent(`${prefix}[LIVE MESSAGE DU USER] ${text}`);
       // Record in bus history so context tracking stays accurate
       this.bus.record({ from: 'user', to: target, content: text });
     } else {
