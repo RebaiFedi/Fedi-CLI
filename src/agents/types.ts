@@ -12,7 +12,7 @@ export const AGENT_LABELS: Record<AgentId, string> = {
 
 // ── Agent status ────────────────────────────────────────────────────────────
 
-export type AgentStatus = 'idle' | 'running' | 'waiting' | 'error' | 'stopped';
+export type AgentStatus = 'idle' | 'running' | 'waiting' | 'error' | 'stopped' | 'compacting';
 
 // ── Inter-agent message ─────────────────────────────────────────────────────
 

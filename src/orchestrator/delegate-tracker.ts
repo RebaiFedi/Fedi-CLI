@@ -189,9 +189,9 @@ export class DelegateTracker {
         const lastAct = this.lastActivity.get(delegate) ?? now;
         const idleMs = now - lastAct;
 
-        if (agent.status === 'running') {
+        if (agent.status === 'running' || agent.status === 'compacting') {
           this.lastActivity.set(delegate, now);
-          flog.debug('ORCH', `Heartbeat: ${delegate} still running (active)`);
+          flog.debug('ORCH', `Heartbeat: ${delegate} still ${agent.status} (active)`);
           continue;
         }
 
@@ -502,8 +502,11 @@ INSTRUCTIONS CRITIQUES:
       }
     } else {
       const agentInstance = this.deps.agents[agent];
-      if (agentInstance.status === 'running') {
-        flog.info('ORCH', `${agent} relay buffer empty but agent still RUNNING — NOT failing over`);
+      if (agentInstance.status === 'running' || agentInstance.status === 'compacting') {
+        flog.info(
+          'ORCH',
+          `${agent} relay buffer empty but agent still ${agentInstance.status} — NOT failing over`,
+        );
         relayRouter.addOnRelay(agent);
         relayRouter.setRelayStart(agent, Date.now());
         return;

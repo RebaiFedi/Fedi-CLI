@@ -172,11 +172,15 @@ export abstract class BaseSonnetAgent implements AgentProcess {
 
     if (type === 'system' && subtype === 'conversation_compacted') {
       flog.warn('AGENT', `${this.logTag}: Context window compacted`);
+      const prevStatus = this.status;
+      this.setStatus('compacting');
       this.emit({
         text: `${this.logTag}: contexte compacte (auto-compact)`,
         timestamp: Date.now(),
         type: 'info',
       });
+      // Restore previous status — compacting is a transient notification
+      this.setStatus(prevStatus === 'compacting' ? 'running' : prevStatus);
     }
 
     if (type === 'result' && msg.is_error) {

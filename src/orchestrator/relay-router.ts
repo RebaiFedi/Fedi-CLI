@@ -425,7 +425,7 @@ export class RelayRouter {
           this._liveRelayAllowed = false;
           flog.info('RELAY', `LIVE relay opus->${target}: ${content.slice(0, 80)}`);
           const targetAgent = this.deps.agents[target];
-          if (targetAgent.status === 'running') {
+          if (targetAgent.status === 'running' || targetAgent.status === 'compacting') {
             targetAgent.sendUrgent(`[LIVE MESSAGE DU USER — via Opus] ${content}`);
           } else {
             this.deps.bus.send({

@@ -115,7 +115,12 @@ export function useOrchestratorBinding({
             if (prev[agent] === 'error') return prev;
             return { ...prev, [agent]: `Agent ${agent} en erreur` };
           });
-        } else if (status === 'running' || status === 'idle' || status === 'waiting') {
+        } else if (
+          status === 'running' ||
+          status === 'idle' ||
+          status === 'waiting' ||
+          status === 'compacting'
+        ) {
           setAgentErrors((prev) => {
             if (!(agent in prev)) return prev;
             const n = { ...prev };
@@ -126,7 +131,7 @@ export function useOrchestratorBinding({
 
         if (stoppedRef.current) return;
 
-        if (status === 'running') {
+        if (status === 'running' || status === 'compacting') {
           const graceTimer = msgCloseTimers.current.get(agent);
           if (graceTimer) {
             clearTimeout(graceTimer);
@@ -139,9 +144,11 @@ export function useOrchestratorBinding({
           setThinking(true);
         } else {
           const currentStatuses = { ...agentStatusesRef.current, [agent]: status };
-          const anyRunningNow = Object.values(currentStatuses).some((s) => s === 'running');
+          const anyActiveNow = Object.values(currentStatuses).some(
+            (s) => s === 'running' || s === 'compacting',
+          );
           const pendingDelegates = orchestrator.hasPendingDelegates;
-          if (!anyRunningNow && !pendingDelegates && !thinkingClearTimer.current) {
+          if (!anyActiveNow && !pendingDelegates && !thinkingClearTimer.current) {
             thinkingClearTimer.current = setTimeout(() => {
               thinkingClearTimer.current = null;
               setThinking(false);

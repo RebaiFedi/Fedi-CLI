@@ -51,7 +51,11 @@ interface SpinnerState {
   elapsed: string;
 }
 
-function ThinkingSpinnerComponent() {
+interface ThinkingSpinnerProps {
+  compacting?: boolean;
+}
+
+function ThinkingSpinnerComponent({ compacting }: ThinkingSpinnerProps) {
   const [state, setState] = useState<SpinnerState>({
     frame: 0,
     verb: randomVerb(),
@@ -76,16 +80,19 @@ function ThinkingSpinnerComponent() {
     return () => clearInterval(id);
   }, []);
 
+  const label = compacting ? 'Compacting context' : state.verb;
+  const color = compacting ? 'yellow' : THEME.opus;
+
   return (
     <Text>
-      <Text color={THEME.opus}>{`  ${SPINNER_FRAMES[state.frame]} `}</Text>
-      <Text color={THEME.opus} italic>
-        {state.verb}
+      <Text color={color}>{`  ${SPINNER_FRAMES[state.frame]} `}</Text>
+      <Text color={color} italic>
+        {label}
       </Text>
-      <Text color={THEME.opus} dimColor>
+      <Text color={color} dimColor>
         {'...'}
       </Text>
-      <Text color={THEME.opus} dimColor>
+      <Text color={color} dimColor>
         {` ${state.elapsed}`}
       </Text>
     </Text>

@@ -208,7 +208,8 @@ export class Orchestrator {
       );
 
       const activeOnRelay = this.relay.getAgentsOnRelay().filter((a) => {
-        return this.agents[a].status === 'running';
+        const s = this.agents[a].status;
+        return s === 'running' || s === 'compacting';
       });
       if (activeOnRelay.length > 0) {
         const activeNames = activeOnRelay.map((a) => a.charAt(0).toUpperCase() + a.slice(1));
@@ -345,7 +346,7 @@ export class Orchestrator {
         flog.warn('ORCH', 'Opus finished without routing LIVE message — injecting directly');
         for (const delegate of this.relay.getAgentsOnRelay()) {
           const delegateAgent = this.agents[delegate];
-          if (delegateAgent.status === 'running') {
+          if (delegateAgent.status === 'running' || delegateAgent.status === 'compacting') {
             const history = this.bus.getHistory();
             let lastUserMsg: (typeof history)[number] | undefined;
             for (let i = history.length - 1; i >= 0; i--) {
@@ -571,7 +572,7 @@ export class Orchestrator {
         const start = this.relay.getRelayStart(agentId) ?? 0;
         const elapsed = Date.now() - start;
         const relayTimeout = this.relay.getRelayTimeout(agentId);
-        const isActive = agent.status === 'running';
+        const isActive = agent.status === 'running' || agent.status === 'compacting';
 
         if (relayTimeout > 0 && elapsed > relayTimeout && !isActive) {
           flog.warn(
@@ -714,8 +715,11 @@ export class Orchestrator {
         const timer = setTimeout(() => {
           if (!this.relay.isOnRelay(agentId) || this.delegates.hasPendingReport(agentId)) return;
           const agentInstance = this.agents[agentId];
-          if (agentInstance.status === 'running') {
-            flog.info('ORCH', `Safety-net deferred for ${agentId} — agent still running`);
+          if (agentInstance.status === 'running' || agentInstance.status === 'compacting') {
+            flog.info(
+              'ORCH',
+              `Safety-net deferred for ${agentId} — agent still ${agentInstance.status}`,
+            );
             return;
           }
           this.delegates.autoRelayBuffer(agentId, this.relay);
@@ -846,7 +850,7 @@ export class Orchestrator {
       );
     }
 
-    if (this.opus.status === 'running') {
+    if (this.opus.status === 'running' || this.opus.status === 'compacting') {
       this.sendUserMessageLive(text, 'opus');
     } else {
       this.bus.send({ from: 'user', to: 'opus', content: text });
@@ -855,7 +859,7 @@ export class Orchestrator {
 
   sendUserMessageLive(text: string, target: AgentId): void {
     const agent = this.agents[target];
-    if (agent.status === 'running') {
+    if (agent.status === 'running' || agent.status === 'compacting') {
       const reminder = target === 'opus' ? this.getOpusContextReminder() : '';
       const prefix = reminder ? `${reminder}\n\n` : '';
       agent.sendUrgent(`${prefix}[LIVE MESSAGE DU USER] ${text}`);
@@ -899,7 +903,7 @@ export class Orchestrator {
     this.buffers.clearBuffer(agent);
 
     const agentInstance = this.agents[agent];
-    if (agentInstance.status === 'running') {
+    if (agentInstance.status === 'running' || agentInstance.status === 'compacting') {
       agentInstance.sendUrgent(`[FROM:USER] ${text}`);
       this.bus.record({ from: 'user', to: agent, content: text });
     } else {
@@ -931,7 +935,7 @@ export class Orchestrator {
 
     const opusAllModeMessage = buildOpusAllModeUserMessage(text);
     const opus = this.opus;
-    if (opus.status === 'running') {
+    if (opus.status === 'running' || opus.status === 'compacting') {
       opus.sendUrgent(`[FROM:USER] ${opusAllModeMessage}`);
       this.bus.record({ from: 'user', to: 'opus', content: opusAllModeMessage });
     } else {
@@ -955,7 +959,7 @@ export class Orchestrator {
       if (!this.isAgentEnabled(agentId)) continue;
       const agent = this.agents[agentId];
       const workerMsg = `[FROM:USER] ${text}`;
-      if (agent.status === 'running') {
+      if (agent.status === 'running' || agent.status === 'compacting') {
         agent.sendUrgent(workerMsg);
         this.bus.record({ from: 'user', to: agentId, content: text });
       } else {

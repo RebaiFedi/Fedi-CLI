@@ -514,11 +514,15 @@ export function Dashboard({
     () => Object.values(agentStatuses).some((s) => s === 'running'),
     [agentStatuses],
   );
+  const anyCompacting = useMemo(
+    () => Object.values(agentStatuses).some((s) => s === 'compacting'),
+    [agentStatuses],
+  );
 
   return (
     <Box flexDirection="column">
       <Text> </Text>
-      {thinking ? <ThinkingSpinner /> : <Text> </Text>}
+      {thinking ? <ThinkingSpinner compacting={anyCompacting} /> : <Text> </Text>}
       {Object.keys(agentErrors).length > 0 && (
         <Box paddingX={1} flexDirection="column">
           {Object.entries(agentErrors).map(([agent, msg]) => (
@@ -590,8 +594,16 @@ export function Dashboard({
         <Box flexGrow={1} justifyContent="flex-end" gap={1}>
           {visibleAgents.map((id) => {
             const s = agentStatuses[id];
-            const color = s === 'running' ? THEME[id] : s === 'error' ? 'red' : THEME.muted;
-            const icon = s === 'running' ? '●' : s === 'error' ? '✖' : '○';
+            const color =
+              s === 'running'
+                ? THEME[id]
+                : s === 'compacting'
+                  ? 'yellow'
+                  : s === 'error'
+                    ? 'red'
+                    : THEME.muted;
+            const icon =
+              s === 'running' ? '●' : s === 'compacting' ? '◉' : s === 'error' ? '✖' : '○';
             return (
               <Text key={id} color={color}>
                 {icon} {agentDisplayName(id)}

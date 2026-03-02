@@ -532,6 +532,8 @@ export abstract class BaseAppServerAgent implements AgentProcess {
       case 'thread/status/changed':
       case 'thread/name/updated':
       case 'thread/compacted':
+        this.handleCompacted();
+        break;
       case 'thread/tokenUsage/updated':
       case 'model/rerouted':
       case 'account/updated':
@@ -575,6 +577,19 @@ export abstract class BaseAppServerAgent implements AgentProcess {
     this.emitCheckpoint(`[CODEX:done] Turn completed`);
     this.setStatus('waiting');
     flog.info('AGENT', `${this.logTag}: Turn completed`);
+  }
+
+  private handleCompacted() {
+    flog.warn('AGENT', `${this.logTag}: Context window compacted`);
+    const prevStatus = this.status;
+    this.setStatus('compacting');
+    this.emit({
+      text: `${this.logTag}: contexte compacte (auto-compact)`,
+      timestamp: Date.now(),
+      type: 'info',
+    });
+    // Restore previous status after emitting — compacting is transient
+    this.setStatus(prevStatus === 'compacting' ? 'running' : prevStatus);
   }
 
   // ── Approval/input handlers (kept in class — they need process.stdin) ───
