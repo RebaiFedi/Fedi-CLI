@@ -84,7 +84,6 @@ function InputBarComponent({ onSubmit, placeholder, projectDir }: InputBarProps)
   // ── Paste callback from LineInput ─────────────────────────────────────────
   const handlePaste = useCallback((text: string) => {
     pasteCounter.current++;
-    // Each paste replaces the previous (no concatenation)
     setPastedText(text);
   }, []);
 
@@ -92,7 +91,7 @@ function InputBarComponent({ onSubmit, placeholder, projectDir }: InputBarProps)
   const pasteBadge = React.useMemo(() => {
     if (!pastedText) return undefined;
     const lineCount = pastedText.split('\n').length;
-    return `[Pasted text #${pasteCounter.current} +${lineCount} lines]`;
+    return `[Pasted +${lineCount} lines]`;
   }, [pastedText]);
 
   // ── History navigation ────────────────────────────────────────────────────
@@ -108,6 +107,19 @@ function InputBarComponent({ onSubmit, placeholder, projectDir }: InputBarProps)
     setValue(histVal);
   }, [value]);
 
+  // ── Change handler ────────────────────────────────────────────────────────
+  const handleChange = useCallback(
+    (text: string) => {
+      if (pastedText && text.length === 0 && value.length === 0) {
+        clearPaste();
+        return;
+      }
+      setValue(text);
+      historyIndex.current = -1;
+    },
+    [pastedText, clearPaste, value],
+  );
+
   const handleHistoryNext = useCallback(() => {
     if (historyIndex.current === -1) return;
     if (historyIndex.current < history.current.length - 1) {
@@ -119,32 +131,12 @@ function InputBarComponent({ onSubmit, placeholder, projectDir }: InputBarProps)
     }
   }, []);
 
-  const handleTab = useCallback(() => {
-    // Reserved for future command autocompletion.
-  }, []);
-
-  // ── Change handler ────────────────────────────────────────────────────────
-  const handleChange = useCallback(
-    (text: string) => {
-      // Backspace on empty with paste active = clear paste
-      if (pastedText && text.length === 0 && value.length === 0) {
-        clearPaste();
-        return;
-      }
-
-      setValue(text);
-      historyIndex.current = -1;
-    },
-    [pastedText, clearPaste, value],
-  );
-
   // ── Submit handler ────────────────────────────────────────────────────────
   const handleSubmit = useCallback(
     (text: string) => {
       const comment = text.trim();
 
       if (pastedText) {
-        // Strip only leading/trailing empty lines, preserve internal indentation
         const pastedLines = pastedText.split('\n');
         while (pastedLines.length > 0 && pastedLines[0]!.trim() === '') pastedLines.shift();
         while (pastedLines.length > 0 && pastedLines[pastedLines.length - 1]!.trim() === '') pastedLines.pop();
@@ -152,7 +144,6 @@ function InputBarComponent({ onSubmit, placeholder, projectDir }: InputBarProps)
 
         if (!cleanPaste && !comment) return;
 
-        // Build final message: comment first (as instruction), then pasted content verbatim
         let msg: string;
         if (comment && cleanPaste) {
           msg = `${comment}\n\n${cleanPaste}`;
@@ -176,7 +167,6 @@ function InputBarComponent({ onSubmit, placeholder, projectDir }: InputBarProps)
         return;
       }
 
-      // No paste — normal submit
       const msg = text.trim();
       if (!msg) return;
 
@@ -205,11 +195,9 @@ function InputBarComponent({ onSubmit, placeholder, projectDir }: InputBarProps)
         onPaste={handlePaste}
         onHistoryPrev={handleHistoryPrev}
         onHistoryNext={handleHistoryNext}
-        onTab={handleTab}
         onClear={handleClear}
         placeholder={placeholder ?? 'Type your message...'}
         prefixBadge={pasteBadge}
-        maxVisibleLines={8}
       />
     </Box>
   );

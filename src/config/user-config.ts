@@ -1,4 +1,4 @@
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { z } from 'zod';
@@ -186,7 +186,21 @@ export function loadUserConfig(): UserConfig {
   }
 }
 
-/** Apply a profile preset — overrides effort/thinking settings in the cached config */
+/** Persist current config to ~/.fedi-cli/config.json */
+function persistConfig(): void {
+  if (!cachedConfig) return;
+  const configDir = join(homedir(), '.fedi-cli');
+  const configPath = join(configDir, 'config.json');
+  try {
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(configPath, JSON.stringify(cachedConfig, null, 2), 'utf-8');
+    flog.info('SYSTEM', `Config saved to ${configPath}`);
+  } catch (err) {
+    flog.warn('SYSTEM', `Failed to save config: ${err}`);
+  }
+}
+
+/** Apply a profile preset — overrides effort/thinking settings and persists */
 export function applyProfile(profile: ProfileName): void {
   const cfg = loadUserConfig();
   const preset = PROFILES[profile];
@@ -196,24 +210,27 @@ export function applyProfile(profile: ProfileName): void {
   cfg.opusThinking = preset.opusThinking;
   cfg.sonnetThinking = preset.sonnetThinking;
   cfg.codexThinking = preset.codexThinking;
+  persistConfig();
   flog.info('SYSTEM', `Profile "${profile}" applied: opus=${preset.opusEffort}/${preset.opusThinking ? 'thinking' : 'no-think'} sonnet=${preset.sonnetEffort} codex=${preset.codexEffort}`);
 }
 
-/** Override effort for a specific agent */
+/** Override effort for a specific agent and persist */
 export function setAgentEffort(agent: 'opus' | 'sonnet' | 'codex', effort: EffortLevel): void {
   const cfg = loadUserConfig();
   if (agent === 'opus') cfg.opusEffort = effort;
   else if (agent === 'sonnet') cfg.sonnetEffort = effort;
   else if (agent === 'codex') cfg.codexEffort = effort;
+  persistConfig();
   flog.info('SYSTEM', `${agent} effort set to "${effort}"`);
 }
 
-/** Override thinking for a specific agent */
+/** Override thinking for a specific agent and persist */
 export function setAgentThinking(agent: 'opus' | 'sonnet' | 'codex', enabled: boolean): void {
   const cfg = loadUserConfig();
   if (agent === 'opus') cfg.opusThinking = enabled;
   else if (agent === 'sonnet') cfg.sonnetThinking = enabled;
   else if (agent === 'codex') cfg.codexThinking = enabled;
+  persistConfig();
   flog.info('SYSTEM', `${agent} thinking ${enabled ? 'enabled' : 'disabled'}`);
 }
 

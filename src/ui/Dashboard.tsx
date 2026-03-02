@@ -1021,57 +1021,40 @@ export function Dashboard({
     <Box flexDirection="column">
       <Text> </Text>
       {thinking ? <ThinkingSpinner /> : <Text> </Text>}
-      <Box paddingX={2} gap={2}>
-        {visibleAgents.map((id) => {
-          const s = agentStatuses[id];
-          const color =
-            s === 'running' ? THEME[id] : s === 'error' ? 'red' : THEME.muted;
-          const icon = s === 'running' ? '●' : s === 'error' ? '✖' : '○';
-          return (
-            <Text key={id} color={color}>
-              {icon} {agentDisplayName(id)}
-            </Text>
-          );
-        })}
-      </Box>
       {Object.keys(agentErrors).length > 0 && (
-        <Box paddingX={2} flexDirection="column">
+        <Box paddingX={1} flexDirection="column">
           {Object.entries(agentErrors).map(([agent, msg]) => (
             <Text key={agent} color="red">
-              {'  ⚠ '}{msg}
+              {' ⚠ '}{msg}
             </Text>
           ))}
         </Box>
       )}
       {todosVisible && <TodoPanel items={todos} />}
+      <Box paddingX={1}>
+        <Text color={anyRunning ? THEME.opus : THEME.panelBorder}>{'─'.repeat(Math.max(10, (process.stdout.columns || 80) - 4))}</Text>
+      </Box>
       {showSlashMenu ? (
-        <Box width="100%" borderStyle="round" borderColor={THEME.opus} paddingX={1}>
+        <Box paddingX={1} flexDirection="column">
           <SlashMenu
             onClose={() => setShowSlashMenu(false)}
             enabledAgents={enabledAgentSet}
           />
         </Box>
       ) : (
-        <Box width="100%" flexGrow={1}>
-          <Box
-            width="100%"
-            flexGrow={1}
-            paddingY={0}
-            borderStyle="round"
-            borderColor={anyRunning ? THEME.opus : THEME.panelBorder}
-          >
-            <Text color={THEME.text}>{' \u276F '}</Text>
-            <Box flexGrow={1}>
-              <InputBar
-                onSubmit={handleInput}
-                projectDir={projectDir}
-                placeholder={stopped ? 'Tapez pour relancer les agents...' : 'Message, @agent ou /help'}
-              />
-            </Box>
-          </Box>
+        <Box paddingX={1}>
+          <Text color={anyRunning ? THEME.opus : THEME.muted}>{'\u276F '}</Text>
+          <InputBar
+            onSubmit={handleInput}
+            projectDir={projectDir}
+            placeholder={stopped ? 'Tapez pour relancer les agents...' : 'Message, @agent ou /help'}
+          />
         </Box>
       )}
-      <Box paddingX={2} paddingTop={0}>
+      <Box paddingX={1}>
+        <Text color={anyRunning ? THEME.opus : THEME.panelBorder}>{'─'.repeat(Math.max(10, (process.stdout.columns || 80) - 4))}</Text>
+      </Box>
+      <Box paddingX={1} paddingTop={0} justifyContent="space-between">
         <Text>
           <Text dimColor>{'esc '}</Text>
           <Text color={THEME.muted}>{'stop'}</Text>
@@ -1082,6 +1065,19 @@ export function Dashboard({
           <Text dimColor>{'/ '}</Text>
           <Text color={THEME.muted}>{'commands'}</Text>
         </Text>
+        <Box gap={1}>
+          {visibleAgents.map((id) => {
+            const s = agentStatuses[id];
+            const color =
+              s === 'running' ? THEME[id] : s === 'error' ? 'red' : THEME.muted;
+            const icon = s === 'running' ? '●' : s === 'error' ? '✖' : '○';
+            return (
+              <Text key={id} color={color}>
+                {icon} {agentDisplayName(id)}
+              </Text>
+            );
+          })}
+        </Box>
       </Box>
     </Box>
   );
