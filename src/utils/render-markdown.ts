@@ -1,4 +1,4 @@
-import { stripAnsi } from './strip-ansi.js';
+import stripAnsi from 'strip-ansi';
 
 export interface StyledLine {
   text: string;

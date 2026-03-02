@@ -13,7 +13,7 @@ import type {
 import type { Orchestrator } from '../orchestrator/orchestrator.js';
 import { InputBar } from './InputBar.js';
 import { flog } from '../utils/log.js';
-import { stripAnsi } from '../utils/strip-ansi.js';
+import stripAnsi from 'strip-ansi';
 import { THEME, agentHex, agentDisplayName, agentChalkColor } from '../config/theme.js';
 import { getMaxMessages, getFlushInterval, INDENT } from '../config/constants.js';
 import { outputToEntries, extractTasks } from '../rendering/output-transform.js';

@@ -1,5 +1,5 @@
 import chalk from 'chalk';
-import { stripAnsi } from '../utils/strip-ansi.js';
+import stripAnsi from 'strip-ansi';
 import { THEME } from '../config/theme.js';
 import { BUBBLE_SIDE_MARGIN, MAX_READABLE_WIDTH } from '../config/constants.js';
 import { wordWrap } from '../rendering/ansi-renderer.js';

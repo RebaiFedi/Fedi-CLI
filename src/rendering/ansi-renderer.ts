@@ -1,6 +1,6 @@
 import chalk from 'chalk';
 import type { DisplayEntry, ToolAction } from '../agents/types.js';
-import { stripAnsi } from '../utils/strip-ansi.js';
+import stripAnsi from 'strip-ansi';
 import { THEME } from '../config/theme.js';
 import { INDENT, MAX_READABLE_WIDTH } from '../config/constants.js';
 import { compact, addActionSpacing } from './compact.js';

@@ -8,6 +8,7 @@ import { Dashboard } from './ui/Dashboard.js';
 import { ErrorBoundary } from './ui/ErrorBoundary.js';
 import { SessionManager } from './utils/session-manager.js';
 import { THEME } from './config/theme.js';
+import { VERSION } from './utils/version.js';
 
 async function printSessionList(projectDir: string) {
   const sm = new SessionManager(projectDir);
@@ -77,7 +78,7 @@ async function viewSession(projectDir: string, sessionId: string) {
 
   const agentLabels: Record<string, { label: string; color: (s: string) => string }> = {
     opus: { label: 'Opus', color: chalk.hex(THEME.opus) },
-    claude: { label: 'Sonnet', color: chalk.hex(THEME.sonnet) },
+    sonnet: { label: 'Sonnet', color: chalk.hex(THEME.sonnet) },
     codex: { label: 'Codex', color: chalk.hex(THEME.codex) },
     user: { label: 'User', color: chalk.hex(THEME.text) },
     system: { label: 'System', color: chalk.dim },
@@ -122,7 +123,7 @@ async function viewSession(projectDir: string, sessionId: string) {
 
 function printHelp() {
   console.log(`
-${chalk.hex(THEME.opus).bold('Fedi CLI')} ${chalk.dim('v1.0.0')} — Orchestrateur multi-agents IA
+${chalk.hex(THEME.opus).bold('Fedi CLI')} ${chalk.dim(`v${VERSION}`)} — Orchestrateur multi-agents IA
 
 ${chalk.white.bold('USAGE')}
   fedi [options]                Lancer une session interactive
@@ -135,7 +136,7 @@ ${chalk.white.bold('OPTIONS')}
   --sessions                   Lister toutes les sessions
   --view <id>                  Afficher une session (supporte les IDs courts)
   --resume <id>                Reprendre une session precedente
-  --agents <list>              Agents a activer (ex: opus,claude,codex)
+  --agents <list>              Agents a activer (ex: opus,sonnet,codex)
 
 
 ${chalk.white.bold('COMMANDES INTERACTIVES')}
@@ -208,13 +209,13 @@ export async function main() {
   if (agentsIdx !== -1) {
     const agentList = args[agentsIdx + 1];
     if (!agentList) {
-      console.error(chalk.red('  Usage: fedi --agents opus,claude,codex'));
+      console.error(chalk.red('  Usage: fedi --agents opus,sonnet,codex'));
       process.exit(1);
     }
     enabledAgents.clear();
     for (const a of agentList.split(',').map((s) => s.trim().toLowerCase())) {
-      if (['opus', 'sonnet', 'codex', 'sonnet'].includes(a)) {
-        enabledAgents.add(a === 'sonnet' ? 'sonnet' : a);
+      if (['opus', 'sonnet', 'codex'].includes(a)) {
+        enabledAgents.add(a);
       } else {
         console.warn(chalk.yellow(`  Agent inconnu: ${a} (ignoring)`));
       }

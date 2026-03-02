@@ -3,6 +3,7 @@ import { createInterface } from 'node:readline';
 import type { AgentProcess, AgentId, AgentStatus, OutputLine, SessionConfig, ToolMeta, ToolAction } from './types.js';
 import { flog } from '../utils/log.js';
 import { formatAction } from '../utils/format-action.js';
+import { VERSION } from '../utils/version.js';
 
 /**
  * Abstract base class for agents communicating via `codex app-server` (JSON-RPC 2.0).
@@ -200,7 +201,7 @@ export abstract class BaseAppServerAgent implements AgentProcess {
     // ── Handshake ──
     try {
       await this.rpcRequest('initialize', {
-        clientInfo: { name: 'fedi-cli', version: '1.0.0' },
+        clientInfo: { name: 'fedi-cli', version: VERSION },
       });
       this.rpcNotify('initialized', {});
       flog.info('AGENT', `${this.logTag}: Handshake complete`);

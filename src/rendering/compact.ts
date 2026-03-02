@@ -1,5 +1,5 @@
 import type { DisplayEntry } from '../agents/types.js';
-import { stripAnsi } from '../utils/strip-ansi.js';
+import stripAnsi from 'strip-ansi';
 
 export function compact(entries: DisplayEntry[]): DisplayEntry[] {
   const out: DisplayEntry[] = [];

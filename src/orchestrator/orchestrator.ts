@@ -1,12 +1,8 @@
 import PQueue from 'p-queue';
-import { randomUUID } from 'node:crypto';
-import { writeFileSync, existsSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import type { AgentProcess, AgentId, AgentStatus, Message, OutputLine, SessionConfig } from '../agents/types.js';
 import { SonnetAgent } from '../agents/sonnet.js';
 import { CodexAgent } from '../agents/codex.js';
 import { OpusAgent } from '../agents/opus.js';
-import type { AgentProcess, AgentId, AgentStatus, Message, OutputLine, SessionConfig } from '../agents/types.js';
-import { TO_SONNET_PATTERN, TO_CODEX_PATTERN, TO_OPUS_PATTERN } from '../agents/types.js';
 import { MessageBus } from './message-bus.js';
 import {
   getSonnetSystemPrompt,
@@ -17,7 +13,13 @@ import {
 } from './prompts.js';
 import { flog } from '../utils/log.js';
 import { SessionManager } from '../utils/session-manager.js';
-import { loadUserConfig } from '../config/user-config.js';
+import { ensureClaudeMd } from './claude-md-manager.js';
+import { CrossTalkManager } from './cross-talk-manager.js';
+import { BufferManager } from './buffer-manager.js';
+import { DelegateTracker } from './delegate-tracker.js';
+import { RelayRouter } from './relay-router.js';
+
+// ── Public interfaces ──
 
 export interface OrchestratorDeps {
   opus?: AgentProcess;
@@ -25,11 +27,6 @@ export interface OrchestratorDeps {
   codex?: AgentProcess;
   bus?: MessageBus;
 }
-
-/** Max relays within a time window before blocking */
-const _cfg = loadUserConfig();
-const RELAY_WINDOW_MS = _cfg.relayWindowMs;
-const MAX_RELAYS_PER_WINDOW = _cfg.maxRelaysPerWindow;
 
 export interface OrchestratorCallbacks {
   onAgentOutput: (agent: AgentId, line: OutputLine) => void;
@@ -40,6 +37,8 @@ export interface OrchestratorCallbacks {
 
 type WorkerAgentId = 'sonnet' | 'codex';
 
+// ── Orchestrator ──
+
 export class Orchestrator {
   readonly opus: AgentProcess;
   readonly sonnet: AgentProcess;
@@ -48,22 +47,23 @@ export class Orchestrator {
   private readonly agents: Record<AgentId, AgentProcess>;
   private enabledAgents: Set<AgentId> = new Set(['opus', 'sonnet', 'codex']);
 
-  constructor(deps?: OrchestratorDeps) {
-    this.opus = deps?.opus ?? new OpusAgent();
-    this.sonnet = deps?.sonnet ?? new SonnetAgent();
-    this.codex = deps?.codex ?? new CodexAgent();
-    this.bus = deps?.bus ?? new MessageBus();
-    this.agents = {
-      opus: this.opus,
-      sonnet: this.sonnet,
-      codex: this.codex,
-    };
-  }
+  // ── Modules ──
+  private readonly crossTalk: CrossTalkManager;
+  private readonly buffers: BufferManager;
+  private readonly delegates: DelegateTracker;
+  private readonly relay: RelayRouter;
+
+  // ── Queues & lifecycle ──
   private opusQueue = new PQueue({ concurrency: 1 });
   private sonnetQueue = new PQueue({ concurrency: 1 });
   private codexQueue = new PQueue({ concurrency: 1 });
   private callbacks: OrchestratorCallbacks | null = null;
   private started = false;
+  private config: Omit<SessionConfig, 'task'> | null = null;
+  private sessionManager: SessionManager | null = null;
+  private sessionMessageHandler: ((msg: Message) => void) | null = null;
+
+  // ── Worker startup ──
   private workerStarted: Map<WorkerAgentId, boolean> = new Map([
     ['sonnet', false],
     ['codex', false],
@@ -72,102 +72,71 @@ export class Orchestrator {
     ['sonnet', Promise.resolve()],
     ['codex', Promise.resolve()],
   ]);
+
+  // ── Opus restart ──
   private opusRestartPending = false;
   private opusRestartTimer: ReturnType<typeof setTimeout> | null = null;
   private opusRestartCount = 0;
-  private config: Omit<SessionConfig, 'task'> | null = null;
-  private relayTimestamps: number[] = [];
-  private sessionMessageHandler: ((msg: Message) => void) | null = null;
+  private readonly MAX_OPUS_RESTARTS = 3;
+
+  // ── Context tracking ──
   private agentLastContextIndex: Map<AgentId, number> = new Map([
     ['opus', 0],
     ['sonnet', 0],
     ['codex', 0],
   ]);
-  private sessionManager: SessionManager | null = null;
-  /** Agents currently working on a relay from Opus — text output muted, actions only */
-  private agentsOnRelay: Set<AgentId> = new Set();
-  /** Buffer stdout while agent works on relay — flushed when relay ends */
-  private relayBuffer: Map<AgentId, OutputLine[]> = new Map([
-    ['sonnet', []],
-    ['codex', []],
-    ['opus', []],
-  ]);
-  /** Timestamp when relay started for each agent — used for safety timeout */
-  private relayStartTime: Map<AgentId, number> = new Map();
-  /** Last time a status snippet was emitted for each agent — throttle to avoid UI spam */
-  private lastStatusSnippetTime: Map<AgentId, number> = new Map();
-  /** Minimum interval (ms) between status snippets for the same agent */
-  private readonly STATUS_SNIPPET_INTERVAL_MS = 1200;
-  /** Agents that Opus delegated to — we wait for ALL before delivering to Opus */
-  private expectedDelegates: Set<AgentId> = new Set();
-  /** Buffered reports from delegates — delivered to Opus as one combined message */
-  private pendingReportsForOpus: Map<AgentId, string> = new Map();
-  /** Agents whose combined report has been delivered to Opus — mute ALL late output */
-  private deliveredToOpus: Set<AgentId> = new Set();
-  /** Pending safety-net timers for spawn-per-exec agents */
-  private safetyNetTimers: Map<AgentId, ReturnType<typeof setTimeout>> = new Map();
-  /** Heartbeat interval for expectedDelegates — checks if agents are still active */
-  private delegateHeartbeatTimer: ReturnType<typeof setInterval> | null = null;
-  /** Timestamp of last activity from each delegate (output, status change) */
-  private delegateLastActivity: Map<AgentId, number> = new Map();
-  /** Max idle time (ms) before a delegate is considered stuck — only triggers if agent is NOT running */
-  private readonly DELEGATE_IDLE_TIMEOUT_MS = _cfg.delegateTimeoutMs;
-  /** How often (ms) to check if delegates are still alive */
-  private readonly DELEGATE_HEARTBEAT_INTERVAL_MS = 10_000;
-  /** Debounce (ms) before safety-net auto-relay fires — universal for all agents */
-  private readonly SAFETY_NET_DEBOUNCE_MS = 500;
-  /** Relay timeout for Sonnet (Claude-based agents) */
-  private readonly RELAY_TIMEOUT_MS = _cfg.execTimeoutMs;
-  /** Relay timeout for Codex — 0 = no timeout (wait indefinitely). Codex is slower, let it work. */
-  private readonly CODEX_RELAY_TIMEOUT_MS = _cfg.codexTimeoutMs;
-  private readonly MAX_OPUS_RESTARTS = 3;
-  /** Cross-talk message counter — reset each round, blocks after MAX */
-  private crossTalkCount = 0;
-  private readonly MAX_CROSS_TALK_PER_ROUND = _cfg.maxCrossTalkPerRound;
-  /** Agents responding to a cross-talk message — stdout muted until timeout or next user interaction */
-  private agentsOnCrossTalk: Map<AgentId, number> = new Map(); // agentId → timestamp when set
-  /** Last delegation content sent to each agent — used for auto-fallback on failure */
-  private lastDelegationContent: Map<AgentId, string> = new Map();
-  /** Agents that INITIATED a cross-talk and are waiting for a peer response.
-   *  While waiting, the safety-net auto-relay must NOT trigger. */
-  private awaitingCrossTalkReply: Set<AgentId> = new Set();
-  /** Stateful relay drafts to avoid truncating [TO:*] payloads across stream chunks. */
-  private relayDrafts: Map<AgentId, { target: AgentId; parts: string[] }> = new Map();
-  /** Debounce timers for relay drafts — flush when no new chunk arrives shortly. */
-  private relayDraftTimers: Map<AgentId, ReturnType<typeof setTimeout>> = new Map();
-  /** How many consecutive empty-content flushes we've deferred (per agent). */
-  private relayDraftEmptyRetries: Map<AgentId, number> = new Map();
-  private readonly RELAY_DRAFT_FLUSH_MS = 150;
-  /** Max consecutive empty retries before we give up and flush (prevents leaks). */
-  private readonly RELAY_DRAFT_MAX_EMPTY_RETRIES = 12;
-  /** When true, Opus stdout is NOT buffered even when delegates are pending.
-   *  Set by sendToAllDirect so the user sees Opus working in real-time (@tous mode). */
-  private opusAllMode = false;
-  /** Agents the user is talking to directly (@codex, @sonnet).
-   *  While set, relays FROM Opus TO this agent are BLOCKED — the user's direct
-   *  message takes priority and Opus should not interfere. Cleared on next user
-   *  message or sendToAllDirect. */
-  private directModeAgents: Set<AgentId> = new Set();
-  /** Timer for @tous mode: if Opus doesn't delegate within N seconds,
-   *  send message directly to workers (it's a simple question). */
-  private opusAllModeWorkerTimer: ReturnType<typeof setTimeout> | null = null;
-  /** The original user text for @tous, kept until we decide to send to workers */
-  private opusAllModePendingText: string | null = null;
-  /** Track whether Opus has already responded in @tous non-delegation mode.
-   *  Prevents duplicate content from multi-turn auto-continuation. */
-  private opusAllModeResponded = false;
-  /** When true, the next opus→agent relay is a LIVE message forwarding (not a new delegation).
-   *  This bypasses the "duplicate delegation" block in routeRelayMessage().
-   *  Set by sendUserMessage() when user sends a message while agents are on relay.
-   *  Consumed (reset to false) after the relay is processed. */
-  private liveRelayAllowed = false;
 
-  setConfig(config: Omit<SessionConfig, 'task'>) {
+  // ── @tous mode ──
+  private opusAllMode = false;
+  private opusAllModeResponded = false;
+  private opusAllModeWorkerTimer: ReturnType<typeof setTimeout> | null = null;
+  private opusAllModePendingText: string | null = null;
+
+  constructor(deps?: OrchestratorDeps) {
+    this.opus = deps?.opus ?? new OpusAgent();
+    this.sonnet = deps?.sonnet ?? new SonnetAgent();
+    this.codex = deps?.codex ?? new CodexAgent();
+    this.bus = deps?.bus ?? new MessageBus();
+    this.agents = { opus: this.opus, sonnet: this.sonnet, codex: this.codex };
+
+    // Initialize modules
+    this.crossTalk = new CrossTalkManager();
+    this.buffers = new BufferManager();
+    this.delegates = new DelegateTracker({
+      agents: this.agents,
+      bus: this.bus,
+      crossTalk: this.crossTalk,
+      buffers: this.buffers,
+      getCallbacks: () => this.callbacks,
+      isAgentEnabled: (id) => this.isAgentEnabled(id),
+    });
+    this.relay = new RelayRouter({
+      agents: this.agents,
+      bus: this.bus,
+      delegates: this.delegates,
+      crossTalk: this.crossTalk,
+      buffers: this.buffers,
+      getCallbacks: () => this.callbacks,
+      isAgentEnabled: (id) => this.isAgentEnabled(id),
+      onOpusDelegated: () => {
+        if (this.opusAllMode && this.opusAllModeWorkerTimer) {
+          clearTimeout(this.opusAllModeWorkerTimer);
+          this.opusAllModeWorkerTimer = null;
+          this.opusAllModePendingText = null;
+          flog.info('ORCH', '@tous: Opus delegated — cancelled worker direct-send timer');
+        }
+      },
+    });
+  }
+
+  // ── Configuration ──
+
+  setConfig(config: Omit<SessionConfig, 'task'>): void {
     this.config = config;
     this.sessionManager = new SessionManager(config.projectDir);
   }
 
-  setEnabledAgents(agents: Iterable<AgentId>) {
+  setEnabledAgents(agents: Iterable<AgentId>): void {
     const next = new Set<AgentId>(['opus']);
     for (const agent of agents) {
       if (agent === 'opus' || agent === 'sonnet' || agent === 'codex') {
@@ -186,7 +155,16 @@ export class Orchestrator {
     return this.enabledAgents.has(agentId);
   }
 
-  /** Get new context that `agent` hasn't seen yet from the message bus */
+  get isStarted(): boolean {
+    return this.started;
+  }
+
+  get hasPendingDelegates(): boolean {
+    return this.delegates.hasPendingDelegates;
+  }
+
+  // ── Context ──
+
   private getNewContext(agent: AgentId): string {
     const sinceIndex = this.agentLastContextIndex.get(agent) ?? 0;
     const { summary, newIndex } = this.bus.getContextSummary(agent, sinceIndex);
@@ -194,58 +172,102 @@ export class Orchestrator {
     return summary;
   }
 
-  bind(cb: OrchestratorCallbacks) {
+  private getOpusContextReminder(): string {
+    const lines: string[] = [];
+    lines.push('[RAPPEL SYSTEME]');
+    lines.push('- Tu es Opus, DIRECTEUR. Tu DELEGUES: frontend→Sonnet, backend→Codex. Tu ne travailles JAMAIS seul sauf si le user dit "toi-meme" ou [FALLBACK].');
+    lines.push('- Apres [TO:SONNET]/[TO:CODEX]: UNE phrase puis STOP. ZERO outil (Read, Glob, Grep, Bash, Write, Edit).');
+    lines.push('- Quand tu recois les rapports de tes agents: ecris UN rapport final complet et structure pour le user. Decris le travail en detail MAIS sans blocs de code source. Le user n\'a RIEN vu avant. REPONDS RAPIDEMENT.');
+
+    if (this.delegates.expectedDelegates.size > 0) {
+      const agentNames = [...this.delegates.expectedDelegates].map(a => a.charAt(0).toUpperCase() + a.slice(1)).join(' et ');
+      const received = this.delegates.pendingReports.size;
+      const total = this.delegates.expectedDelegates.size;
+      lines.push(`- MAINTENANT: ${agentNames} travaille(nt) (${received}/${total} rapports recus). ATTENDS en silence. AUCUN outil.`);
+
+      const activeOnRelay = [...this.relay.agentsOnRelay].filter(a => {
+        return this.agents[a].status === 'running';
+      });
+      if (activeOnRelay.length > 0) {
+        const activeNames = activeOnRelay.map(a => a.charAt(0).toUpperCase() + a.slice(1));
+        if (activeNames.length === 1) {
+          lines.push(`- Le user envoie un message PENDANT que ${activeNames[0]} travaille. Tu DOIS TRANSMETTRE ce message a ${activeNames[0]} via le tag de delegation habituel. Le systeme va l'injecter en LIVE a l'agent. Ecris le tag suivi du message du user (reformule si besoin). Puis UNE phrase au user ("Bien note, c'est transmis a ${activeNames[0]}.") et STOP.`);
+        } else {
+          const allNames = activeNames.join(' et ');
+          lines.push(`- Le user envoie un message PENDANT que ${allNames} travaillent. DECIDE quel agent est concerne par le message du user. Transmets-le UNIQUEMENT a l'agent concerne via le tag de delegation. Si ca concerne les deux, transmets aux deux. Puis UNE phrase au user et STOP.`);
+        }
+      }
+    }
+    return lines.join('\n');
+  }
+
+  private getWorkerContextReminder(agentId: string, fromAgent: string): string {
+    const from = fromAgent.toUpperCase();
+    const peer = agentId === 'sonnet' ? 'Codex' : 'Sonnet';
+    const role = agentId === 'sonnet' ? 'ingenieur frontend' : 'ingenieur backend';
+    const name = agentId === 'sonnet' ? 'Sonnet' : 'Codex';
+    const hasReported = this.delegates.pendingReports.has(agentId as AgentId);
+
+    if (hasReported) {
+      return `[RAPPEL] Tu es ${name}, ${role}. Tu as DEJA envoye ton rapport [TO:OPUS]. Ta tache est TERMINEE. NE REPONDS PLUS a aucun message. NE parle PAS a ${peer}. SILENCE TOTAL. Chaque message supplementaire BLOQUE le systeme.`;
+    }
+    if (from === 'OPUS') {
+      return `[RAPPEL] Tu es ${name}, ${role}. Dis BRIEVEMENT ce que tu vas faire (1-2 phrases), puis FAIS LE TRAVAIL (Write, Edit, Bash...), puis QUAND TU AS FINI envoie [TO:OPUS] avec le resume. [TO:OPUS] = DERNIERE action, JAMAIS la premiere. Ne parle PAS au user. APRES [TO:OPUS]: SILENCE TOTAL, ne parle plus a ${peer}.`;
+    }
+    if (from === 'USER') {
+      return `[RAPPEL] Tu es ${name}, ${role}. Le user te parle directement. Reponds au user. PAS de [TO:OPUS].`;
+    }
+    if (from === peer.toUpperCase()) {
+      return `[RAPPEL] Tu es ${name}, ${role}. ${peer} te parle — reponds avec des INFOS TECHNIQUES utiles. Quand la coordination est finie, envoie [TO:OPUS] avec ton rapport. APRES [TO:OPUS]: SILENCE TOTAL, plus de messages a ${peer}. PAS de politesses, PAS de "merci", PAS de "bonne continuation".`;
+    }
+    return '';
+  }
+
+  // ── Binding ──
+
+  bind(cb: OrchestratorCallbacks): void {
     this.callbacks = cb;
 
-    // Opus output & status — show delegation messages, buffer reports until all delegates finish
+    // Opus output handler
     this.opus.onOutput((line) => {
       flog.debug('AGENT', 'Output', { agent: 'opus', type: line.type, text: line.text.slice(0, 150) });
-      this.detectRelayPatterns('opus', line.text);
+      this.relay.detectRelayPatterns('opus', line.text);
 
-      // When Opus has delegated to agents and is waiting for their reports,
-      // buffer ALL his output (stdout + tool actions) so the user only sees
-      // the agents' work, not Opus doing things in parallel.
-      // In @tous mode, Opus IS supposed to work — only buffer stdout (report text).
-      if (this.expectedDelegates.size > 0) {
+      if (this.delegates.expectedDelegates.size > 0) {
         if (line.type === 'stdout') {
-          const stripped = line.text
-            .replace(/\[TASK:(add|done)\][^\n]*/gi, '')
-            .trim();
+          const stripped = line.text.replace(/\[TASK:(add|done)\][^\n]*/gi, '').trim();
           if (stripped.length > 0) {
-            flog.debug('BUFFER', `Opus stdout BUFFERED (${this.expectedDelegates.size} delegates pending): ${stripped.slice(0, 80)}`, { agent: 'opus' });
-            this.relayBuffer.get('opus')!.push(line);
-            this.maybeEmitStatusSnippet('opus', line.text, cb);
+            flog.debug('BUFFER', `Opus stdout BUFFERED (${this.delegates.expectedDelegates.size} delegates pending)`, { agent: 'opus' });
+            this.buffers.pushToBuffer('opus', line);
+            this.buffers.maybeEmitStatusSnippet('opus', line.text, cb);
             return;
           }
         }
-        // In normal delegation (not @tous), also hide Opus tool actions
-        // Opus shouldn't be using tools when agents are working
         if (!this.opusAllMode && line.type === 'system') {
-          flog.debug('BUFFER', `Opus action HIDDEN (delegates pending, not @tous): ${line.text.slice(0, 80)}`, { agent: 'opus' });
+          flog.debug('BUFFER', `Opus action HIDDEN (delegates pending, not @tous)`, { agent: 'opus' });
           return;
         }
       }
 
-      // @tous non-delegation mode: Opus already responded (simple question).
-      // Suppress multi-turn duplicate content (Claude CLI auto-continuation).
-      if (this.opusAllMode && this.opusAllModeResponded && this.expectedDelegates.size === 0 && line.type === 'stdout') {
-        flog.debug('ORCH', `Opus stdout SUPPRESSED (already responded in @tous non-delegation): ${line.text.slice(0, 80)}`);
+      if (this.opusAllMode && this.opusAllModeResponded && this.delegates.expectedDelegates.size === 0 && line.type === 'stdout') {
+        flog.debug('ORCH', `Opus stdout SUPPRESSED (already responded in @tous non-delegation)`);
         return;
       }
 
       cb.onAgentOutput('opus', line);
     });
+
+    // Opus status handler
     this.opus.onStatusChange((s) => {
       flog.info('AGENT', `opus: ${s}`, { agent: 'opus' });
       if (s === 'waiting' || s === 'stopped' || s === 'error') {
-        this.flushRelayDraft('opus');
+        this.relay.flushRelayDraft('opus');
       }
-      // @tous: Opus finished first turn without delegating → it's a simple question.
-      // Send the message to workers now, and mark as responded (suppress multi-turn).
-      if (s === 'waiting' && this.opusAllMode && this.expectedDelegates.size === 0 && !this.opusAllModeResponded) {
+
+      // @tous: Opus finished without delegating → simple question
+      if (s === 'waiting' && this.opusAllMode && this.delegates.expectedDelegates.size === 0 && !this.opusAllModeResponded) {
         this.opusAllModeResponded = true;
         flog.info('ORCH', '@tous: Opus responded without delegating — sending to workers now');
-        // Cancel the safety-net timer — we're sending immediately
         if (this.opusAllModeWorkerTimer) {
           clearTimeout(this.opusAllModeWorkerTimer);
           this.opusAllModeWorkerTimer = null;
@@ -255,15 +277,14 @@ export class Orchestrator {
           this.opusAllModePendingText = null;
         }
       }
-      // Safety-net: if Opus finished without routing a LIVE message via relay tag,
-      // inject the user's message directly to all active delegates as fallback.
-      if (s === 'waiting' && this.liveRelayAllowed) {
-        this.liveRelayAllowed = false;
-        flog.warn('ORCH', 'Opus finished without routing LIVE message — injecting directly to active delegates');
-        for (const delegate of this.agentsOnRelay) {
-          const delegateAgent = this.getAgent(delegate);
+
+      // Safety-net: Opus finished without routing LIVE message
+      if (s === 'waiting' && this.relay.liveRelayAllowed) {
+        this.relay.liveRelayAllowed = false;
+        flog.warn('ORCH', 'Opus finished without routing LIVE message — injecting directly');
+        for (const delegate of this.relay.agentsOnRelay) {
+          const delegateAgent = this.agents[delegate];
           if (delegateAgent.status === 'running') {
-            // Get the last user message from bus history
             const history = this.bus.getHistory();
             let lastUserMsg: typeof history[number] | undefined;
             for (let i = history.length - 1; i >= 0; i--) {
@@ -273,55 +294,33 @@ export class Orchestrator {
               }
             }
             if (lastUserMsg) {
-              flog.info('ORCH', `Fallback LIVE inject to ${delegate}: ${lastUserMsg.content.slice(0, 80)}`);
+              flog.info('ORCH', `Fallback LIVE inject to ${delegate}`);
               delegateAgent.sendUrgent(`[LIVE MESSAGE DU USER] ${lastUserMsg.content}`);
             }
           }
         }
       }
+
       cb.onAgentStatus('opus', s);
-      if (s === 'running') {
-        this.opusRestartCount = 0;
-      }
-      // Only auto-restart on genuine errors — NOT on clean stops (user Esc, shutdown, etc.)
-      // A clean stop happens when stop() is called explicitly (this.started becomes false
-      // during shutdown, or opusRestartPending is set to prevent re-entry).
+      if (s === 'running') this.opusRestartCount = 0;
+
+      // Auto-restart Opus on error
       if (s === 'error' && this.started && !this.opusRestartPending) {
         if (this.opusRestartCount >= this.MAX_OPUS_RESTARTS) {
           flog.error('ORCH', `Opus restart limit reached (${this.MAX_OPUS_RESTARTS})`);
-          cb.onAgentOutput('opus', {
-            text: `Opus: restart limite atteinte (${this.MAX_OPUS_RESTARTS})`,
-            timestamp: Date.now(),
-            type: 'info',
-          });
+          cb.onAgentOutput('opus', { text: `Opus: restart limite atteinte (${this.MAX_OPUS_RESTARTS})`, timestamp: Date.now(), type: 'info' });
           return;
         }
         this.opusRestartPending = true;
         this.opusRestartTimer = setTimeout(async () => {
           this.opusRestartTimer = null;
           this.opusRestartPending = false;
-          // Double-check: don't restart if orchestrator was stopped during the delay
-          if (!this.started) {
-            flog.info('ORCH', 'Opus restart skipped: orchestrator stopped during delay');
-            return;
-          }
-          const config = this.config;
-          if (!config) {
-            flog.warn('ORCH', 'Opus restart skipped: config missing');
-            return;
-          }
+          if (!this.started || !this.config) return;
           this.opusRestartCount++;
           flog.warn('ORCH', 'Opus crashed — auto-restarting...');
-          cb.onAgentOutput('opus', {
-            text: 'Opus redémarrage en cours...',
-            timestamp: Date.now(),
-            type: 'info',
-          });
+          cb.onAgentOutput('opus', { text: 'Opus redémarrage en cours...', timestamp: Date.now(), type: 'info' });
           try {
-            await this.opus.start(
-              { ...config, task: '' },
-              getOpusSystemPrompt(config.projectDir),
-            );
+            await this.opus.start({ ...this.config, task: '' }, getOpusSystemPrompt(this.config.projectDir));
           } catch (e) {
             flog.error('ORCH', `Opus restart failed: ${e}`);
           }
@@ -329,10 +328,11 @@ export class Orchestrator {
       }
     });
 
-    // Bind worker agents (Sonnet, Codex) — shared output/status handlers
+    // Bind worker agents
     this.bindWorkerAgent('sonnet', this.sonnet, cb);
     this.bindWorkerAgent('codex', this.codex, cb);
 
+    // Relay events
     this.bus.on('relay', (msg: Message) => {
       flog.info('RELAY', `${msg.from}->${msg.to}`, { from: msg.from, to: msg.to, preview: msg.content.slice(0, 100) });
       cb.onRelay(msg);
@@ -342,667 +342,251 @@ export class Orchestrator {
       cb.onRelayBlocked(msg);
     });
 
-    // Route messages to Opus — inject cross-agent context
+    // Route messages to Opus
     this.bus.on('message:opus', (msg: Message) => {
       flog.debug('BUS', `${msg.from}->${msg.to}`, { preview: msg.content.slice(0, 100) });
       if (msg.from === 'opus') return;
       this.opusQueue.add(() => {
-        // Abort if orchestrator was stopped while this task was queued
-        if (!this.started) {
-          flog.info('ORCH', 'Queue task for opus aborted — orchestrator stopped');
-          return Promise.resolve();
-        }
+        if (!this.started) return Promise.resolve();
         const prefix = `[FROM:${msg.from.toUpperCase()}]`;
         const context = this.getNewContext('opus');
         let payload = `${prefix} ${msg.content}`;
-        if (context) {
-          payload += `\n\n--- CONTEXTE ---\n${context}\n--- FIN ---`;
-        }
-        // Inject permanent context reminder before every message to Opus
-        const reminder = this.getOpusContextReminder();
-        payload = `${reminder}\n\n${payload}`;
+        if (context) payload += `\n\n--- CONTEXTE ---\n${context}\n--- FIN ---`;
+        payload = `${this.getOpusContextReminder()}\n\n${payload}`;
         this.opus.send(payload);
         return Promise.resolve();
       });
     });
 
-    // Route messages to workers (lazy start) — inject cross-agent context
-    this.bindWorkerRoute(
-      'sonnet',
-      this.sonnetQueue,
-      () => this.ensureWorkerStarted('sonnet'),
-      () => this.workerReady.get('sonnet') ?? Promise.resolve(),
-    );
-    this.bindWorkerRoute(
-      'codex',
-      this.codexQueue,
-      () => this.ensureWorkerStarted('codex'),
-      () => this.workerReady.get('codex') ?? Promise.resolve(),
-    );
+    // Route messages to workers (lazy start)
+    this.bindWorkerRoute('sonnet', this.sonnetQueue, () => this.ensureWorkerStarted('sonnet'), () => this.workerReady.get('sonnet') ?? Promise.resolve());
+    this.bindWorkerRoute('codex', this.codexQueue, () => this.ensureWorkerStarted('codex'), () => this.workerReady.get('codex') ?? Promise.resolve());
   }
 
-  private bindWorkerRoute(
-    agentId: WorkerAgentId,
-    queue: PQueue,
-    ensureStarted: () => Promise<void>,
-    readyPromise: () => Promise<void>,
-  ) {
+  private bindWorkerRoute(agentId: WorkerAgentId, queue: PQueue, ensureStarted: () => Promise<void>, readyPromise: () => Promise<void>): void {
     this.bus.on(`message:${agentId}`, (msg: Message) => {
-      if (!this.isAgentEnabled(agentId)) {
-        flog.info('ORCH', `Skipping message for disabled agent ${agentId}`);
-        return;
-      }
+      if (!this.isAgentEnabled(agentId)) return;
       flog.debug('BUS', `${msg.from}->${msg.to}`, { preview: msg.content.slice(0, 100) });
       if (msg.from === agentId) return;
-      if (msg.from !== 'opus' && msg.from !== 'user' && this.awaitingCrossTalkReply.has(agentId)) {
+      if (msg.from !== 'opus' && msg.from !== 'user' && this.crossTalk.isAwaitingReply(agentId)) {
         flog.info('ORCH', `${agentId} received cross-talk reply from ${msg.from} — no longer awaiting`);
-        this.awaitingCrossTalkReply.delete(agentId);
+        this.crossTalk.clearAwaitingReply(agentId);
       }
       queue.add(async () => {
-        // Abort if orchestrator was stopped while this task was queued
-        if (!this.started) {
-          flog.info('ORCH', `Queue task for ${agentId} aborted — orchestrator stopped`);
-          return;
-        }
+        if (!this.started) return;
         await ensureStarted();
         void readyPromise();
-        // Double-check after async wait — stop() may have been called during ensureStarted()
-        if (!this.started) {
-          flog.info('ORCH', `Queue task for ${agentId} aborted after start — orchestrator stopped`);
-          return;
-        }
-        // Refresh cross-talk mute right before send — prevents stale status
-        // transitions from clearing the mute during the async queue wait.
-        if (this.agentsOnCrossTalk.has(agentId)) {
-          this.agentsOnCrossTalk.set(agentId, Date.now());
+        if (!this.started) return;
+        if (this.crossTalk.isOnCrossTalk(agentId)) {
+          this.crossTalk.setOnCrossTalk(agentId, Date.now());
         }
         const prefix = `[FROM:${msg.from.toUpperCase()}]`;
         const context = this.getNewContext(agentId);
         let payload = `${prefix} ${msg.content}`;
-        if (context) {
-          payload += `\n\n--- CONTEXTE ---\n${context}\n--- FIN ---`;
-        }
-        // Inject context reminder for workers to resist dilution in long conversations
+        if (context) payload += `\n\n--- CONTEXTE ---\n${context}\n--- FIN ---`;
         const workerReminder = this.getWorkerContextReminder(agentId, msg.from);
-        if (workerReminder) {
-          payload = `${workerReminder}\n\n${payload}`;
-        }
-        this.getAgent(agentId).send(payload);
+        if (workerReminder) payload = `${workerReminder}\n\n${payload}`;
+        this.agents[agentId].send(payload);
       });
     });
   }
 
-  /** Bind output and status handlers for a worker agent.
-   *  All agents use a universal debounce-based safety-net (500ms). */
-  private bindWorkerAgent(agentId: AgentId, agent: AgentProcess, cb: OrchestratorCallbacks) {
+  private bindWorkerAgent(agentId: AgentId, agent: AgentProcess, cb: OrchestratorCallbacks): void {
     const label = agentId.charAt(0).toUpperCase() + agentId.slice(1);
     const crossTalkClearThreshold = 2_000;
 
     agent.onOutput((line) => {
       flog.debug('AGENT', 'Output', { agent: agentId, type: line.type, text: line.text.slice(0, 150) });
-      // Keep heartbeat alive — agent is producing output
-      this.recordDelegateActivity(agentId);
-      // Detect Claude CLI API errors (e.g. output token limit exceeded) and show user-friendly message
+      this.delegates.recordActivity(agentId);
+
       if (line.type === 'stdout' && line.text.includes('API Error:')) {
-        flog.warn('ORCH', `${label} API error detected: ${line.text.slice(0, 150)}`);
-        cb.onAgentOutput(agentId, {
-          text: `${label}: limite de tokens atteinte — reprise en cours...`,
-          timestamp: Date.now(),
-          type: 'info',
-        });
+        flog.warn('ORCH', `${label} API error detected`);
+        cb.onAgentOutput(agentId, { text: `${label}: limite de tokens atteinte — reprise en cours...`, timestamp: Date.now(), type: 'info' });
       }
-      // Agent's report already delivered to Opus — mute ALL late output completely
-      // (including checkpoints — they cause stale agent headers in the UI)
-      if (this.deliveredToOpus.has(agentId)) {
-        flog.debug('ORCH', `${label} output MUTED (delivered to Opus, type=${line.type}): ${line.text.slice(0, 80)}`);
+
+      if (this.delegates.deliveredToOpus.has(agentId)) {
+        flog.debug('ORCH', `${label} output MUTED (delivered to Opus, type=${line.type})`);
         return;
       }
-      // @tous delegation mode: worker stdout is ALWAYS suppressed (only actions pass).
-      // Workers send their report to Opus via [TO:OPUS] relay — their text should
-      // never appear in the user's chat. This is a hard block that catches any edge
-      // case where agentsOnRelay state might be stale.
-      if (this.opusAllMode && this.expectedDelegates.size > 0 && line.type === 'stdout') {
-        flog.debug('ORCH', `${label} stdout BLOCKED (@tous delegation active): ${line.text.slice(0, 80)}`);
-        this.detectRelayPatterns(agentId, line.text);
-        this.relayBuffer.get(agentId)!.push(line);
-        // Emit a throttled status snippet so the user sees what the agent is thinking
-        this.maybeEmitStatusSnippet(agentId, line.text, cb);
+
+      if (this.opusAllMode && this.delegates.expectedDelegates.size > 0 && line.type === 'stdout') {
+        flog.debug('ORCH', `${label} stdout BLOCKED (@tous delegation active)`);
+        this.relay.detectRelayPatterns(agentId, line.text);
+        this.buffers.pushToBuffer(agentId, line);
+        this.buffers.maybeEmitStatusSnippet(agentId, line.text, cb);
         return;
       }
-      // Checkpoint passthrough — always forward to UI, but NEVER to Opus while
-      // delegates are pending.  Forwarding checkpoints to Opus was causing him to
-      // "wake up" and write a premature report before all agents had reported back.
+
       if (line.type === 'checkpoint') {
         cb.onAgentOutput(agentId, line);
         return;
       }
-      // Agent already reported to Opus (pending combined delivery) — mute late stdout
-      if (this.pendingReportsForOpus.has(agentId) && line.type === 'stdout') {
-        flog.debug('ORCH', `${label} output MUTED (already reported to Opus): ${line.text.slice(0, 80)}`);
-        this.detectRelayPatterns(agentId, line.text);
+
+      if (this.delegates.pendingReports.has(agentId) && line.type === 'stdout') {
+        flog.debug('ORCH', `${label} output MUTED (already reported to Opus)`);
+        this.relay.detectRelayPatterns(agentId, line.text);
         return;
       }
-      // Cross-talk mute — agent is responding to a peer message, suppress stdout
-      if (this.agentsOnCrossTalk.has(agentId)) {
-        const muteTime = this.agentsOnCrossTalk.get(agentId)!;
+
+      // Cross-talk mute handling
+      if (this.crossTalk.isOnCrossTalk(agentId)) {
+        const muteTime = this.crossTalk.getCrossTalkTime(agentId)!;
         if (Date.now() - muteTime > 15_000) {
           flog.warn('ORCH', `${label} cross-talk mute timeout (15s) — unmuting`);
-          this.agentsOnCrossTalk.delete(agentId);
+          this.crossTalk.clearOnCrossTalk(agentId);
         } else {
-          this.detectRelayPatterns(agentId, line.text);
-          // Reset relay timeout on tool activity (non-stdout = tool actions)
-          if (this.agentsOnRelay.has(agentId) && line.type !== 'stdout' && line.type !== 'stderr') {
-            this.relayStartTime.set(agentId, Date.now());
+          this.relay.detectRelayPatterns(agentId, line.text);
+          if (this.relay.agentsOnRelay.has(agentId) && line.type !== 'stdout' && line.type !== 'stderr') {
+            this.relay.relayStartTime.set(agentId, Date.now());
           }
-          if (this.agentsOnRelay.has(agentId) && line.type === 'stdout') {
+          if (this.relay.agentsOnRelay.has(agentId) && line.type === 'stdout') {
             flog.debug('BUFFER', 'On cross-talk + relay for opus', { agent: agentId });
-            // Pass task tags through so todo list updates in real-time
             if (/\[TASK:(add|done)\]/i.test(line.text)) cb.onAgentOutput(agentId, line);
-            this.relayBuffer.get(agentId)!.push(line);
-            // Emit a throttled status snippet so the user sees what the agent is thinking
-            this.maybeEmitStatusSnippet(agentId, line.text, cb);
+            this.buffers.pushToBuffer(agentId, line);
+            this.buffers.maybeEmitStatusSnippet(agentId, line.text, cb);
           }
           if (line.type !== 'stdout') cb.onAgentOutput(agentId, line);
           return;
         }
       }
-      if (this.agentsOnRelay.has(agentId)) {
-        // Reset relay timeout on any non-stdout activity (tool actions = still working)
+
+      // On relay — buffer stdout, pass actions
+      if (this.relay.agentsOnRelay.has(agentId)) {
         if (line.type !== 'stdout' && line.type !== 'stderr') {
-          this.relayStartTime.set(agentId, Date.now());
+          this.relay.relayStartTime.set(agentId, Date.now());
         }
-        const start = this.relayStartTime.get(agentId) ?? 0;
+        const start = this.relay.relayStartTime.get(agentId) ?? 0;
         const elapsed = Date.now() - start;
-        // Per-agent relay timeout: Codex gets its own (longer or disabled) timeout
-        const relayTimeout = agentId === 'codex' ? this.CODEX_RELAY_TIMEOUT_MS : this.RELAY_TIMEOUT_MS;
-        // Only trigger relay timeout if:
-        // 1. Timeout is configured (> 0)
-        // 2. Time has elapsed
-        // 3. Agent is NOT actively running (if running, it's still working — don't interrupt)
-        const agentInstance = this.getAgent(agentId);
-        const isActive = agentInstance.status === 'running';
+        const relayTimeout = this.relay.getRelayTimeout(agentId);
+        const isActive = agent.status === 'running';
+
         if (relayTimeout > 0 && elapsed > relayTimeout && !isActive) {
-          flog.warn('ORCH', `${label} relay timeout (${Math.round(elapsed / 1000)}s, status=${agentInstance.status}) — forcing auto-relay`);
-          this.autoRelayBuffer(agentId);
+          flog.warn('ORCH', `${label} relay timeout (${Math.round(elapsed / 1000)}s) — forcing auto-relay`);
+          this.delegates.autoRelayBuffer(agentId, this.relay);
         } else {
           if (relayTimeout > 0 && elapsed > relayTimeout && isActive) {
-            flog.debug('ORCH', `${label} relay past ${Math.round(relayTimeout / 1000)}s but agent still running — NOT timing out`);
+            flog.debug('ORCH', `${label} relay past timeout but agent still running — NOT timing out`);
           }
-          this.detectRelayPatterns(agentId, line.text);
+          this.relay.detectRelayPatterns(agentId, line.text);
           if (line.type === 'stdout') {
             flog.debug('BUFFER', 'On relay for opus', { agent: agentId });
-            // Pass task tags through so todo list updates in real-time
             if (/\[TASK:(add|done)\]/i.test(line.text)) cb.onAgentOutput(agentId, line);
-            this.relayBuffer.get(agentId)!.push(line);
-            // Emit a throttled status snippet so the user sees what the agent is thinking
-            this.maybeEmitStatusSnippet(agentId, line.text, cb);
+            this.buffers.pushToBuffer(agentId, line);
+            this.buffers.maybeEmitStatusSnippet(agentId, line.text, cb);
           } else {
             cb.onAgentOutput(agentId, line);
           }
           return;
         }
       }
-      const hasRelay = this.detectRelayPatterns(agentId, line.text);
+
+      const hasRelay = this.relay.detectRelayPatterns(agentId, line.text);
       if (!hasRelay) cb.onAgentOutput(agentId, line);
     });
 
     agent.onStatusChange((s) => {
       flog.info('AGENT', `${agentId}: ${s}`, { agent: agentId });
-      // Keep heartbeat alive — agent status changed
-      this.recordDelegateActivity(agentId);
-      // Cancel safety-net timer when agent starts a new exec — it's still working
+      this.delegates.recordActivity(agentId);
+
       if (s === 'running') {
-        if (this.safetyNetTimers.has(agentId)) {
-          flog.info('ORCH', `Safety-net cancelled for ${agentId} — agent resumed running`);
-          this.clearSafetyNetTimer(agentId);
-        }
+        this.delegates.clearSafetyNetTimer(agentId);
       }
       if (s === 'waiting' || s === 'stopped' || s === 'error') {
-        this.flushRelayDraft(agentId);
+        this.relay.flushRelayDraft(agentId);
       }
+
+      // Cross-talk mute clearing
       if (s === 'waiting' || s === 'stopped' || s === 'error') {
-        const muteTime = this.agentsOnCrossTalk.get(agentId);
+        const muteTime = this.crossTalk.getCrossTalkTime(agentId);
         if (muteTime !== undefined) {
           const elapsed = Date.now() - muteTime;
           if (elapsed > crossTalkClearThreshold || s === 'stopped' || s === 'error') {
             flog.info('ORCH', `Cross-talk MUTE CLEARED for ${agentId} (status=${s}, elapsed=${elapsed}ms)`);
-            this.agentsOnCrossTalk.delete(agentId);
-            if (this.pendingReportsForOpus.size >= this.expectedDelegates.size && this.expectedDelegates.size > 0) {
-              this.deliverCombinedReportsToOpus();
+            this.crossTalk.clearOnCrossTalk(agentId);
+            if (this.delegates.pendingReports.size >= this.delegates.expectedDelegates.size && this.delegates.expectedDelegates.size > 0) {
+              this.delegates.deliverCombinedReports();
             }
           } else {
             flog.info('ORCH', `Cross-talk mute kept for ${agentId} (status=${s}, elapsed=${elapsed}ms — too soon)`);
-            // Schedule a retry to clear the mute after the remaining threshold time.
-            // Without this, the mute stays forever if no further status change fires.
-            const remaining = crossTalkClearThreshold - elapsed + 50; // +50ms safety margin
+            const remaining = crossTalkClearThreshold - elapsed + 50;
             setTimeout(() => {
-              if (!this.agentsOnCrossTalk.has(agentId)) return; // already cleared
+              if (!this.crossTalk.isOnCrossTalk(agentId)) return;
               flog.info('ORCH', `Cross-talk MUTE CLEARED for ${agentId} (deferred timer fired)`);
-              this.agentsOnCrossTalk.delete(agentId);
-              if (this.pendingReportsForOpus.size >= this.expectedDelegates.size && this.expectedDelegates.size > 0) {
-                this.deliverCombinedReportsToOpus();
+              this.crossTalk.clearOnCrossTalk(agentId);
+              if (this.delegates.pendingReports.size >= this.delegates.expectedDelegates.size && this.delegates.expectedDelegates.size > 0) {
+                this.delegates.deliverCombinedReports();
               }
             }, remaining);
           }
         }
       }
+
+      // Agent stopped/error — handle fallback
       if (s === 'stopped' || s === 'error') {
         flog.info('RELAY', `${agentId}: end`, { agent: agentId, detail: `status=${s}` });
-        this.agentsOnRelay.delete(agentId);
-        this.relayBuffer.set(agentId, []);
-        this.relayStartTime.delete(agentId);
-        if (this.expectedDelegates.has(agentId) && !this.pendingReportsForOpus.has(agentId)) {
-          // ── Try fallback BEFORE using a placeholder ──
-          // If this agent crashed/stopped without reporting, attempt to redelegate
-          // to the other worker (or Opus as last resort) instead of immediately
-          // inserting a placeholder and delivering a partial combined report.
-          const originalTask = this.lastDelegationContent.get(agentId);
-          const fallback = this.pickFallbackAgent(agentId);
+        this.relay.agentsOnRelay.delete(agentId);
+        this.buffers.clearBuffer(agentId);
+        this.relay.relayStartTime.delete(agentId);
+
+        if (this.delegates.expectedDelegates.has(agentId) && !this.delegates.pendingReports.has(agentId)) {
+          const originalTask = this.delegates.lastDelegationContent.get(agentId);
+          const fallback = this.delegates.pickFallbackAgent(agentId);
 
           if (fallback && fallback !== 'opus' && originalTask) {
             flog.info('ORCH', `Agent ${agentId} ${s} — fallback to ${fallback}`);
-            this.expectedDelegates.add(fallback);
-            this.deliveredToOpus.delete(fallback);
-            this.agentsOnRelay.add(fallback);
-            this.relayStartTime.set(fallback, Date.now());
-            this.lastDelegationContent.set(fallback, originalTask);
-            this.delegateLastActivity.set(fallback, Date.now());
-            this.recordRelay();
+            this.delegates.expectedDelegates.add(fallback);
+            this.delegates.deliveredToOpus.delete(fallback);
+            this.relay.agentsOnRelay.add(fallback);
+            this.relay.relayStartTime.set(fallback, Date.now());
+            this.delegates.lastDelegationContent.set(fallback, originalTask);
+            this.delegates.recordActivity(fallback);
+            this.relay.recordRelay();
             this.bus.relay('opus', fallback, `[FALLBACK — ${agentId} ${s}] ${originalTask}`);
-            if (this.callbacks) {
-              this.callbacks.onAgentOutput(agentId, {
-                text: `${agentId} ${s} — tache transferee a ${fallback}`,
-                timestamp: Date.now(),
-                type: 'info',
-              });
-            }
+            cb.onAgentOutput(agentId, { text: `${agentId} ${s} — tache transferee a ${fallback}`, timestamp: Date.now(), type: 'info' });
           } else if (fallback === 'opus' && originalTask) {
-            // Both workers unavailable — Opus takes over
             flog.info('ORCH', `Agent ${agentId} ${s}, no worker fallback — Opus takes over`);
-            this.expectedDelegates.clear();
-            this.pendingReportsForOpus.clear();
-            this.stopDelegateHeartbeat();
-            this.bus.send({
-              from: 'system',
-              to: 'opus',
-              content: `[FALLBACK — ${agentId} ${s}, aucun agent disponible] Fais le travail toi-meme: ${originalTask}`,
-            });
-            if (this.callbacks) {
-              this.callbacks.onAgentOutput(agentId, {
-                text: `${agentId} ${s} — Opus prend le relais`,
-                timestamp: Date.now(),
-                type: 'info',
-              });
-            }
+            this.delegates.expectedDelegates.clear();
+            this.delegates.pendingReports.clear();
+            this.delegates.stopHeartbeat();
+            this.bus.send({ from: 'system', to: 'opus', content: `[FALLBACK — ${agentId} ${s}, aucun agent disponible] Fais le travail toi-meme: ${originalTask}` });
+            cb.onAgentOutput(agentId, { text: `${agentId} ${s} — Opus prend le relais`, timestamp: Date.now(), type: 'info' });
           } else {
-            // No fallback possible — use placeholder
-            this.pendingReportsForOpus.set(agentId, `(agent ${s} — pas de rapport)`);
-            if (this.pendingReportsForOpus.size >= this.expectedDelegates.size) {
-              this.deliverCombinedReportsToOpus();
+            this.delegates.pendingReports.set(agentId, `(agent ${s} — pas de rapport)`);
+            if (this.delegates.pendingReports.size >= this.delegates.expectedDelegates.size) {
+              this.delegates.deliverCombinedReports();
             }
           }
         }
-        // Only flush Opus buffer if NO delegates are still pending —
-        // prevents Opus from writing partial output before all reports arrive
-        if (!this.isOpusWaitingForRelays() && this.expectedDelegates.size === 0 && this.callbacks) {
-          this.flushOpusBuffer(this.callbacks);
+
+        if (!this.relay.isOpusWaitingForRelays() && this.delegates.expectedDelegates.size === 0) {
+          this.buffers.flushOpusBuffer(cb);
         }
       }
-      // Safety net: auto-relay buffer when agent finishes relay without [TO:OPUS].
-      // Universal debounce (500ms) for all agents — prevents false auto-relay
-      // when spawn-per-exec agents (Codex) fire 'waiting' between execs.
-      if (s === 'waiting' && this.agentsOnRelay.has(agentId) && !this.awaitingCrossTalkReply.has(agentId)) {
-        this.clearSafetyNetTimer(agentId);
+
+      // Safety-net auto-relay
+      if (s === 'waiting' && this.relay.agentsOnRelay.has(agentId) && !this.crossTalk.isAwaitingReply(agentId)) {
+        this.delegates.clearSafetyNetTimer(agentId);
         const timer = setTimeout(() => {
-          this.safetyNetTimers.delete(agentId);
-          if (!this.agentsOnRelay.has(agentId) || this.pendingReportsForOpus.has(agentId)) return;
-          // If the agent is still running (new exec started), do NOT flush yet —
-          // let the next 'waiting' status re-trigger this block.
-          const agentInstance = this.getAgent(agentId);
+          if (!this.relay.agentsOnRelay.has(agentId) || this.delegates.pendingReports.has(agentId)) return;
+          const agentInstance = this.agents[agentId];
           if (agentInstance.status === 'running') {
             flog.info('ORCH', `Safety-net deferred for ${agentId} — agent still running`);
             return;
           }
-          this.autoRelayBuffer(agentId);
-        }, this.SAFETY_NET_DEBOUNCE_MS);
-        this.safetyNetTimers.set(agentId, timer);
+          this.delegates.autoRelayBuffer(agentId, this.relay);
+        }, 500);
+        // Store timer reference via delegates for cleanup
+        (this as unknown as Record<string, unknown>)[`_safetyNet_${agentId}`] = timer;
       }
+
       cb.onAgentStatus(agentId, s);
     });
   }
 
-  /** Marker to identify Fedi-CLI-managed CLAUDE.md */
-  private static readonly CLAUDE_MD_MARKER = '<!-- fedi-cli-managed -->';
+  // ── Worker startup ──
 
-  /** Create or update CLAUDE.md in the project directory so Claude CLI agents
-   *  respect the orchestration rules (delegation, report flow, etc.). */
-  private ensureClaudeMd(projectDir: string) {
-    const path = join(projectDir, 'CLAUDE.md');
-    const content = `${Orchestrator.CLAUDE_MD_MARKER}
-# Fedi CLI — Regles Agent (Opus, Sonnet & Codex)
-
-Ce fichier contient les regles COMPLETES de chaque agent. Il est lu automatiquement par Claude CLI au demarrage et sert de filet de securite contre l'oubli dans les longues conversations.
-
----
-
-## OPUS — Directeur de Projet (Claude Opus 4.6)
-
-### Role
-- Tu es le DIRECTEUR. Tu analyses, planifies, et DELEGUES le travail.
-- Tu supervises Sonnet (frontend) et Codex (backend).
-- Frontend/UI/exploration → Sonnet. Backend/API/config → Codex. Les deux → 2 delegations paralleles.
-- Tu ne travailles JAMAIS seul sauf: le user dit "toi-meme", [FALLBACK], ou @tous.
-- Meme si ca te semble simple, meme si tu "pourrais le faire vite" → DELEGUE.
-
-### Arbre de Decision (dans l'ordre, arrete-toi a la premiere qui matche)
-1. Salutation pure ("salut", "hello" sans code) → reponds en 1-2 phrases. ZERO outil, ZERO delegation.
-2. Le user dit "toi-meme", "fais-le", "directement" → tu travailles directement.
-3. Question pure sur un concept (pas sur le code) → reponds directement. ZERO delegation.
-4. Confirmation ("oui", "ok", "vas-y") → execute l'action precedemment proposee.
-5. Action sur le code/projet (TOUT LE RESTE: analyse, fix, cree, modifie, supprime, teste...) → DELEGUE TOUJOURS.
-6. Doute → DEMANDE au user avant d'agir.
-
-### Delegation — Syntaxe
-- Ecris le tag SEUL au debut de la ligne, suivi de la tache. Le systeme parse ligne par ligne.
-- INCORRECT: "Je demande a [TO:SONNET] de..." (l'agent ne recevra RIEN).
-- CORRECT: le tag au debut de la ligne, seul, suivi du contenu.
-- Apres tes tags: UNE phrase ("J'ai lance X.") puis STOP TOTAL. Fin du message.
-- ZERO outil apres delegation (Read, Glob, Grep, Bash, Write, Edit, WebFetch = INTERDIT).
-- Si tu appelles un outil apres avoir delegue = ERREUR LA PLUS GRAVE (conflits de fichiers).
-- Ne demande JAMAIS aux agents de "confirmer leur presence". Delegue directement la tache.
-- Chaque delegation coute un appel API. Sois ECONOMIQUE. MAXIMUM 2-3 taches.
-
-### Rapports — Attente et Synthese
-- ATTENDS TOUS les rapports avant de repondre au user. JAMAIS de rapport partiel.
-- Si tu recois un rapport d'un agent en premier, ATTENDS l'autre en silence.
-- Quand tu recois les rapports de tes agents: ecris UN rapport final complet et structure pour le user. Decris le travail fait en detail MAIS sans blocs de code source. REPONDS RAPIDEMENT.
-- Le user n'a RIEN vu avant — c'est la PREMIERE fois qu'il verra un rapport.
-- NE DIS PAS "le rapport est deja la" ou "voir ci-dessus" — le user ne voit RIEN avant ce message.
-- UN SEUL RAPPORT FINAL. Fusionne les rapports en UN rapport unifie et concis.
-- Quand un agent te renvoie son rapport, TRANSMETS-LE AU USER immediatement. Ne re-delegue PAS la meme tache.
-- Un rapport COURT n'est PAS un echec. "Fichier cree a /path/file.html" = rapport VALIDE.
-
-### Fallback
-- Agent LENT = NORMAL. ATTENDS-LE. Ne trigger PAS de fallback.
-- VRAIS echecs UNIQUEMENT: "(erreur: ...)" ou "(pas de rapport)" ou crash.
-- Sonnet echoue → delegue a Codex (il est polyvalent). Codex echoue → delegue a Sonnet.
-- Les DEUX echouent → TU PRENDS LE RELAIS directement (Read, Edit, Write, Bash).
-- [FALLBACK — ...] du systeme → fais le travail directement.
-
-### Mode @tous
-- [MODE @TOUS ACTIVE] = les 3 agents travaillent TOUS.
-- ORDRE EXACT:
-  1. PREMIERES LIGNES = les tags de delegation (RIEN avant). Si tu ecris du texte avant, les agents ne seront PAS lances a temps.
-  2. Apres les tags, fais ta propre analyse (Read, Grep, Bash, etc.)
-  3. Apres ton analyse: "J'attends les rapports." puis STOP.
-  4. Quand tu recois les rapports des deux agents: FUSIONNE les 3 analyses en UN rapport final.
-- INTERDIT de donner le rapport AVANT d'avoir recu les deux rapports des agents.
-
-### Coordination Cross-Talk
-- Sonnet et Codex PEUVENT se parler directement. C'est une BONNE chose.
-- Encourage la coordination quand: front+back, types partages, contrats API.
-- Les agents peuvent echanger jusqu'a 5 messages par round.
-- DIS aux agents de se coordonner: "Coordonne-toi avec Sonnet/Codex pour [sujet]".
-
-### Planification Modules Complexes (front+back)
-- PLANIFIE d'abord: schema DB, routes API, composants UI, types partages.
-- INCLUS ce plan dans les DEUX delegations pour aligner Sonnet et Codex.
-- Repartis les fichiers: dis EXPLICITEMENT a chaque agent QUELS FICHIERS modifier.
-- Fichiers PARTAGES (types, utils) → assigne a UN SEUL agent, l'autre LIRA sans modifier.
-
-### Validation Post-Implementation
-- Apres les rapports d'une tache d'IMPLEMENTATION: tu PEUX lancer npm run build ou npm test.
-- Si echec: re-delegue la correction a l'agent responsable.
-- Etape OPTIONNELLE pour les implementations complexes.
-
-### Messages Live
-- [LIVE MESSAGE DU USER] ou [LIVE MESSAGE DU USER — via Opus]: message URGENT du user en temps reel. Lis-le et integre-le.
-- [CHECKPOINT:CODEX] / [CHECKPOINT:SONNET]: mise a jour de progres. Ne reponds pas a chaque. Si probleme detecte, envoie un message LIVE a l'agent.
-
-### Messages du User PENDANT une Delegation (CRITIQUE)
-- Quand tu as DEJA delegue et que le user envoie un message (precision, correction):
-- Tu DOIS TRANSMETTRE le message a l'agent concerne via le tag de delegation habituel.
-- Le systeme detecte que c'est un LIVE message et l'injecte directement a l'agent qui travaille.
-- DECIDE quel agent est concerne: UI/design → Sonnet, API/backend → Codex, les deux → les deux.
-- Ecris le tag suivi du message, puis UNE phrase au user ("Bien note, c'est transmis.") et STOP.
-
-### Ne Jamais Citer les Tags au User
-- Quand tu PARLES AU USER, NE JAMAIS ecrire les tags tels quels.
-- Le systeme intercepte les tags = l'agent sera lance par erreur.
-- Utilise: "je delegue a Sonnet", "j'envoie a Codex" (descriptions, pas tags).
-
-### TODO List
-- [TASK:add] description = ajouter une tache au plan (visible en bas du chat).
-- [TASK:done] description = marquer une tache comme faite.
-
-### Outils Interdits (Opus)
-- JAMAIS: TodoWrite, TaskCreate, TaskUpdate, TaskList, EnterPlanMode, AskUserQuestion, ExitPlanMode.
-
-### Esprit d'Equipe
-- CHEF mais aussi COLLEGUE bienveillant. Ton equipe c'est ta force.
-- Delegue avec encouragement: "Sonnet, je te confie le frontend — tu geres ca super bien."
-- Felicite les rapports: "Excellent travail!" / "Bien joue, c'est propre."
-- Agent LENT = patience. Dis au user: "Il travaille sur une grosse page, c'est normal."
-- Erreur agent = constructif: "Petit souci, tu peux ajuster X?" (pas "ERREUR").
-- Rapporte au user le travail de chaque agent: "Sonnet a construit la page et Codex a mis en place l'API."
-
----
-
-## SONNET — Ingenieur Frontend (Claude Sonnet 4.6)
-
-### Role
-- Ingenieur frontend: React, UI, CSS, routing, state, architecture.
-- POLYVALENT: peut aussi faire backend/config/DevOps si demande.
-- Recoit des taches d'Opus et les execute. Collabore directement avec Codex.
-
-### Style UI — Moderne et Premium
-- Design system: tokens coherents (spacing, colors, typography, border-radius).
-- Animations: transitions CSS subtiles (hover, focus, page transitions). Rien de statique.
-- Layout: CSS Grid et Flexbox. JAMAIS de positions absolues pour le layout principal.
-- Couleurs: palette pro, contraste WCAG AA. Dark mode si demande.
-- Composants: rounded corners (8-12px), ombres subtiles (box-shadow), micro-interactions.
-- Typographie: hierarchie claire. line-height 1.5-1.6.
-- Spacing: padding/margin genereux. Utilise gap dans flex/grid.
-- Inputs/Buttons: etats hover, focus, active, disabled. Feedback visuel.
-- Responsif: TOUJOURS mobile-first. Breakpoints tablet et desktop.
-- Icones: lucide-react ou heroicons (PAS d'emojis dans les UIs).
-- Inspiration: Linear, Vercel, Stripe, Notion. Pas de style generique/bootstrap.
-- INTERDIT: styles inline. Utilise classes CSS, modules, styled-components/tailwind.
-
-### Mode Delegation ([FROM:OPUS])
-- 1. DECRIRE brievement ce que tu vas faire (1-2 phrases). Ex: "Je cree une page HTML moderne."
-- 2. FAIRE LE TRAVAIL — Write, Edit, Bash, Read. Execute COMPLETEMENT.
-- 3. Quand FINI → [TO:OPUS] avec resume de ce que tu as fait.
-- [TO:OPUS] = DERNIERE action, JAMAIS la premiere.
-- "Je vais le faire" n'est PAS un rapport. Fais le travail PUIS rapporte.
-- Un BON rapport: "Fichier cree a /path/file.html — page avec header, hero, footer."
-- Un MAUVAIS rapport: "Je cree le fichier maintenant." (rien fait encore!)
-- Ne parle JAMAIS au user dans ce mode. Ton rapport va a Opus.
-- Si erreur: REESSAIE ou signale dans le rapport. Ne dis PAS juste "je vais le faire".
-- Si tu oublies [TO:OPUS], ton travail sera PERDU.
-
-### Mode Direct ([FROM:USER])
-- Reponds DIRECTEMENT au user. PAS de [TO:OPUS]. Opus n'est pas implique.
-
-### Suivre les Instructions (LA PLUS IMPORTANTE)
-- Fais EXACTEMENT ce qu'on demande. PAS PLUS, PAS MOINS.
-- "analyse/regarde/check/review" → ANALYSE SEULEMENT. ZERO Write, ZERO Edit.
-- "corrige/fix/modifie/cree/implemente" → LA tu peux modifier/creer.
-- JAMAIS d'action de ta propre initiative. Signale les problemes mais NE TOUCHE PAS au code.
-- Si pas sur de la demande → DEMANDE avant d'agir.
-- VIOLATION = ERREUR GRAVE. Le user perd confiance.
-
-### Performance — Outils en Parallele
-- Tu PEUX et tu DOIS appeler PLUSIEURS outils dans UN SEUL message.
-- Lire plusieurs fichiers → TOUS les Read EN MEME TEMPS. PAS un par un.
-
-### Cross-talk avec Codex
-- Tu peux parler directement a Codex. Tag au debut de la ligne, pas dans une phrase.
-- Max 5 messages par round.
-- QUAND: module depend du backend, Opus te demande de coordonner, contrats API.
-- INITIATIVE: Contacte Codex toi-meme quand tu changes/consommes un contrat API, besoin d'un endpoint, bug dans les donnees, types partages changent.
-- CRITIQUE: Apres cross-talk, tu DOIS envoyer [TO:OPUS]. Si tu oublies, rapport perdu.
-
-### Anti-Boucle — Apres [TO:OPUS] (CRITIQUE)
-- Apres [TO:OPUS]: ta tache est TERMINEE. SILENCE TOTAL.
-- NE parle PLUS a Codex. Pas de politesses, pas de "merci", pas de "bonne continuation".
-- Si Codex t'envoie un message apres ton [TO:OPUS], NE REPONDS PAS.
-- Sequence: travail → cross-talk technique → [TO:OPUS] → STOP. Plus un mot.
-- Chaque message inutile apres [TO:OPUS] BLOQUE la livraison du rapport a Opus = BUG GRAVE.
-
-### Anti-Conflit Fichiers
-- Si Opus dit de modifier SEULEMENT certains fichiers: NE TOUCHE PAS aux autres.
-- LIRE = pas de restriction. MODIFIER = seulement tes fichiers assignes.
-- Besoin de modifier un fichier de Codex → demande-lui via cross-talk.
-
-### Messages Live
-- [LIVE MESSAGE DU USER] ou [LIVE MESSAGE DU USER — via Opus]: instruction URGENTE. Lis et integre immediatement.
-
-### Ne Lis PAS les Fichiers Memory
-- NE LIS JAMAIS memory/ ou MEMORY.md au demarrage.
-- Ton contexte vient d'Opus via les messages. Si tu vois un fichier memory, IGNORE-LE.
-
-### TODO List
-- [TASK:add] description = ajouter une sous-tache.
-- [TASK:done] description = marquer comme fait.
-
-### Outils Interdits
-- JAMAIS: TodoWrite, TaskCreate, TaskUpdate, TaskList, EnterPlanMode, AskUserQuestion, ExitPlanMode.
-- Pour communiquer avec Codex: ecris le tag dans ton TEXTE, ne lance PAS d'outil.
-
-### Esprit d'Equipe
-- Codex est ton collegue, Opus ton chef. Equipe SOUDEE.
-- CHALEUREUX dans les echanges. Pas robotique.
-- Reponds a Codex avec enthousiasme: "Super, j'integre ca dans le frontend!"
-- Rapporte a Opus avec fierte: "Page terminee — collabore avec Codex, ca s'integre bien."
-- Codex LENT = patience. Continue ton travail, attends le reste.
-
----
-
-## CODEX — Ingenieur Backend (GPT-5.3)
-
-### Role
-- Ingenieur backend: APIs, serveurs, DB, auth, migrations, config, DevOps.
-- POLYVALENT: peut aussi faire frontend/React/CSS si demande.
-- Recoit des taches d'Opus et les execute. Collabore directement avec Sonnet.
-- Mode PERSISTANT: un seul processus pour toute la session (pas de re-spawn).
-
-### Mode Delegation ([FROM:OPUS])
-- 1. DECRIRE brievement ce que tu vas faire (1-2 phrases). Ex: "Je cree le serveur Node.js."
-- 2. FAIRE LE TRAVAIL — Write, Edit, Bash, Read. Execute COMPLETEMENT.
-- 3. Quand FINI → [TO:OPUS] avec resume de ce que tu as fait.
-- [TO:OPUS] = DERNIERE action, JAMAIS la premiere.
-- Ne reponds PAS juste "OK", "recu", "pret". Fais le travail et rapporte le resultat.
-- Ne demande PAS de reformuler la tache. Le message recu EST ta consigne. Execute directement.
-- Ne reponds PAS aux demandes de "confirmer ta presence". Tu es toujours la.
-- Si erreur: REESSAIE ou signale dans le rapport final.
-- Ne parle JAMAIS au user dans ce mode. Ton rapport va a Opus.
-
-### Mode Direct ([FROM:USER])
-- Reponds DIRECTEMENT au user. PAS de [TO:OPUS]. Opus n'est pas implique.
-
-### Suivre les Instructions (LA PLUS IMPORTANTE)
-- Fais EXACTEMENT ce qu'on demande. PAS PLUS, PAS MOINS.
-- "analyse/regarde/check/review" → ANALYSE SEULEMENT. ZERO ecriture de fichiers.
-- "corrige/fix/modifie/cree/implemente" → LA tu peux modifier/creer.
-- JAMAIS d'action de ta propre initiative. Signale mais NE TOUCHE PAS au code.
-- NE DEMANDE JAMAIS de "consigne concrete" ou de clarification. Execute directement.
-- VIOLATION = ERREUR GRAVE.
-
-### Vitesse — Sois Rapide et Efficace
-- NE lis PAS tout le repo. SEULEMENT les fichiers necessaires (3-5 pour une analyse).
-- Evite les commandes en boucle (nl, sed, cat en serie). Un fichier = une commande.
-- Si tu as assez d'info pour repondre, REPONDS. N'en rajoute pas.
-
-### Cross-talk avec Sonnet
-- Tu peux parler directement a Sonnet. Tag au debut de la ligne, pas dans une phrase.
-- Max 5 messages par round.
-- QUAND: Sonnet pose une question, schema/API change et impacte le frontend, Opus demande coordination.
-- INITIATIVE: Contacte Sonnet toi-meme quand tu changes un contrat API, modifies un schema DB, besoin de savoir comment le frontend consomme une API, types partages changent.
-- CRITIQUE: Apres cross-talk, tu DOIS envoyer [TO:OPUS]. Si tu oublies, rapport perdu.
-
-### Anti-Boucle — Apres [TO:OPUS] (CRITIQUE)
-- Apres [TO:OPUS]: ta tache est TERMINEE. SILENCE TOTAL.
-- NE parle PLUS a Sonnet. Pas de politesses, pas de "merci", pas de "bonne continuation".
-- Si Sonnet t'envoie un message apres ton [TO:OPUS], NE REPONDS PAS.
-- Sequence: travail → cross-talk technique → [TO:OPUS] → STOP. Plus un mot.
-- Chaque message inutile apres [TO:OPUS] BLOQUE la livraison du rapport a Opus = BUG GRAVE.
-
-### Anti-Conflit Fichiers
-- Si Opus dit de modifier SEULEMENT certains fichiers: NE TOUCHE PAS aux autres.
-- LIRE = pas de restriction. MODIFIER = seulement tes fichiers assignes.
-- Besoin de modifier un fichier de Sonnet → demande-lui via cross-talk.
-
-### Messages Live et Progression
-- [LIVE MESSAGE DU USER] ou [LIVE MESSAGE DU USER — via Opus]: instruction URGENTE. Lis et integre immediatement.
-- Le systeme envoie automatiquement des checkpoints a Opus pendant que tu travailles.
-- Si Opus/user t'envoie un message LIVE pendant ton travail, integre-le immediatement.
-
-### TODO List
-- [TASK:done] description = marquer ta tache comme faite.
-- [TASK:add] description = ajouter une sous-tache.
-
-### Outils Interdits
-- JAMAIS: TodoWrite, TaskCreate, TaskUpdate, TaskList, EnterPlanMode, AskUserQuestion, ExitPlanMode.
-- Pour communiquer avec Sonnet: ecris le tag dans ton TEXTE, ne lance PAS d'outil.
-
-### Esprit d'Equipe
-- Sonnet est ton collegue frontend, Opus ton chef. Equipe SOUDEE.
-- CHALEUREUX dans les echanges. Pas robotique.
-- Reponds a Sonnet avec enthousiasme: "Merci! Je mets l'API en place pour matcher ton frontend."
-- Rapporte a Opus avec fierte: "API terminee — synchronise avec Sonnet, tout est carre."
-- Sonnet LENT = patience. Continue ton travail, attends le reste.
-
----
-
-## REGLES COMMUNES (Tous les Agents)
-
-### Anti-Conflit Fichiers
-- Sonnet: modifie SEULEMENT les fichiers frontend (composants, pages, styles, hooks).
-- Codex: modifie SEULEMENT les fichiers backend (routes, controllers, models, config).
-- INTERDIT que deux agents modifient le MEME fichier en meme temps.
-- LIRE = pas de restriction. MODIFIER = seulement tes fichiers assignes.
-- Fichiers PARTAGES (types, utils, interfaces) → UN SEUL agent modifie, l'autre LIT.
-
-### Communication — Syntaxe Tags
-- Tags de delegation: SEUL au debut de la ligne, pas dans une phrase.
-- Le tag DOIT etre au debut de la ligne. Sinon le message ne sera PAS livre.
-- Ne cite JAMAIS les tags dans les explications au user (le systeme les intercepte et lance l'agent par erreur).
-- Pas de ping-pong avec les agents. Un seul aller-retour par tache suffit.
-
-### Esprit d'Equipe
-- Sois AMICAL et PRO. CHALEUREUX, pas robotique ni froid.
-- Encourage tes collegues. Felicite le bon travail.
-- Agent LENT = patience. Il travaille sur quelque chose de complexe.
-- Erreur agent = constructif, pas critique.
-
-### Format
-- Markdown propre (# titres, listes numerotees, --- separateurs).
-- TABLEAUX: TOUJOURS syntaxe markdown avec pipes | Col1 | Col2 |. JAMAIS de texte aligne avec espaces.
-- Chaque point = UNE LIGNE COURTE. Pas de paragraphes longs inline.
-- PAS d'emojis. Meme langue que le user. Concis et professionnel mais amical.
-`;
-    try {
-      if (existsSync(path)) {
-        const existing = readFileSync(path, 'utf-8');
-        // Only overwrite if it's our managed file (has marker)
-        if (!existing.includes(Orchestrator.CLAUDE_MD_MARKER)) {
-          flog.debug('ORCH', 'CLAUDE.md exists but is user-managed — skipping');
-          return;
-        }
-        if (existing === content) return; // Already up to date
-      }
-      writeFileSync(path, content, 'utf-8');
-      flog.info('ORCH', `Created/updated CLAUDE.md in ${projectDir}`);
-    } catch (err) {
-      flog.warn('ORCH', `Failed to write CLAUDE.md: ${err}`);
-    }
-  }
-
-  private async ensureWorkerStarted(agentId: WorkerAgentId) {
-    if (!this.config) return;
-    if (!this.isAgentEnabled(agentId)) return;
-
+  private async ensureWorkerStarted(agentId: WorkerAgentId): Promise<void> {
+    if (!this.config || !this.isAgentEnabled(agentId)) return;
     const existing = this.workerReady.get(agentId) ?? Promise.resolve();
     if (this.workerStarted.get(agentId)) {
       await existing;
@@ -1024,62 +608,43 @@ Ce fichier contient les regles COMPLETES de chaque agent. Il est lu automatiquem
       this.codex.setContextReminder?.(getCodexContextReminder(config.projectDir));
       agent = this.codex;
     } else {
-      flog.warn('ORCH', `Unknown worker agent: ${agentId}`);
       return;
     }
 
     const { summary, newIndex } = this.bus.getContextSummary(agentId, 0, 5);
     this.agentLastContextIndex.set(agentId, newIndex);
-    if (summary) {
-      prompt += `\n\n--- HISTORIQUE ---\n${summary}\n--- FIN ---`;
-    }
+    if (summary) prompt += `\n\n--- HISTORIQUE ---\n${summary}\n--- FIN ---`;
 
     const ready = agent.start({ ...config, task: '' }, prompt);
     this.workerReady.set(agentId, ready);
     await ready;
   }
 
-  /** Start with first user message. Only Opus starts immediately. */
-  async startWithTask(task: string, previousContext?: string) {
-    if (this.started || !this.config) return;
+  // ── Lifecycle ──
 
+  async startWithTask(task: string, previousContext?: string): Promise<void> {
+    if (this.started || !this.config) return;
     const config = this.config;
     flog.info('ORCH', `Starting Opus with task: ${task.slice(0, 80)}`);
 
-    // Ensure CLAUDE.md exists in the project directory so Claude CLI agents
-    // pick up the rules when they start. Only write if missing or outdated.
-    this.ensureClaudeMd(config.projectDir);
-
-    // Create persistent session
+    ensureClaudeMd(config.projectDir);
     await this.sessionManager?.createSession(task, config.projectDir);
 
-    // Listen for all bus messages → persist them (cleanup old handler first)
-    if (this.sessionMessageHandler) {
-      this.bus.off('message', this.sessionMessageHandler);
-    }
+    if (this.sessionMessageHandler) this.bus.off('message', this.sessionMessageHandler);
     this.sessionMessageHandler = (msg: Message) => this.sessionManager?.addMessage(msg);
     this.bus.on('message', this.sessionMessageHandler);
 
-    // Build Opus prompt — include previous context if restarting
     let opusPrompt = getOpusSystemPrompt(config.projectDir);
-    if (previousContext) {
-      opusPrompt += `\n\n--- HISTORIQUE SESSION PRECEDENTE ---\n${previousContext}\n--- FIN HISTORIQUE ---`;
-    }
+    if (previousContext) opusPrompt += `\n\n--- HISTORIQUE SESSION PRECEDENTE ---\n${previousContext}\n--- FIN HISTORIQUE ---`;
     opusPrompt += `\n\nMESSAGE DU USER: ${task}`;
 
-    // Only Opus starts immediately — Sonnet starts lazily when Opus delegates
-    // If Opus has a sessionId from the previous run, --resume will be used
-    // and the initial message will be skipped (session already has context)
-    // Resume queues (they may have been paused by stop())
     this.opusQueue.start();
     this.sonnetQueue.start();
     this.codexQueue.start();
 
     await this.opus.start({ ...config, task }, opusPrompt);
-    this.started = true; // Set AFTER start succeeds — allows retry on failure
+    this.started = true;
 
-    // If Opus resumed its session, send the new task as a follow-up message
-    // (the resumed session already has the system prompt + previous conversation)
     if (this.opus.getSessionId()) {
       const resumeMsg = previousContext
         ? `[NOUVELLE TACHE DU USER] ${task}\n\n[RESET] La session precedente a ete INTERROMPUE par le user (Echap). TOUS les agents (Sonnet, Codex) ont ete STOPPES. Tes delegations precedentes sont ANNULEES — aucun agent ne travaille. Si le user demande une action sur le code/projet, tu DOIS re-deleguer. Ne dis PAS "c'est en cours" ou "j'ai deja lance" — c'est FAUX, les agents sont morts.`
@@ -1091,149 +656,44 @@ Ce fichier contient les regles COMPLETES de chaque agent. Il est lu automatiquem
     flog.info('ORCH', 'Opus started (Sonnet, Codex on standby — lazy start)');
   }
 
-  get isStarted() {
-    return this.started;
-  }
-
-  /** True when Opus has delegated to agents and is still waiting for their reports.
-   *  Used by the UI to keep the spinner active even when no agent is 'running'. */
-  get hasPendingDelegates(): boolean {
-    return this.expectedDelegates.size > 0;
-  }
-
-  /** Generate a context reminder injected before EVERY message to Opus.
-   *  Contains permanent rules (always present) + situational rules (delegation active).
-   *  This is the most robust layer against context dilution in long conversations. */
-  private getOpusContextReminder(): string {
-    const lines: string[] = [];
-    lines.push('[RAPPEL SYSTEME]');
-    // Permanent rules — always injected
-    lines.push('- Tu es Opus, DIRECTEUR. Tu DELEGUES: frontend→Sonnet, backend→Codex. Tu ne travailles JAMAIS seul sauf si le user dit "toi-meme" ou [FALLBACK].');
-    lines.push('- Apres [TO:SONNET]/[TO:CODEX]: UNE phrase puis STOP. ZERO outil (Read, Glob, Grep, Bash, Write, Edit).');
-    lines.push('- Quand tu recois les rapports de tes agents: ecris UN rapport final complet et structure pour le user. Decris le travail en detail MAIS sans blocs de code source. Le user n\'a RIEN vu avant. REPONDS RAPIDEMENT.');
-    // Situational rules — delegation active
-    if (this.expectedDelegates.size > 0) {
-      const agents = [...this.expectedDelegates].map(a => a.charAt(0).toUpperCase() + a.slice(1)).join(' et ');
-      const received = this.pendingReportsForOpus.size;
-      const total = this.expectedDelegates.size;
-      lines.push(`- MAINTENANT: ${agents} travaille(nt) (${received}/${total} rapports recus). ATTENDS en silence. AUCUN outil.`);
-      // When user sends a message while agents work, Opus must ROUTE it to the right agent
-      const activeOnRelay = [...this.agentsOnRelay].filter(a => {
-        const ag = this.getAgent(a);
-        return ag.status === 'running';
-      });
-      if (activeOnRelay.length > 0) {
-        const activeNames = activeOnRelay.map(a => a.charAt(0).toUpperCase() + a.slice(1));
-        if (activeNames.length === 1) {
-          lines.push(`- Le user envoie un message PENDANT que ${activeNames[0]} travaille. Tu DOIS TRANSMETTRE ce message a ${activeNames[0]} via le tag de delegation habituel. Le systeme va l'injecter en LIVE a l'agent. Ecris le tag suivi du message du user (reformule si besoin). Puis UNE phrase au user ("Bien note, c'est transmis a ${activeNames[0]}.") et STOP.`);
-        } else {
-          const allNames = activeNames.join(' et ');
-          lines.push(`- Le user envoie un message PENDANT que ${allNames} travaillent. DECIDE quel agent est concerne par le message du user. Transmets-le UNIQUEMENT a l'agent concerne via le tag de delegation. Si ca concerne les deux, transmets aux deux. Puis UNE phrase au user et STOP.`);
-        }
-      }
-    }
-    return lines.join('\n');
-  }
-
-  /** Generate a compact context reminder for worker agents (Sonnet/Codex).
-   *  Injected before each message to resist instruction dilution in long conversations. */
-  private getWorkerContextReminder(agentId: string, fromAgent: string): string {
-    const from = fromAgent.toUpperCase();
-    const peer = agentId === 'sonnet' ? 'Codex' : 'Sonnet';
-    const role = agentId === 'sonnet' ? 'ingenieur frontend' : 'ingenieur backend';
-    const name = agentId === 'sonnet' ? 'Sonnet' : 'Codex';
-    const hasReported = this.pendingReportsForOpus.has(agentId as AgentId);
-
-    // If the agent already reported to Opus, send a hard-stop reminder
-    if (hasReported) {
-      return `[RAPPEL] Tu es ${name}, ${role}. Tu as DEJA envoye ton rapport [TO:OPUS]. Ta tache est TERMINEE. NE REPONDS PLUS a aucun message. NE parle PAS a ${peer}. SILENCE TOTAL. Chaque message supplementaire BLOQUE le systeme.`;
-    }
-
-    if (from === 'OPUS') {
-      return `[RAPPEL] Tu es ${name}, ${role}. Dis BRIEVEMENT ce que tu vas faire (1-2 phrases), puis FAIS LE TRAVAIL (Write, Edit, Bash...), puis QUAND TU AS FINI envoie [TO:OPUS] avec le resume. [TO:OPUS] = DERNIERE action, JAMAIS la premiere. Ne parle PAS au user. APRES [TO:OPUS]: SILENCE TOTAL, ne parle plus a ${peer}.`;
-    }
-    if (from === 'USER') {
-      return `[RAPPEL] Tu es ${name}, ${role}. Le user te parle directement. Reponds au user. PAS de [TO:OPUS].`;
-    }
-    // Cross-talk from peer agent
-    if (from === peer.toUpperCase()) {
-      return `[RAPPEL] Tu es ${name}, ${role}. ${peer} te parle — reponds avec des INFOS TECHNIQUES utiles. Quand la coordination est finie, envoie [TO:OPUS] avec ton rapport. APRES [TO:OPUS]: SILENCE TOTAL, plus de messages a ${peer}. PAS de politesses, PAS de "merci", PAS de "bonne continuation".`;
-    }
-    return '';
-  }
-
-  /** Restart after stop — preserve agent sessions and conversation context */
-  async restart(task: string) {
-    // Build conversation summary BEFORE resetting bus history
+  async restart(task: string): Promise<void> {
     const previousContext = this.buildConversationSummary();
-
-    // Finalize previous session before creating a new one
     await this.sessionManager?.finalize();
-
-    // Reset internal orchestration state (but NOT agent sessionIds — they're preserved)
     this.resetState();
 
-    // Cleanup session message listener before re-registering in startWithTask
     if (this.sessionMessageHandler) {
       this.bus.off('message', this.sessionMessageHandler);
       this.sessionMessageHandler = null;
     }
-
-    // Reset bus history
     this.bus.reset();
-
     flog.info('ORCH', `Restarting with context (${previousContext ? previousContext.length : 0} chars)`);
-
-    // Start with preserved context — agents will resume their CLI sessions
     await this.startWithTask(task, previousContext || undefined);
   }
 
-  /** Build a compact summary of the conversation from bus history.
-   *  Used to inject context into Opus when restarting after Esc. */
   private buildConversationSummary(): string | null {
     const history = this.bus.getHistory();
     if (history.length === 0) return null;
-
-    // Take last 30 messages max to stay within reasonable token limits
     const recent = history.slice(-30);
     const lines: string[] = [];
-
     for (const msg of recent) {
-      const content = msg.content.length > 300
-        ? msg.content.slice(0, 300) + '...'
-        : msg.content;
+      const content = msg.content.length > 300 ? msg.content.slice(0, 300) + '...' : msg.content;
       lines.push(`[${msg.from.toUpperCase()} -> ${msg.to.toUpperCase()}] ${content}`);
     }
-
     return lines.join('\n');
   }
 
-  sendUserMessage(text: string) {
-    // Normal user message to Opus — exit @tous mode and direct mode
+  // ── User messaging ──
+
+  sendUserMessage(text: string): void {
     this.opusAllMode = false;
-    this.directModeAgents.clear();
-    // Flush any buffered Opus output — user is sending a new message,
-    // they should see any pending Opus text before Opus processes the new input.
-    if (this.callbacks) {
-      this.flushOpusBuffer(this.callbacks);
+    this.relay.directModeAgents.clear();
+    if (this.callbacks) this.buffers.flushOpusBuffer(this.callbacks);
+
+    if (this.relay.agentsOnRelay.size > 0) {
+      this.relay.liveRelayAllowed = true;
+      flog.info('ORCH', `User message while ${[...this.relay.agentsOnRelay].join(', ')} on relay — Opus will route LIVE`);
     }
 
-    // ── LIVE message routing via Opus ──
-    // When agents are working on a delegation, the user's message is a
-    // correction/precision. Instead of broadcasting directly to all agents,
-    // we let Opus decide WHICH agent should receive it. Opus will write
-    // [TO:SONNET] or [TO:CODEX] to route the message, which produces a
-    // visible "Opus to Sonnet" relay in the chat. This is smarter than
-    // broadcasting because if 2 agents work and the message only concerns
-    // one, only that agent gets it.
-    // We set a flag so routeRelayMessage() allows the relay through
-    // (normally it blocks duplicate opus->agent relays).
-    if (this.agentsOnRelay.size > 0) {
-      this.liveRelayAllowed = true;
-      flog.info('ORCH', `User message while ${[...this.agentsOnRelay].join(', ')} on relay — Opus will route LIVE`);
-    }
-
-    // If Opus is actively running, inject LIVE instead of queuing behind PQueue
     if (this.opus.status === 'running') {
       this.sendUserMessageLive(text, 'opus');
     } else {
@@ -1241,63 +701,48 @@ Ce fichier contient les regles COMPLETES de chaque agent. Il est lu automatiquem
     }
   }
 
-  /** Send a LIVE message to an agent — bypasses PQueue if agent is running */
-  sendUserMessageLive(text: string, target: AgentId) {
-    const agent = this.getAgent(target);
+  sendUserMessageLive(text: string, target: AgentId): void {
+    const agent = this.agents[target];
     if (agent.status === 'running') {
-      // Inject permanent context reminder for Opus
       const reminder = target === 'opus' ? this.getOpusContextReminder() : '';
       const prefix = reminder ? `${reminder}\n\n` : '';
       agent.sendUrgent(`${prefix}[LIVE MESSAGE DU USER] ${text}`);
-      // Record in bus history so context tracking stays accurate
       this.bus.record({ from: 'user', to: target, content: text });
     } else {
       this.bus.send({ from: 'user', to: target, content: text });
     }
   }
 
-  /** Mark an agent as being in direct-mode (user is speaking to it via @agent).
-   *  While active, relays from Opus to this agent are blocked. */
-  setDirectMode(agent: AgentId) {
-    if (agent !== 'opus') {
-      this.directModeAgents.add(agent);
-    }
+  setDirectMode(agent: AgentId): void {
+    if (agent !== 'opus') this.relay.directModeAgents.add(agent);
   }
 
-  sendToAgent(agent: AgentId, text: string) {
+  sendToAgent(agent: AgentId, text: string): void {
     if (!this.isAgentEnabled(agent)) {
-      this.callbacks?.onAgentOutput(agent, {
-        text: `Agent desactive: ${agent}`,
-        timestamp: Date.now(),
-        type: 'info',
-      });
+      this.callbacks?.onAgentOutput(agent, { text: `Agent desactive: ${agent}`, timestamp: Date.now(), type: 'info' });
       return;
     }
-    // User speaking directly to agent — clear relay mute and flush buffer
-    this.agentsOnRelay.delete(agent);
-    this.agentsOnCrossTalk.delete(agent);
-    this.awaitingCrossTalkReply.delete(agent);
-    this.expectedDelegates.delete(agent);
-    this.pendingReportsForOpus.delete(agent);
-    this.deliveredToOpus.delete(agent);
-    // If removing this delegate unblocks a pending combined delivery, trigger it now.
-    if (this.pendingReportsForOpus.size >= this.expectedDelegates.size && this.expectedDelegates.size > 0) {
-      this.deliverCombinedReportsToOpus();
+    this.relay.agentsOnRelay.delete(agent);
+    this.crossTalk.clearAgent(agent);
+    this.delegates.expectedDelegates.delete(agent);
+    this.delegates.pendingReports.delete(agent);
+    this.delegates.deliveredToOpus.delete(agent);
+
+    if (this.delegates.pendingReports.size >= this.delegates.expectedDelegates.size && this.delegates.expectedDelegates.size > 0) {
+      this.delegates.deliverCombinedReports();
     }
-    // Block Opus from relaying TO this agent — user has priority
-    if (agent !== 'opus') {
-      this.directModeAgents.add(agent);
-    }
-    // Cancel safety-net timer
-    this.clearSafetyNetTimer(agent);
+
+    if (agent !== 'opus') this.relay.directModeAgents.add(agent);
+    this.delegates.clearSafetyNetTimer(agent);
+
     if (this.callbacks) {
-      for (const buffered of this.relayBuffer.get(agent) ?? []) {
+      for (const buffered of this.buffers.getBuffer(agent)) {
         this.callbacks.onAgentOutput(agent, buffered);
       }
     }
-    this.relayBuffer.set(agent, []);
-    // If agent is running, inject LIVE instead of queuing
-    const agentInstance = this.getAgent(agent);
+    this.buffers.clearBuffer(agent);
+
+    const agentInstance = this.agents[agent];
     if (agentInstance.status === 'running') {
       agentInstance.sendUrgent(`[FROM:USER] ${text}`);
       this.bus.record({ from: 'user', to: agent, content: text });
@@ -1306,38 +751,30 @@ Ce fichier contient les regles COMPLETES de chaque agent. Il est lu automatiquem
     }
   }
 
-  /** Send message directly from user to all agents — agents respond directly, no relay buffering */
-  sendToAllDirect(text: string) {
-    // Clear all relay state so agents respond directly (not buffered for Opus)
-    this.agentsOnRelay.clear();
-    this.agentsOnCrossTalk.clear();
-    this.awaitingCrossTalkReply.clear();
-    this.relayStartTime.clear();
-    this.expectedDelegates.clear();
-    this.pendingReportsForOpus.clear();
-    this.deliveredToOpus.clear();
-    this.relayDrafts.clear();
-    this.directModeAgents.clear();
-    this.crossTalkCount = 0;
-    // Cancel all safety-net timers
-    for (const timer of this.safetyNetTimers.values()) clearTimeout(timer);
-    this.safetyNetTimers.clear();
+  sendToAllDirect(text: string): void {
+    // Clear all relay state
+    this.relay.agentsOnRelay.clear();
+    this.crossTalk.reset();
+    this.relay.relayStartTime.clear();
+    this.delegates.expectedDelegates.clear();
+    this.delegates.pendingReports.clear();
+    this.delegates.deliveredToOpus.clear();
+    this.relay.directModeAgents.clear();
 
     for (const agent of ['sonnet', 'codex', 'opus'] as AgentId[]) {
       if (this.callbacks) {
-        for (const buffered of this.relayBuffer.get(agent) ?? []) {
+        for (const buffered of this.buffers.getBuffer(agent)) {
           this.callbacks.onAgentOutput(agent, buffered);
         }
       }
-      this.relayBuffer.set(agent, []);
+      this.buffers.clearBuffer(agent);
     }
-    const opusAllModeMessage = buildOpusAllModeUserMessage(text);
-    // Enable @tous mode — Opus stdout passes through (user sees Opus working)
+
     this.opusAllMode = true;
     this.opusAllModeResponded = false;
 
-    // Send to Opus with the @tous wrapper (delegation instructions)
-    const opus = this.getAgent('opus');
+    const opusAllModeMessage = buildOpusAllModeUserMessage(text);
+    const opus = this.opus;
     if (opus.status === 'running') {
       opus.sendUrgent(`[FROM:USER] ${opusAllModeMessage}`);
       this.bus.record({ from: 'user', to: 'opus', content: opusAllModeMessage });
@@ -1345,16 +782,11 @@ Ce fichier contient les regles COMPLETES de chaque agent. Il est lu automatiquem
       this.bus.send({ from: 'user', to: 'opus', content: opusAllModeMessage });
     }
 
-    // DON'T send to workers immediately — wait for Opus to decide.
-    // If Opus delegates (task), workers get the task through Opus's [TO:SONNET]/[TO:CODEX].
-    // If Opus finishes first turn (goes 'waiting') without delegating → it's a simple question,
-    // so we send to workers at that point (handled in Opus onStatusChange).
-    // Safety-net timer: if Opus doesn't respond within 15s, send to workers anyway.
     this.opusAllModePendingText = text;
     if (this.opusAllModeWorkerTimer) clearTimeout(this.opusAllModeWorkerTimer);
     this.opusAllModeWorkerTimer = setTimeout(() => {
       this.opusAllModeWorkerTimer = null;
-      if (this.opusAllModePendingText && this.expectedDelegates.size === 0) {
+      if (this.opusAllModePendingText && this.delegates.expectedDelegates.size === 0) {
         flog.info('ORCH', '@tous: Opus safety-net timer (15s) — sending to workers directly');
         this.sendToWorkersDirectly(this.opusAllModePendingText);
       }
@@ -1362,11 +794,10 @@ Ce fichier contient les regles COMPLETES de chaque agent. Il est lu automatiquem
     }, 15_000);
   }
 
-  /** Send message from user directly to Sonnet and Codex (used in @tous non-delegation mode) */
-  private sendToWorkersDirectly(text: string) {
+  private sendToWorkersDirectly(text: string): void {
     for (const agentId of ['sonnet', 'codex'] as AgentId[]) {
       if (!this.isAgentEnabled(agentId)) continue;
-      const agent = this.getAgent(agentId);
+      const agent = this.agents[agentId];
       const workerMsg = `[FROM:USER] ${text}`;
       if (agent.status === 'running') {
         agent.sendUrgent(workerMsg);
@@ -1377,7 +808,9 @@ Ce fichier contient les regles COMPLETES de chaque agent. Il est lu automatiquem
     }
   }
 
-  private resetState() {
+  // ── State reset ──
+
+  private resetState(): void {
     this.started = false;
     if (this.opusRestartTimer) {
       clearTimeout(this.opusRestartTimer);
@@ -1385,953 +818,31 @@ Ce fichier contient les regles COMPLETES de chaque agent. Il est lu automatiquem
     }
     this.opusRestartPending = false;
     this.opusRestartCount = 0;
-    this.workerStarted = new Map([
-      ['sonnet', false],
-      ['codex', false],
-    ]);
-    this.workerReady = new Map([
-      ['sonnet', Promise.resolve()],
-      ['codex', Promise.resolve()],
-    ]);
-    this.agentLastContextIndex = new Map([
-      ['opus', 0],
-      ['sonnet', 0],
-      ['codex', 0],
-    ]);
-    this.agentsOnRelay.clear();
-    this.agentsOnCrossTalk.clear();
-    this.awaitingCrossTalkReply.clear();
-    this.relayBuffer = new Map([
-      ['sonnet', []],
-      ['codex', []],
-      ['opus', []],
-    ]);
-    this.relayStartTime.clear();
-    this.lastStatusSnippetTime.clear();
-    this.relayTimestamps = [];
-    this.expectedDelegates.clear();
-    this.pendingReportsForOpus.clear();
-    this.deliveredToOpus.clear();
-    this.crossTalkCount = 0;
+    this.workerStarted = new Map([['sonnet', false], ['codex', false]]);
+    this.workerReady = new Map([['sonnet', Promise.resolve()], ['codex', Promise.resolve()]]);
+    this.agentLastContextIndex = new Map([['opus', 0], ['sonnet', 0], ['codex', 0]]);
+
+    this.relay.reset();
+    this.crossTalk.reset();
+    this.buffers.reset();
+    this.delegates.reset();
+
     this.opusAllMode = false;
     this.opusAllModeResponded = false;
-    this.liveRelayAllowed = false;
+    this.relay.liveRelayAllowed = false;
     if (this.opusAllModeWorkerTimer) {
       clearTimeout(this.opusAllModeWorkerTimer);
       this.opusAllModeWorkerTimer = null;
     }
     this.opusAllModePendingText = null;
-    // NOTE: directModeAgents is NOT cleared here — it must survive across restart()
-    // so that setDirectMode() called before restart() is preserved. It is cleared
-    // explicitly in sendUserMessage(), sendToAllDirect(), and stop().
-    this.lastDelegationContent.clear();
-    this.relayDrafts.clear();
-    for (const timer of this.relayDraftTimers.values()) clearTimeout(timer);
-    this.relayDraftTimers.clear();
-    for (const timer of this.safetyNetTimers.values()) clearTimeout(timer);
-    this.safetyNetTimers.clear();
-    this.stopDelegateHeartbeat();
   }
 
-  private isRelayRateLimited(now = Date.now()): boolean {
-    while (this.relayTimestamps.length > 0 && now - this.relayTimestamps[0] >= RELAY_WINDOW_MS) {
-      this.relayTimestamps.shift();
-    }
-    return this.relayTimestamps.length >= MAX_RELAYS_PER_WINDOW;
-  }
+  // ── Shutdown ──
 
-  private recordRelay() {
-    this.relayTimestamps.push(Date.now());
-  }
-
-  private isRelayTag(line: string): boolean {
-    return (
-      TO_SONNET_PATTERN.test(line) || TO_CODEX_PATTERN.test(line) || TO_OPUS_PATTERN.test(line)
-    );
-  }
-
-  private matchRelayTag(
-    line: string,
-    from: Message['from'],
-  ): { target: AgentId; firstLine: string } | null {
-    if (from !== 'sonnet' && from !== 'codex' && from !== 'opus') {
-      return null;
-    }
-    if (from !== 'sonnet') {
-      const m = line.match(TO_SONNET_PATTERN);
-      if (m) return { target: 'sonnet', firstLine: m[1].trim() };
-    }
-    if (from !== 'codex') {
-      const m = line.match(TO_CODEX_PATTERN);
-      if (m) return { target: 'codex', firstLine: m[1].trim() };
-    }
-    if (from !== 'opus') {
-      const m = line.match(TO_OPUS_PATTERN);
-      if (m) return { target: 'opus', firstLine: m[1].trim() };
-    }
-    return null;
-  }
-
-  /** Resolve an AgentId to the corresponding agent instance */
-  private getAgent(id: AgentId) {
-    return this.agents[id];
-  }
-
-  /** Route one parsed relay message to target with all guard rails applied. */
-  private routeRelayMessage(from: AgentId, target: AgentId, rawContent: string) {
-    const content = rawContent.trim();
-    if (!content) return;
-    // Filter out garbage fragments (backticks, punctuation-only) from streaming artifacts
-    if (content.replace(/[`'".,;:\-–—\s]/g, '').length < 3) {
-      flog.debug('RELAY', `Dropping fragment relay ${from}->${target}: "${content}"`);
-      return;
-    }
-
-    if (!this.isAgentEnabled(target)) {
-      if (from === 'opus') {
-        this.callbacks?.onAgentOutput('opus', {
-          text: `Delegation ignoree: ${target} est desactive`,
-          timestamp: Date.now(),
-          type: 'info',
-        });
-      }
-      flog.info('RELAY', `BLOCKED ${from}->${target} (agent disabled): ${content.slice(0, 80)}`);
-      return;
-    }
-
-    // Block Opus→agent relays when the user is speaking directly to that agent.
-    // This prevents Opus from interfering with @codex / @sonnet direct messages.
-    if (from === 'opus' && this.directModeAgents.has(target)) {
-      flog.info('RELAY', `BLOCKED ${from}->${target} (user speaking directly to ${target}): ${content.slice(0, 80)}`);
-      return;
-    }
-
-    flog.info('RELAY', `${from}->${target}: ${content.slice(0, 80)}`);
-
-    // ── Cross-talk: peer-to-peer between agents (not via Opus) ──
-    // Cross-talk is checked BEFORE rate-limit — it has its own limit (MAX_CROSS_TALK_PER_ROUND)
-    const isPeerToPeer =
-      from !== 'opus' && target !== 'opus' && from !== target;
-
-    if (isPeerToPeer) {
-      // Block cross-talk after BOTH agents have reported to Opus.
-      // This prevents the infinite politeness loop (Sonnet: "Merci!", Codex: "Bonne continuation!")
-      // that keeps the cross-talk mute alive and blocks deliverCombinedReportsToOpus().
-      const bothReported = this.expectedDelegates.size > 0 &&
-        this.pendingReportsForOpus.size >= this.expectedDelegates.size;
-      if (bothReported) {
-        flog.info('ORCH', `Cross-talk BLOCKED ${from}->${target} (all delegates already reported to Opus — no more peer chat)`);
-        // Don't relay — deliver combined reports instead
-        this.agentsOnCrossTalk.delete(from);
-        this.agentsOnCrossTalk.delete(target);
-        this.deliverCombinedReportsToOpus();
-        return;
-      }
-      // Block cross-talk if the sending agent already reported to Opus.
-      // Once you've sent [TO:OPUS], your job is done — no more chatting with peers.
-      if (this.pendingReportsForOpus.has(from)) {
-        flog.info('ORCH', `Cross-talk BLOCKED ${from}->${target} (${from} already reported to Opus — task done)`);
-        return;
-      }
-      if (this.crossTalkCount >= this.MAX_CROSS_TALK_PER_ROUND) {
-        flog.warn('ORCH', `Cross-talk limit reached (${this.crossTalkCount}/${this.MAX_CROSS_TALK_PER_ROUND}) — blocking ${from}->${target}`);
-        // Don't relay — agents will continue their own work
-      } else {
-        this.crossTalkCount++;
-        flog.info('ORCH', `Cross-talk ${this.crossTalkCount}/${this.MAX_CROSS_TALK_PER_ROUND}: ${from}->${target}`);
-        // Mark initiator as waiting for reply — prevents safety-net auto-relay
-        this.awaitingCrossTalkReply.add(from);
-        // Mute the target agent's stdout — cross-talk response is internal
-        this.agentsOnCrossTalk.set(target, Date.now());
-        flog.info('ORCH', `Cross-talk MUTE SET for ${target}, ${from} awaiting reply`);
-        // Cross-talk does NOT count against relay rate limit — only record, don't check limit
-        this.bus.relay(from, target, content);
-      }
-      return;
-    }
-
-    // ── Rate-limit check (applies to standard relays only, NOT cross-talk) ──
-    if (this.isRelayRateLimited()) {
-      flog.warn('ORCH', `Relay rate limited — skipping from ${from}`);
-      this.callbacks?.onAgentOutput(from, {
-        text: '[Rate limit] Trop de relays — patientez quelques secondes.',
-        timestamp: Date.now(),
-        type: 'info',
-      });
-      return;
-    }
-
-    // ── Standard delegation / report flow ──
-    if (from === 'opus' && target !== 'opus') {
-      // Block duplicate delegation: if Opus already delegated to this agent in this
-      // round and the agent is still working (on relay), skip the duplicate.
-      // EXCEPTION: liveRelayAllowed = Opus is forwarding a user's LIVE message
-      // (not a new task). In that case, inject the message directly via sendUrgent
-      // and show the relay in the UI, but do NOT re-register as a new delegation.
-      if (this.agentsOnRelay.has(target) && this.expectedDelegates.has(target)) {
-        if (this.liveRelayAllowed) {
-          // LIVE message forwarding — inject directly, show relay, don't re-delegate
-          this.liveRelayAllowed = false;
-          flog.info('RELAY', `LIVE relay opus->${target}: ${content.slice(0, 80)}`);
-          const targetAgent = this.getAgent(target);
-          if (targetAgent.status === 'running') {
-            targetAgent.sendUrgent(`[LIVE MESSAGE DU USER — via Opus] ${content}`);
-          } else {
-            this.bus.send({ from: 'opus', to: target, content: `[LIVE MESSAGE DU USER — via Opus] ${content}` });
-          }
-          // Emit relay event for UI display ("Opus to Sonnet" with the message content)
-          this.recordRelay();
-          this.bus.emit('relay', {
-            id: randomUUID(),
-            from: 'opus' as const,
-            to: target,
-            content,
-            relayCount: 0,
-            timestamp: Date.now(),
-          });
-          return;
-        }
-        flog.info('RELAY', `BLOCKED duplicate delegation opus->${target} (agent already on relay): ${content.slice(0, 80)}`);
-        return;
-      }
-      // Opus delegated — cancel the @tous worker timer (workers get tasks through delegation)
-      if (this.opusAllMode && this.opusAllModeWorkerTimer) {
-        clearTimeout(this.opusAllModeWorkerTimer);
-        this.opusAllModeWorkerTimer = null;
-        this.opusAllModePendingText = null;
-        flog.info('ORCH', '@tous: Opus delegated — cancelled worker direct-send timer');
-      }
-      // New delegation — clear delivered tracking for this agent (fresh round)
-      this.deliveredToOpus.delete(target);
-      this.agentsOnRelay.add(target);
-      this.relayStartTime.set(target, Date.now());
-      this.lastStatusSnippetTime.delete(target); // Reset so first snippet shows immediately
-      this.expectedDelegates.add(target);
-      // Store delegation content for auto-fallback if agent fails
-      this.lastDelegationContent.set(target, content);
-      flog.info('ORCH', `Expected delegates: ${[...this.expectedDelegates].join(', ')}`);
-      // Start/reset independent delegate timeout — force-deliver if all delegates haven't reported
-      this.resetDelegateTimeout();
-    }
-
-    this.recordRelay();
-
-    // Agent reporting back to Opus — buffer the report instead of delivering immediately.
-    // When ALL expected delegates have reported, deliver a combined message.
-    if (target === 'opus' && from !== 'opus' && this.expectedDelegates.has(from)) {
-      this.pendingReportsForOpus.set(from, content);
-      // Agent has reported — remove from relay tracking so safety-net won't re-fire
-      this.agentsOnRelay.delete(from);
-      this.relayBuffer.set(from, []);
-      this.relayStartTime.delete(from);
-      this.awaitingCrossTalkReply.delete(from);
-      // Cancel any pending safety-net timer (agent reported explicitly)
-      this.clearSafetyNetTimer(from);
-      // Delegate reported to Opus — clear cross-talk mute if active (work is done)
-      if (this.agentsOnCrossTalk.has(from)) {
-        flog.info('ORCH', `Clearing cross-talk mute for ${from} (reported to Opus)`);
-        this.agentsOnCrossTalk.delete(from);
-      }
-      flog.info('ORCH', `Buffered report from ${from} (${this.pendingReportsForOpus.size}/${this.expectedDelegates.size} received)`);
-      // Emit a brief preview of the report so the user sees what the agent sent
-      const reportPreview = this.extractStatusSnippet(content);
-      if (reportPreview && this.callbacks) {
-        this.callbacks.onAgentOutput(from, {
-          text: `✦ ${reportPreview}`,
-          timestamp: Date.now(),
-          type: 'system',
-        });
-      }
-      // Check if all delegates have reported
-      if (this.pendingReportsForOpus.size >= this.expectedDelegates.size) {
-        this.deliverCombinedReportsToOpus();
-      }
-      return;
-    }
-
-    this.bus.relay(from, target, content);
-    // Keep muted until the agent finishes — safety-net on 'waiting' will auto-relay
-    if (target === 'opus' && from !== 'opus') {
-      this.relayBuffer.set(from, []);
-    }
-  }
-
-  /** Flush pending [TO:*] relay draft for one agent, if any.
-   *  @param force  When true, flush even if content is empty (used when
-   *                a NEW tag from the same sender force-closes the previous draft,
-   *                or on agent status change). When false (timer-based), an empty
-   *                draft gets re-scheduled up to RELAY_DRAFT_MAX_EMPTY_RETRIES times
-   *                so that late-arriving content isn't lost. */
-  private flushRelayDraft(from: AgentId, force = true): boolean {
-    const timer = this.relayDraftTimers.get(from);
-    if (timer) {
-      clearTimeout(timer);
-      this.relayDraftTimers.delete(from);
-    }
-
-    const draft = this.relayDrafts.get(from);
-    if (!draft) return false;
-
-    const content = draft.parts.join('\n').trim();
-
-    if (!content) {
-      // Empty draft — re-schedule up to max retries regardless of force flag.
-      // Previously, force=true (new tag or status change) would drop the draft
-      // immediately, causing empty relay messages when streaming chunks arrive
-      // slowly (e.g. Opus emits [TO:SONNET] and [TO:CODEX] in rapid succession).
-      const retries = this.relayDraftEmptyRetries.get(from) ?? 0;
-      if (retries < this.RELAY_DRAFT_MAX_EMPTY_RETRIES) {
-        this.relayDraftEmptyRetries.set(from, retries + 1);
-        flog.debug('RELAY', `Draft for ${from}->${draft.target} still empty (force=${force}), retry ${retries + 1}/${this.RELAY_DRAFT_MAX_EMPTY_RETRIES}`);
-        this.scheduleRelayDraftFlush(from);
-        return false;
-      }
-      flog.debug('RELAY', `Draft for ${from}->${draft.target} empty after max retries, dropping`);
-      this.relayDrafts.delete(from);
-      this.relayDraftEmptyRetries.delete(from);
-      return false;
-    }
-
-    this.relayDrafts.delete(from);
-    this.relayDraftEmptyRetries.delete(from);
-    this.routeRelayMessage(from, draft.target, content);
-    return true;
-  }
-
-  /** Schedule a short debounce flush for a relay draft to catch cross-chunk payloads. */
-  private scheduleRelayDraftFlush(from: AgentId) {
-    const prev = this.relayDraftTimers.get(from);
-    if (prev) clearTimeout(prev);
-    const timer = setTimeout(() => {
-      this.relayDraftTimers.delete(from);
-      this.flushRelayDraft(from, false /* timer-based, not forced */);
-    }, this.RELAY_DRAFT_FLUSH_MS);
-    this.relayDraftTimers.set(from, timer);
-  }
-
-  /** Check if a line appears to be in a markdown code/quote context (false positive). */
-  private isMarkdownContext(line: string): boolean {
-    const trimmed = line.trim();
-    // Lines inside code blocks (backticks), blockquotes, or indented code
-    if (trimmed.startsWith('```')) return true;
-    if (trimmed.startsWith('> ')) return true;
-    if (trimmed.startsWith('    ')) return true; // indented code block
-    // Lines that contain backtick-wrapped tags: `[TO:SONNET]`
-    if (/`[^`]*\[TO:(?:SONNET|CODEX|OPUS)\][^`]*`/.test(line)) return true;
-    // Lines that look like "Exemple:", "Example:", "Format:", bullet descriptions of syntax
-    if (/^\s*[-*]\s.*\[TO:(?:SONNET|CODEX|OPUS)\].*:/.test(line)) return true;
-    // Lines with markdown formatting around the tag (bold, italic, etc.)
-    if (/[*_]{1,2}\[TO:(?:SONNET|CODEX|OPUS)\][*_]{1,2}/.test(line)) return true;
-    return false;
-  }
-
-  /** Detect [TO:*] relay tags in streamed output with stateful parsing across chunks. */
-  private detectRelayPatterns(from: AgentId, text: string): boolean {
-    // Pre-process: split lines that contain multiple [TO:*] tags on the same line
-    // e.g. "[TO:SONNET] [TO:CODEX] Hello" → "[TO:SONNET]" and "[TO:CODEX] Hello"
-    const rawLines = text.split('\n');
-    const lines: string[] = [];
-    const multiTagRe = /(\[TO:(?:SONNET|CODEX|OPUS)\])/g;
-    for (const raw of rawLines) {
-      // Skip lines in markdown code/quote context — these are NOT real relay commands
-      if (this.isMarkdownContext(raw)) {
-        flog.debug('RELAY', `Skipping markdown context line: ${raw.slice(0, 80)}`);
-        // Still append to current draft if one is open (might be part of a message body)
-        const draft = this.relayDrafts.get(from);
-        if (draft && raw.trim()) {
-          draft.parts.push(raw);
-          this.scheduleRelayDraftFlush(from);
-        }
-        continue;
-      }
-      const tags: { idx: number }[] = [];
-      let m: RegExpExecArray | null;
-      while ((m = multiTagRe.exec(raw)) !== null) {
-        tags.push({ idx: m.index });
-      }
-      if (tags.length <= 1) {
-        lines.push(raw);
-      } else {
-        // Split at each tag boundary
-        for (let t = 0; t < tags.length; t++) {
-          const start = tags[t].idx;
-          const end = t + 1 < tags.length ? tags[t + 1].idx : raw.length;
-          lines.push(raw.slice(start, end).trimEnd());
-        }
-      }
-    }
-
-    let foundRelayTag = false;
-    for (const line of lines) {
-      const match = this.matchRelayTag(line, from);
-      if (match) {
-        foundRelayTag = true;
-        // A new tag closes the previous draft from the same sender.
-        // Save the previous draft before overwriting — flushRelayDraft will
-        // re-schedule it if still empty instead of dropping it.
-        const prevDraft = this.relayDrafts.get(from);
-        if (prevDraft) {
-          const prevContent = prevDraft.parts.join('\n').trim();
-          if (prevContent) {
-            // Previous draft has content — deliver it now
-            this.relayDrafts.delete(from);
-            this.relayDraftEmptyRetries.delete(from);
-            this.routeRelayMessage(from, prevDraft.target, prevContent);
-          } else {
-            // Previous draft is empty — clear it (the new tag takes priority,
-            // and the previous tag had no content to deliver)
-            const prevTimer = this.relayDraftTimers.get(from);
-            if (prevTimer) {
-              clearTimeout(prevTimer);
-              this.relayDraftTimers.delete(from);
-            }
-            this.relayDrafts.delete(from);
-            this.relayDraftEmptyRetries.delete(from);
-            flog.debug('RELAY', `Discarded empty draft ${from}->${prevDraft.target} (superseded by new tag ->${match.target})`);
-          }
-        }
-        const draft = {
-          target: match.target,
-          parts: [] as string[],
-        };
-        if (match.firstLine) {
-          draft.parts.push(match.firstLine);
-        }
-        this.relayDrafts.set(from, draft);
-        this.relayDraftEmptyRetries.delete(from);
-        this.scheduleRelayDraftFlush(from);
-        continue;
-      }
-
-      // No new tag on this line: append to current draft, if one is open.
-      // Filter out noise lines that must not reach the target agent.
-      const draft = this.relayDrafts.get(from);
-      if (draft) {
-        const isNoise =
-          !line.trim() ||
-          /^\s*---+\s*$/.test(line) ||
-          /^\s*\[TASK:(add|done)\]/i.test(line);
-        if (!isNoise) {
-          draft.parts.push(line);
-        }
-        this.scheduleRelayDraftFlush(from);
-      }
-    }
-
-    return foundRelayTag;
-  }
-
-  /** Record delegate activity — called on output or status change to keep heartbeat alive */
-  private recordDelegateActivity(agent: AgentId) {
-    if (this.expectedDelegates.has(agent)) {
-      this.delegateLastActivity.set(agent, Date.now());
-    }
-  }
-
-  /** Start/reset the heartbeat that monitors delegates.
-   *  Instead of a fixed timeout, we periodically check if agents are still active.
-   *  An agent is only considered "timed out" if it is NOT running AND has been
-   *  idle (no output/activity) for DELEGATE_IDLE_TIMEOUT_MS. */
-  private resetDelegateTimeout() {
-    // Initialize activity timestamp for new delegates
-    const now = Date.now();
-    for (const delegate of this.expectedDelegates) {
-      if (!this.delegateLastActivity.has(delegate)) {
-        this.delegateLastActivity.set(delegate, now);
-      }
-    }
-
-    // Don't create duplicate heartbeats — one is enough
-    if (this.delegateHeartbeatTimer) return;
-
-    this.delegateHeartbeatTimer = setInterval(() => {
-      if (this.expectedDelegates.size === 0) {
-        this.stopDelegateHeartbeat();
-        return;
-      }
-
-      const now = Date.now();
-      const timedOut: AgentId[] = [];
-
-      for (const delegate of this.expectedDelegates) {
-        if (this.pendingReportsForOpus.has(delegate)) continue; // already reported
-
-        const agent = this.getAgent(delegate);
-        const lastActivity = this.delegateLastActivity.get(delegate) ?? now;
-        const idleMs = now - lastActivity;
-
-        // Agent is still running — it's working, NOT timed out. Reset activity.
-        if (agent.status === 'running') {
-          this.delegateLastActivity.set(delegate, now);
-          flog.debug('ORCH', `Heartbeat: ${delegate} still running (active)`);
-          continue;
-        }
-
-        // Agent is not running AND has been idle too long — truly stuck
-        // Per-agent idle timeout: Codex gets codexTimeoutMs (0 = no timeout by default)
-        const idleTimeout = delegate === 'codex' && this.CODEX_RELAY_TIMEOUT_MS >= 0
-          ? this.CODEX_RELAY_TIMEOUT_MS
-          : this.DELEGATE_IDLE_TIMEOUT_MS;
-        // idleTimeout <= 0 means no timeout — never consider this agent stuck
-        if (idleTimeout > 0 && idleMs >= idleTimeout) {
-          flog.warn('ORCH', `Heartbeat: ${delegate} idle for ${Math.round(idleMs / 1000)}s (status=${agent.status}) — timing out`);
-          timedOut.push(delegate);
-        } else {
-          flog.debug('ORCH', `Heartbeat: ${delegate} idle ${Math.round(idleMs / 1000)}s/${idleTimeout > 0 ? Math.round(idleTimeout / 1000) + 's' : '∞'} (status=${agent.status})`);
-        }
-      }
-
-      if (timedOut.length === 0) return;
-
-      // Handle timed-out delegates — fallback logic
-      for (const delegate of timedOut) {
-        const fallback = this.pickFallbackAgent(delegate);
-        const originalTask = this.lastDelegationContent.get(delegate);
-
-        if (fallback === 'opus' && originalTask) {
-          flog.info('ORCH', `Heartbeat timeout: both workers unavailable — Opus takes over: ${originalTask.slice(0, 80)}`);
-          this.expectedDelegates.clear();
-          this.pendingReportsForOpus.clear();
-          this.stopDelegateHeartbeat();
-          this.bus.send({
-            from: 'system',
-            to: 'opus',
-            content: `[FALLBACK — ${delegate} timeout, aucun agent disponible] Fais le travail toi-meme: ${originalTask}`,
-          });
-          if (this.callbacks) {
-            this.callbacks.onAgentOutput(delegate, {
-              text: `${delegate} timeout — Opus prend le relais`,
-              timestamp: Date.now(),
-              type: 'info',
-            });
-          }
-          return;
-        }
-
-        if (fallback && fallback !== 'opus' && originalTask) {
-          flog.info('ORCH', `Heartbeat fallback: ${delegate} → ${fallback}`);
-          this.expectedDelegates.add(fallback);
-          this.deliveredToOpus.delete(fallback);
-          this.agentsOnRelay.add(fallback);
-          this.relayStartTime.set(fallback, Date.now());
-          this.lastDelegationContent.set(fallback, originalTask);
-          this.delegateLastActivity.set(fallback, Date.now());
-          this.recordRelay();
-          this.bus.relay('opus', fallback, `[FALLBACK — ${delegate} timeout] ${originalTask}`);
-
-          if (this.callbacks) {
-            this.callbacks.onAgentOutput(delegate, {
-              text: `${delegate} timeout — tache redirigee vers ${fallback}`,
-              timestamp: Date.now(),
-              type: 'info',
-            });
-          }
-          return;
-        }
-
-        flog.warn('ORCH', `${delegate} timeout — no fallback available, using placeholder`);
-        this.pendingReportsForOpus.set(delegate, '(timeout — pas de rapport)');
-
-        if (this.callbacks) {
-          this.callbacks.onAgentOutput(delegate, {
-            text: `${delegate} timeout — pas de reponse (aucun agent de secours disponible)`,
-            timestamp: Date.now(),
-            type: 'info',
-          });
-        }
-      }
-
-      if (this.pendingReportsForOpus.size >= this.expectedDelegates.size) {
-        this.stopDelegateHeartbeat();
-        this.deliverCombinedReportsToOpus();
-      }
-    }, this.DELEGATE_HEARTBEAT_INTERVAL_MS);
-  }
-
-  /** Stop the delegate heartbeat interval */
-  private stopDelegateHeartbeat() {
-    if (this.delegateHeartbeatTimer) {
-      clearInterval(this.delegateHeartbeatTimer);
-      this.delegateHeartbeatTimer = null;
-    }
-    this.delegateLastActivity.clear();
-  }
-
-  /** Check if Opus is waiting for delegate reports */
-  private isOpusWaitingForRelays(): boolean {
-    for (const agent of this.agentsOnRelay) {
-      if (agent !== 'opus') return true;
-    }
-    return false;
-  }
-
-  /** Flush Opus buffered lines to UI, then clear the buffer */
-  private flushOpusBuffer(cb: OrchestratorCallbacks) {
-    const buffer = this.relayBuffer.get('opus') ?? [];
-    if (buffer.length > 0) {
-      flog.info('ORCH', `Flushing ${buffer.length} buffered Opus lines to UI`);
-      for (const line of buffer) {
-        cb.onAgentOutput('opus', line);
-      }
-    }
-    this.relayBuffer.set('opus', []);
-  }
-
-  /** Check if any delegate has an active cross-talk that hasn't resolved yet.
-   *  This prevents premature combined delivery when delegates are still exchanging messages. */
-  private hasDelegateCrossTalkPending(): boolean {
-    for (const delegate of this.expectedDelegates) {
-      if (this.agentsOnCrossTalk.has(delegate)) {
-        flog.debug('ORCH', `Cross-talk still active for delegate ${delegate} — holding combined delivery`);
-        return true;
-      }
-    }
-    return false;
-  }
-
-  /** Clear and cancel the safety-net timer for a given agent */
-  private clearSafetyNetTimer(agentId: AgentId) {
-    const prevTimer = this.safetyNetTimers.get(agentId);
-    if (prevTimer) {
-      clearTimeout(prevTimer);
-      this.safetyNetTimers.delete(agentId);
-    }
-  }
-
-  /** Extract a short status snippet from agent stdout text for live UI display.
-   *  Returns null if the text is not meaningful (relay tags, task tags, empty). */
-  private extractStatusSnippet(text: string): string | null {
-    const trimmed = text.trim();
-    if (!trimmed || trimmed.length < 5) return null;
-    // Skip relay/task/system tags
-    if (/^\[(TO|FROM|TASK|RAPPEL|CODEX|SONNET|OPUS|FALLBACK):/i.test(trimmed)) return null;
-    // Skip code blocks, markdown artifacts
-    if (/^```/.test(trimmed)) return null;
-    // Skip lines that are ONLY punctuation or formatting (no letters)
-    if (/^[─═\-*>|]+$/.test(trimmed)) return null;
-    // Skip internal instructions that leaked through
-    if (/^(Tu es|You are|REGLE|RULE|IMPORTANT)/i.test(trimmed)) return null;
-    // Skip tool action lines (already shown as actions)
-    if (/^▸\s/.test(trimmed)) return null;
-
-    // Take the first line that looks like natural language
-    const lines = trimmed.split('\n');
-    let firstLine = '';
-    for (const l of lines) {
-      let lt = l.trim();
-      if (!lt || /^[─═\-*>|`]+$/.test(lt)) continue;
-      if (/^\[(TO|FROM|TASK|RAPPEL):/i.test(lt)) continue;
-      if (/^▸\s/.test(lt)) continue;
-      // Strip markdown heading prefixes (## Title → Title)
-      lt = lt.replace(/^#{1,6}\s+/, '');
-      if (lt.length < 3) continue;
-      firstLine = lt;
-      break;
-    }
-    if (!firstLine || firstLine.length < 5) return null;
-
-    // No hard cap — let the renderer word-wrap as needed
-    const capped = firstLine;
-
-    // Skip very short or meaningless snippets
-    if (capped.replace(/[^a-zA-Zà-ÿ0-9]/g, '').length < 4) return null;
-
-    return capped;
-  }
-
-  /** Emit a throttled status snippet for an agent on relay — gives the user
-   *  ambient visibility into what the agent is thinking/writing. */
-  private maybeEmitStatusSnippet(agentId: AgentId, text: string, cb: OrchestratorCallbacks) {
-    const now = Date.now();
-    const lastTime = this.lastStatusSnippetTime.get(agentId) ?? 0;
-    if (now - lastTime < this.STATUS_SNIPPET_INTERVAL_MS) return;
-
-    const snippet = this.extractStatusSnippet(text);
-    if (!snippet) return;
-
-    this.lastStatusSnippetTime.set(agentId, now);
-    // Emit as 'system' type → becomes kind:'action' → shows in lightweight
-    // action-only path with agent label prefix. Prefix with ✦ so Dashboard
-    // can render it as dimmed thinking text instead of a tool action.
-    cb.onAgentOutput(agentId, {
-      text: `✦ ${snippet}`,
-      timestamp: now,
-      type: 'system',
-    });
-  }
-
-  /** Extract buffered text for an agent and handle auto-relay or combined delivery */
-  private autoRelayBuffer(agent: AgentId) {
-    const buffer = this.relayBuffer.get(agent) ?? [];
-    const textLines = buffer
-      .filter((l) => l.type === 'stdout')
-      .map((l) => l.text)
-      .filter((t) => !this.isRelayTag(t))
-      .join('\n')
-      .trim();
-    if (textLines) {
-      flog.info('ORCH', `${agent} finished on relay without [TO:OPUS] — auto-relaying ${textLines.length} chars`);
-      if (this.expectedDelegates.has(agent)) {
-        this.pendingReportsForOpus.set(agent, textLines);
-        flog.info('ORCH', `Auto-buffered ${agent} report (${this.pendingReportsForOpus.size}/${this.expectedDelegates.size})`);
-        if (this.pendingReportsForOpus.size >= this.expectedDelegates.size) {
-          this.deliverCombinedReportsToOpus();
-        }
-      } else {
-        this.recordRelay();
-        this.bus.relay(agent, 'opus', textLines);
-      }
-    } else {
-      // Check if the agent is still running — if so, it's still working,
-      // the empty buffer just means it hasn't produced stdout yet (e.g. generating a large Write).
-      // DON'T trigger fallback for an active agent!
-      const agentInstance = this.getAgent(agent);
-      if (agentInstance.status === 'running') {
-        flog.info('ORCH', `${agent} relay buffer empty but agent still RUNNING — NOT failing over (agent is still working)`);
-        // Re-add to relay so it can continue
-        this.agentsOnRelay.add(agent);
-        this.relayStartTime.set(agent, Date.now());
-        return;
-      }
-
-      const lastErr = agentInstance.lastError ?? null;
-      const placeholder = lastErr
-        ? `(erreur: ${lastErr})`
-        : '(pas de rapport)';
-      flog.warn('ORCH', `${agent} finished on relay — no buffered text to relay (${placeholder}), status=${agentInstance.status}`);
-
-      // ── Orchestrator-level fallback: try to redelegate to another agent ──
-      const hadExpected = this.expectedDelegates.has(agent);
-      const fallback = this.pickFallbackAgent(agent);
-      const originalTask = this.lastDelegationContent.get(agent);
-
-      if (fallback === 'opus' && originalTask && hadExpected) {
-        // Both workers failed/unavailable — Opus takes over and does the work itself
-        flog.info('ORCH', `Both workers unavailable — signaling Opus to handle: ${originalTask.slice(0, 80)}`);
-        this.expectedDelegates.clear();
-        this.pendingReportsForOpus.clear();
-        this.bus.send({
-          from: 'system',
-          to: 'opus',
-          content: `[FALLBACK — ${agent} et l'autre agent ont echoue] Fais le travail toi-meme: ${originalTask}`,
-        });
-        if (this.callbacks) {
-          this.callbacks.onAgentOutput(agent, {
-            text: `${agent} indisponible — Opus prend le relais`,
-            timestamp: Date.now(),
-            type: 'info',
-          });
-        }
-      } else if (fallback && fallback !== 'opus' && originalTask && hadExpected) {
-        flog.info('ORCH', `Auto-fallback: ${agent} failed → redelegating to ${fallback}`);
-        const fallbackAgent = fallback;
-        const content = `[FALLBACK — ${agent} a echoue] ${originalTask}`;
-        this.expectedDelegates.add(fallbackAgent);
-        this.deliveredToOpus.delete(fallbackAgent);
-        this.agentsOnRelay.add(fallbackAgent);
-        this.relayStartTime.set(fallbackAgent, Date.now());
-        this.recordRelay();
-        this.bus.relay('opus', fallbackAgent, content);
-        this.delegateLastActivity.set(fallbackAgent, Date.now());
-        this.lastDelegationContent.set(fallbackAgent, content);
-        this.resetDelegateTimeout();
-        if (this.callbacks) {
-          this.callbacks.onAgentOutput(agent, {
-            text: `${agent} indisponible — tache transferee a ${fallbackAgent}`,
-            timestamp: Date.now(),
-            type: 'info',
-          });
-        }
-      } else {
-        if (hadExpected) {
-          this.pendingReportsForOpus.set(agent, placeholder);
-          if (this.pendingReportsForOpus.size >= this.expectedDelegates.size) {
-            this.deliverCombinedReportsToOpus();
-          }
-        }
-      }
-    }
-    this.agentsOnRelay.delete(agent);
-    this.relayBuffer.set(agent, []);
-    this.relayStartTime.delete(agent);
-    if (!this.isOpusWaitingForRelays() && this.expectedDelegates.size === 0 && this.callbacks) {
-      this.flushOpusBuffer(this.callbacks);
-    }
-  }
-
-  /** Pick a fallback agent when one fails.
-   *  Returns 'opus' if no worker fallback is available — Opus takes over. */
-  private pickFallbackAgent(failedAgent: AgentId): AgentId | null {
-    // Sonnet failed → Codex can do both front and back
-    // Codex failed → Sonnet can do both front and back
-    const fallbackMap: Record<string, AgentId[]> = {
-      sonnet: ['codex'],
-      codex: ['sonnet'],
-    };
-
-    // Remove the failed agent from expectedDelegates so the fallback candidate
-    // isn't blocked by the "already an expected delegate" check.
-    this.expectedDelegates.delete(failedAgent);
-
-    const candidates = fallbackMap[failedAgent] ?? [];
-    for (const candidate of candidates) {
-      if (!this.isAgentEnabled(candidate)) continue;
-      // Don't pick an agent that's already an expected delegate for this round
-      if (this.expectedDelegates.has(candidate)) continue;
-      // Don't pick an agent that is in error/stopped state
-      const agent = this.getAgent(candidate);
-      if (agent.status === 'error' || agent.status === 'stopped') {
-        flog.info('ORCH', `Fallback candidate ${candidate} skipped (status=${agent.status})`);
-        continue;
-      }
-      return candidate;
-    }
-
-    // All worker candidates are unavailable — signal Opus to do the work itself
-    flog.info('ORCH', `No worker fallback for ${failedAgent} — Opus will handle the task directly`);
-    return 'opus';
-  }
-
-  /** Deliver all pending delegate reports as ONE combined message to Opus */
-  private deliverCombinedReportsToOpus() {
-    if (this.pendingReportsForOpus.size === 0) return;
-
-    // Don't deliver if cross-talk is still in progress between delegates
-    if (this.hasDelegateCrossTalkPending()) {
-      flog.info('ORCH', `Combined delivery deferred — cross-talk still active (${this.pendingReportsForOpus.size}/${this.expectedDelegates.size} reports ready)`);
-      return;
-    }
-
-    const agentNames = [...this.pendingReportsForOpus.keys()].map(a => a.charAt(0).toUpperCase() + a.slice(1));
-    const parts: string[] = [];
-    const REPORT_MAX_CHARS = 5000; // Truncate very long reports (e.g. agents dumping code)
-    for (const [agent, report] of this.pendingReportsForOpus) {
-      const trimmed = report.length > REPORT_MAX_CHARS
-        ? report.slice(0, REPORT_MAX_CHARS) + '\n... [rapport tronqué — contenu complet dans les fichiers]'
-        : report;
-      parts.push(`[FROM:${agent.toUpperCase()}] ${trimmed}`);
-    }
-    const reportsBody = parts.join('\n\n---\n\n');
-
-    // In @tous mode, Opus wrote its own analysis while delegates were working.
-    // That output was buffered (not shown to user). We include it in the combined
-    // delivery so Opus has full context — its own analysis + delegate reports —
-    // and can produce a REAL fused rapport instead of saying "rapport deja fait".
-    const opusBuf = this.relayBuffer.get('opus') ?? [];
-    const opusAnalysis = opusBuf
-      .filter(l => l.type === 'stdout')
-      .map(l => l.text)
-      .join('\n')
-      .trim();
-    const opusSection = opusAnalysis
-      ? `\n\n---\n\n[TA PROPRE ANALYSE (non montrée au user)] Voici ce que tu as écrit pendant que tes agents travaillaient. UTILISE cette analyse pour enrichir ta synthese finale:\n${opusAnalysis}`
-      : '';
-
-    // Prepend a clear header so Opus knows these are the delegate reports it was waiting for.
-    const combined = `[RAPPORTS RECUS — ${agentNames.join(' + ')}] Tous les rapports sont arrivés.
-
-INSTRUCTIONS CRITIQUES:
-1. Ecris un rapport final complet et structure pour le user — fusionne les rapports de tes agents
-2. Le user n'a RIEN vu avant — c'est la PREMIERE fois qu'il verra un rapport
-3. NE DIS PAS "le rapport est déjà là" ou "voir ci-dessus" — le user ne voit RIEN avant ce message
-4. Decris en detail: quels fichiers crees/modifies, les fonctionnalites, les choix techniques
-5. MAIS: NE RECOPIE PAS de blocs de code source. Ton rapport est une DESCRIPTION, pas du code
-6. REPONDS RAPIDEMENT — le user attend. Synthetise et envoie
-7. Pour les TABLEAUX: utilise la syntaxe markdown avec pipes |${opusSection}\n\n${reportsBody}`;
-    flog.info('ORCH', `Delivering combined report to Opus (${this.pendingReportsForOpus.size} delegates): ${combined.slice(0, 200)}`);
-
-    // Track delivered agents — late output from these will be muted completely.
-    // Mute agents AND interrupt persistent agents to stop wasting compute.
-    for (const delegate of this.expectedDelegates) {
-      this.deliveredToOpus.add(delegate);
-      const agent = this.getAgent(delegate);
-      if (agent.mute) {
-        agent.mute();
-        flog.info('ORCH', `Muted ${delegate} after combined delivery (save compute)`);
-      }
-      // Interrupt persistent agents (Codex app-server) — stop the active turn
-      if (agent.interruptCurrentTask) {
-        agent.interruptCurrentTask();
-        flog.info('ORCH', `Interrupted ${delegate} active turn after combined delivery`);
-      }
-    }
-
-    // Clear ALL delegate tracking — relay, mute, cross-talk, safety-net timers
-    for (const delegate of this.expectedDelegates) {
-      this.agentsOnRelay.delete(delegate);
-      this.agentsOnCrossTalk.delete(delegate);
-      this.awaitingCrossTalkReply.delete(delegate);
-      this.relayBuffer.set(delegate, []);
-      this.relayStartTime.delete(delegate);
-      // Cancel any pending safety-net timer
-      this.clearSafetyNetTimer(delegate);
-    }
-    // Capture agents and reports before clearing, for relay events below
-    const deliveredAgents = [...this.pendingReportsForOpus.keys()];
-    const deliveredReports = new Map(this.pendingReportsForOpus);
-
-    this.expectedDelegates.clear();
-    this.pendingReportsForOpus.clear();
-    this.crossTalkCount = 0;
-    // Clear @tous mode — Opus buffering returns to normal
-    this.opusAllMode = false;
-    // Clear delegate heartbeat — delivery complete
-    this.stopDelegateHeartbeat();
-
-    // Emit synthetic relay events for each agent — show a short preview of the
-    // agent's response. For multi-delegate (analyse/task), keep it brief.
-    // For single delegate (simple exchange), show the actual content preview.
-    const isMultiDelegate = deliveredAgents.length > 1;
-    for (const agent of deliveredAgents) {
-      const report = deliveredReports.get(agent) ?? '';
-      // Strip relay tags and prefixes from the preview
-      const cleanReport = report
-        .replace(/^\[(?:TO|FROM):(?:OPUS|SONNET|CODEX)\]\s*/gi, '')
-        .trim();
-      let preview: string;
-      if (isMultiDelegate) {
-        // Multi-delegate: short preview (first 80 chars) — Opus will fuse the reports
-        preview = cleanReport.length > 80
-          ? cleanReport.slice(0, 77) + '...'
-          : cleanReport || 'terminé';
-      } else {
-        // Single delegate: show more content (up to 120 chars)
-        preview = cleanReport.length > 120
-          ? cleanReport.slice(0, 117) + '...'
-          : cleanReport || 'terminé';
-      }
-      this.bus.emit('relay', {
-        from: agent,
-        to: 'opus',
-        content: preview,
-        id: randomUUID(),
-        timestamp: Date.now(),
-        relayCount: 0,
-      });
-    }
-
-    // DROP Opus buffer — its content was already extracted above and included in
-    // the combined delivery message (opusSection). Opus will use that context to
-    // write a fresh fused rapport. We don't show the raw buffer to the user because
-    // it's a premature partial analysis written before delegate reports arrived.
-    this.relayBuffer.set('opus', []);
-
-    // Deliver as a single message via the bus
-    this.recordRelay();
-    this.bus.send({ from: 'system', to: 'opus', content: combined });
-  }
-
-  async stop() {
+  async stop(): Promise<void> {
     flog.info('ORCH', 'Shutting down...');
-
-    // 0. Mark as not started FIRST — prevents Opus status handler from
-    //    scheduling a new restart timer when agents emit 'stopped' during shutdown
     this.started = false;
 
-    // 1. Pause and clear all queues FIRST — prevent new messages from being sent to agents.
-    //    pause() stops dequeuing; clear() drops pending items.
-    //    Together with the !this.started check in queue callbacks, this ensures
-    //    no agent.send() can happen after stop() begins.
     this.opusQueue.pause();
     this.sonnetQueue.pause();
     this.codexQueue.pause();
@@ -2339,23 +850,18 @@ INSTRUCTIONS CRITIQUES:
     this.sonnetQueue.clear();
     this.codexQueue.clear();
 
-    // 2. Cancel all safety-net, delegate, and restart timers
-    for (const timer of this.safetyNetTimers.values()) clearTimeout(timer);
-    this.safetyNetTimers.clear();
-    this.stopDelegateHeartbeat();
+    this.delegates.clearAllTimers();
     if (this.opusRestartTimer) {
       clearTimeout(this.opusRestartTimer);
       this.opusRestartTimer = null;
       this.opusRestartPending = false;
     }
 
-    // 3. Clear all relay/mute state so no stale handlers fire
-    this.agentsOnRelay.clear();
-    this.agentsOnCrossTalk.clear();
-    this.awaitingCrossTalkReply.clear();
-    this.expectedDelegates.clear();
-    this.pendingReportsForOpus.clear();
-    this.deliveredToOpus.clear();
+    this.relay.agentsOnRelay.clear();
+    this.crossTalk.reset();
+    this.delegates.expectedDelegates.clear();
+    this.delegates.pendingReports.clear();
+    this.delegates.deliveredToOpus.clear();
     this.opusAllMode = false;
     this.opusAllModeResponded = false;
     if (this.opusAllModeWorkerTimer) {
@@ -2363,12 +869,9 @@ INSTRUCTIONS CRITIQUES:
       this.opusAllModeWorkerTimer = null;
     }
     this.opusAllModePendingText = null;
-    this.directModeAgents.clear();
-    this.relayDrafts.clear();
-    for (const timer of this.relayDraftTimers.values()) clearTimeout(timer);
-    this.relayDraftTimers.clear();
+    this.relay.directModeAgents.clear();
+    this.relay.clearAllTimers();
 
-    // 4. Capture agent session IDs before stopping
     const opusSid = this.opus.getSessionId();
     const sonnetSid = this.sonnet.getSessionId();
     const codexSid = this.codex.getSessionId();
@@ -2376,11 +879,9 @@ INSTRUCTIONS CRITIQUES:
     if (sonnetSid) this.sessionManager?.setAgentSession('sonnet', sonnetSid);
     if (codexSid) this.sessionManager?.setAgentSession('codex', codexSid);
 
-    // 5. Kill all agents IMMEDIATELY — don't wait for session finalize first
     await Promise.allSettled([this.opus.stop(), this.sonnet.stop(), this.codex.stop()]);
     flog.info('ORCH', 'All agents stopped');
 
-    // 6. Finalize session AFTER agents are dead
     await this.sessionManager?.finalize();
     flog.info('ORCH', 'Shutdown complete');
   }

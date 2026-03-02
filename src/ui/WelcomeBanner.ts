@@ -1,6 +1,6 @@
 import chalk from 'chalk';
 import { THEME } from '../config/theme.js';
-import { stripAnsi } from '../utils/strip-ansi.js';
+import stripAnsi from 'strip-ansi';
 
 export function printWelcomeBanner(projectDir: string): void {
   const dir = projectDir.replace(/^\/home\/[^/]+\//, '~/');
