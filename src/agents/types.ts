@@ -93,6 +93,8 @@ export interface AgentProcess {
   stop(): Promise<void>;
   onOutput(handler: (line: OutputLine) => void): void;
   onStatusChange(handler: (status: AgentStatus) => void): void;
+  /** Remove all registered output/status handlers (used before re-binding). */
+  clearHandlers(): void;
   getSessionId(): string | null;
   setContextReminder?(reminder: string): void;
   mute?(): void;

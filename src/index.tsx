@@ -190,19 +190,30 @@ ${chalk.dim('Sessions: ./sessions/')}
 `);
 }
 
+/** Flush stdout before exiting to prevent truncated output in piped/captured contexts. */
+function exitClean(code: number): void {
+  if (process.stdout.writableEnded) {
+    process.exit(code);
+    return;
+  }
+  process.stdout.write('', () => process.exit(code));
+}
+
 export async function main() {
   const args = process.argv.slice(2);
 
   // Handle --help flag BEFORE initLog so it never crashes on disk issues
   if (args.includes('--help') || args.includes('-h')) {
     printHelp();
-    process.exit(0);
+    exitClean(0);
+    return;
   }
 
   // Handle --version flag
   if (args.includes('--version') || args.includes('-v')) {
     console.log(`fedi-cli v${VERSION}`);
-    process.exit(0);
+    exitClean(0);
+    return;
   }
 
   // Resolve log level: CLI flag > env var > config > default
@@ -225,7 +236,8 @@ export async function main() {
   // Handle --sessions flag
   if (args.includes('--sessions')) {
     await printSessionList(process.cwd());
-    process.exit(0);
+    exitClean(0);
+    return;
   }
 
   // Handle --view <id> flag
@@ -234,10 +246,12 @@ export async function main() {
     const sessionId = args[viewIdx + 1];
     if (!sessionId) {
       console.error(chalk.red('  Usage: fedi --view <session-id>'));
-      process.exit(1);
+      exitClean(1);
+      return;
     }
     await viewSession(process.cwd(), sessionId);
-    process.exit(0);
+    exitClean(0);
+    return;
   }
 
   // Handle --resume <id> flag

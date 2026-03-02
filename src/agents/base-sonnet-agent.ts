@@ -54,6 +54,47 @@ export abstract class BaseSonnetAgent implements AgentProcess {
     this.statusHandlers.push(handler);
   }
 
+  clearHandlers(): void {
+    this.outputHandlers.length = 0;
+    this.statusHandlers.length = 0;
+  }
+
+  /** Clean up process-level I/O handlers (readline, exit, error). */
+  protected clearProcessHandlers() {
+    if (this.stdoutRl) {
+      this.stdoutRl.removeAllListeners();
+      try {
+        this.stdoutRl.close();
+      } catch (err) {
+        flog.debug(
+          'AGENT',
+          `${this.logTag}: stdout readline close ignored: ${String(err).slice(0, 120)}`,
+        );
+      }
+      this.stdoutRl = null;
+    }
+    if (this.stderrRl) {
+      this.stderrRl.removeAllListeners();
+      try {
+        this.stderrRl.close();
+      } catch (err) {
+        flog.debug(
+          'AGENT',
+          `${this.logTag}: stderr readline close ignored: ${String(err).slice(0, 120)}`,
+        );
+      }
+      this.stderrRl = null;
+    }
+    if (this.process && this.procExitHandler) {
+      this.process.off('exit', this.procExitHandler);
+    }
+    if (this.process && this.procErrorHandler) {
+      this.process.off('error', this.procErrorHandler);
+    }
+    this.procExitHandler = null;
+    this.procErrorHandler = null;
+  }
+
   async start(config: SessionConfig, systemPrompt: string): Promise<void> {
     if (this.process) {
       flog.warn('AGENT', `${this.logTag}: Already running, stopping first`);
@@ -128,7 +169,7 @@ export abstract class BaseSonnetAgent implements AgentProcess {
       flog.info('AGENT', `${this.logTag}: Process exited with code ${code}`);
       this.setStatus('stopped');
       this.process = null;
-      this.clearHandlers();
+      this.clearProcessHandlers();
     };
     this.process.on('exit', this.procExitHandler);
 
@@ -174,12 +215,7 @@ export abstract class BaseSonnetAgent implements AgentProcess {
       flog.warn('AGENT', `${this.logTag}: Context window compacted`);
       const prevStatus = this.status;
       this.setStatus('compacting');
-      this.emit({
-        text: `${this.logTag}: contexte compacte (auto-compact)`,
-        timestamp: Date.now(),
-        type: 'info',
-      });
-      // Restore previous status — compacting is a transient notification
+      // Log only — no UI emit. The status badge already shows compacting state.
       this.setStatus(prevStatus === 'compacting' ? 'running' : prevStatus);
     }
 
@@ -412,53 +448,18 @@ export abstract class BaseSonnetAgent implements AgentProcess {
     return this.sessionId;
   }
 
-  protected clearHandlers() {
-    if (this.stdoutRl) {
-      this.stdoutRl.removeAllListeners();
-      try {
-        this.stdoutRl.close();
-      } catch (err) {
-        flog.debug(
-          'AGENT',
-          `${this.logTag}: stdout readline close ignored: ${String(err).slice(0, 120)}`,
-        );
-      }
-      this.stdoutRl = null;
-    }
-    if (this.stderrRl) {
-      this.stderrRl.removeAllListeners();
-      try {
-        this.stderrRl.close();
-      } catch (err) {
-        flog.debug(
-          'AGENT',
-          `${this.logTag}: stderr readline close ignored: ${String(err).slice(0, 120)}`,
-        );
-      }
-      this.stderrRl = null;
-    }
-    if (this.process && this.procExitHandler) {
-      this.process.off('exit', this.procExitHandler);
-    }
-    if (this.process && this.procErrorHandler) {
-      this.process.off('error', this.procErrorHandler);
-    }
-    this.procExitHandler = null;
-    this.procErrorHandler = null;
-  }
-
   async stop(): Promise<void> {
     this.sendAborted = true;
     this.sendChain = Promise.resolve();
     const proc = this.process;
     if (!proc) {
-      this.clearHandlers();
+      this.clearProcessHandlers();
       this.setStatus('stopped');
       return;
     }
 
     flog.info('AGENT', `${this.logTag}: Stopping...`);
-    this.clearHandlers();
+    this.clearProcessHandlers();
     proc.stdin?.end();
     proc.kill('SIGTERM');
 
@@ -483,7 +484,7 @@ export abstract class BaseSonnetAgent implements AgentProcess {
     });
 
     this.process = null;
-    this.clearHandlers();
+    this.clearProcessHandlers();
     this.setStatus('stopped');
   }
 }

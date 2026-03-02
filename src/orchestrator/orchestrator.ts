@@ -255,6 +255,12 @@ export class Orchestrator {
   bind(cb: OrchestratorCallbacks): void {
     this.callbacks = cb;
 
+    // Clear all previous handlers to prevent duplicates on re-bind
+    this.opus.clearHandlers();
+    for (const agent of Object.values(this.agents)) {
+      agent.clearHandlers();
+    }
+
     // Opus output handler
     this.opus.onOutput((line) => {
       flog.debug('AGENT', 'Output', {
@@ -263,7 +269,7 @@ export class Orchestrator {
         text: line.text.slice(0, 150),
       });
       const delegatesBefore = this.delegates.expectedDelegateCount;
-      const { preTagLines } = this.relay.detectRelayPatterns('opus', line.text);
+      const { foundRelayTag, preTagLines } = this.relay.detectRelayPatterns('opus', line.text);
 
       // Emit pre-tag conversational lines that Opus wrote before [TO:*] tags.
       // These are text the user should see (e.g. "Alright ! Let's go.")
@@ -277,6 +283,9 @@ export class Orchestrator {
           timestamp: line.timestamp,
           type: 'stdout',
         });
+        // If no relay tags were found, the entire text was pre-tag — already emitted above.
+        // Skip the final cb.onAgentOutput to avoid displaying the same text twice.
+        if (!foundRelayTag) return;
       }
 
       if (this.delegates.expectedDelegateCount > 0) {

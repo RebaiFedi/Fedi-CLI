@@ -62,6 +62,11 @@ export class MockAgent implements AgentProcess {
     this.statusHandlers.push(handler);
   }
 
+  clearHandlers(): void {
+    this.outputHandlers.length = 0;
+    this.statusHandlers.length = 0;
+  }
+
   getSessionId(): string | null {
     return this._started ? `mock-session-${this.id}` : null;
   }

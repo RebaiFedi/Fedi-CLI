@@ -112,6 +112,11 @@ export abstract class BaseAppServerAgent implements AgentProcess {
     this.statusHandlers.push(handler);
   }
 
+  clearHandlers(): void {
+    this.outputHandlers.length = 0;
+    this.statusHandlers.length = 0;
+  }
+
   mute(): void {
     this.muted = true;
   }
@@ -531,6 +536,9 @@ export abstract class BaseAppServerAgent implements AgentProcess {
       case 'thread/started':
       case 'thread/status/changed':
       case 'thread/name/updated':
+        // Low-value events — log only, no UI display
+        flog.debug('AGENT', `${this.logTag}: ${method} (ignored)`);
+        break;
       case 'thread/compacted':
         this.handleCompacted();
         break;
@@ -583,12 +591,7 @@ export abstract class BaseAppServerAgent implements AgentProcess {
     flog.warn('AGENT', `${this.logTag}: Context window compacted`);
     const prevStatus = this.status;
     this.setStatus('compacting');
-    this.emit({
-      text: `${this.logTag}: contexte compacte (auto-compact)`,
-      timestamp: Date.now(),
-      type: 'info',
-    });
-    // Restore previous status after emitting — compacting is transient
+    // Log only — no UI emit. The status badge already shows compacting state.
     this.setStatus(prevStatus === 'compacting' ? 'running' : prevStatus);
   }
 

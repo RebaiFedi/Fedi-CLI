@@ -153,3 +153,75 @@ export const SONNET_PARALLEL_TOOLS = `- Tu PEUX et tu DOIS appeler PLUSIEURS out
 export const CODEX_SPEED = `- NE lis PAS tout le repo. SEULEMENT les fichiers necessaires (3-5 pour une analyse).
 - Evite les commandes en boucle (nl, sed, cat en serie). Un fichier = une commande.
 - Si tu as assez d'info pour repondre, REPONDS. N'en rajoute pas.`;
+
+// ── Professional coding standards (all agents) ──
+
+export const CODE_FILE_SIZE = `- LIMITE: 800 lignes MAX par fichier. Au-dela → DECOMPOSE en modules.
+- Si un fichier existant depasse 800 lignes: extrais les blocs logiques en fichiers separes.
+- Un fichier = UNE responsabilite. Pas de "God Class" ou "God Module".
+- Si tu crees un fichier qui approche 500 lignes, planifie deja le decoupage.
+- Prefere PLUSIEURS petits fichiers clairs a UN gros fichier difficile a maintenir.`;
+
+export const CODE_QUALITY = `- CLEAN CODE — regles non-negociables:
+  - Noms DESCRIPTIFS: variables, fonctions, classes. Pas de x, tmp, data, result, info.
+  - Fonctions COURTES: max 40 lignes. Au-dela → extrais une sous-fonction.
+  - UNE fonction = UNE responsabilite. Si tu peux decrire avec "et" → scinde.
+  - ZERO code mort: pas de variables inutilisees, pas de fonctions non-appelees, pas de imports inutiles.
+  - ZERO code commente: si c'est commente, supprime-le. Git garde l'historique.
+  - ZERO valeurs hardcodees: nombres magiques → constantes nommees. URLs, limites, delais → config.
+  - ZERO duplication: 2 blocs identiques → extrais une fonction. DRY strict.
+  - Prefer const a let. Jamais var.
+  - Prefer les early returns aux if/else imbriques.
+  - JAMAIS de console.log en production. Utilise le logger du projet s'il existe.`;
+
+export const CODE_ARCHITECTURE = `- SEPARATION DES RESPONSABILITES:
+  - Logique metier SEPAREE de la presentation (pas de fetch dans un composant React).
+  - Types/interfaces dans des fichiers dedies (types.ts, interfaces/).
+  - Utils/helpers dans utils/ — fonctions PURES, testables, sans side-effects.
+  - Config dans config/ — jamais de valeurs de config dispersees dans le code.
+- IMPORTS PROPRES:
+  - Imports TRIES: 1) node builtins, 2) dependances externes, 3) fichiers internes.
+  - Pas d'imports circulaires. Si A importe B et B importe A → refactore.
+  - Imports PRECIS: pas de import * sauf cas justifie.
+- PATTERNS:
+  - Composition > heritage. Injecte les dependances, ne les instancie pas en dur.
+  - Interfaces pour les contrats entre modules. Pas de couplage direct.
+  - Errors explicites: types d'erreur dedies ou messages clairs. Pas de throw new Error("error").`;
+
+export const CODE_ERROR_HANDLING = `- GESTION D'ERREUR — OBLIGATOIRE:
+  - CHAQUE appel async/IO DOIT avoir un try/catch ou un .catch().
+  - Messages d'erreur DESCRIPTIFS: inclure QUOI a echoue, OU, et POURQUOI si possible.
+  - Valide les ENTREES aux frontieres du systeme (user input, API responses, fichiers).
+  - Pas de catch vide (catch {}). Au minimum, logge l'erreur.
+  - Pas de throw de string: throw new Error("message"). TOUJOURS Error ou classe derivee.
+  - Erreurs RECOVERABLE: tente une recovery (retry, fallback, default). UNRECOVERABLE: crash proprement.`;
+
+export const CODE_SECURITY = `- SECURITE — CRITIQUE (OWASP):
+  - JAMAIS de secrets dans le code (API keys, tokens, passwords). Utilise des variables d'environnement.
+  - SANITIZE toute entree utilisateur avant de l'utiliser (XSS, injection).
+  - ECHAPPE les entrees dans les commandes shell (pas de string concatenation pour les commandes).
+  - JAMAIS de eval(), new Function(), ou exec() avec des donnees utilisateur.
+  - Dependances: prefere les packages MAINTENUS et CONNUS. Verifie avant d'ajouter.
+  - Permissions: principe du moindre privilege. Pas de chmod 777, pas de 0.0.0.0 par defaut.`;
+
+export const CODE_VERIFICATION = `- VERIFICATION APRES MODIFICATION — OBLIGATOIRE:
+  - Apres avoir modifie du TypeScript: lance la verification de types si disponible.
+  - Apres avoir modifie du code avec des tests existants: lance les tests.
+  - Si un linter/formatter est configure dans le projet: verifie la conformite.
+  - Si tu crees un nouveau module: verifie que les imports fonctionnent.
+  - Si tu modifies une API: verifie que les appelants sont mis a jour.
+  - Rapport: inclus le resultat des verifications dans ton rapport a Opus.`;
+
+export const CODE_TESTING = `- TESTS — STANDARD PRO:
+  - Code nouveau → au minimum un test unitaire pour la logique principale.
+  - Bug fix → ajoute un test qui reproduit le bug AVANT le fix, et qui passe APRES.
+  - Refactoring → les tests existants doivent TOUS passer. Si un test casse → fixe ton refactoring.
+  - Noms de tests DESCRIPTIFS: "should return 404 when user not found" pas "test1".
+  - Tests ISOLES: chaque test est independant. Pas de dependance entre tests.`;
+
+export const OPUS_CODE_REVIEW = `- QUAND TU REVOIS les rapports des agents, VERIFIE:
+  - L'agent a-t-il suivi les standards de qualite? (noms, structure, pas de code mort)
+  - Le fichier depasse-t-il 800 lignes? Si oui, demande un decoupage.
+  - Y a-t-il des problemes de securite evidents? (secrets hardcodes, eval, pas de validation)
+  - L'agent a-t-il lance les verifications (types, tests, lint)?
+  - Si un probleme est detecte: re-delegue la correction (UN round, pas plus).`;

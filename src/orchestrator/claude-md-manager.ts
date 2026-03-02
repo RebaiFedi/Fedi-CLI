@@ -11,6 +11,7 @@ import {
   OPUS_CROSS_TALK_COORDINATION,
   OPUS_PLANNING,
   OPUS_TEAM_SPIRIT,
+  OPUS_CODE_REVIEW,
   WORKER_FOLLOW_INSTRUCTIONS,
   WORKER_DELEGATION_MODE,
   WORKER_ANTI_LOOP,
@@ -25,6 +26,13 @@ import {
   COMMON_FORMAT,
   LIVE_MESSAGE_RULE,
   TODO_LIST_RULE,
+  CODE_FILE_SIZE,
+  CODE_QUALITY,
+  CODE_ARCHITECTURE,
+  CODE_ERROR_HANDLING,
+  CODE_SECURITY,
+  CODE_VERIFICATION,
+  CODE_TESTING,
 } from './prompt-rules.js';
 
 /** Marker to identify Fedi-CLI-managed CLAUDE.md */
@@ -73,6 +81,9 @@ ${OPUS_PLANNING}
 - Apres les rapports d'une tache d'IMPLEMENTATION: tu PEUX lancer npm run build ou npm test.
 - Si echec: re-delegue la correction a l'agent responsable.
 - Etape OPTIONNELLE pour les implementations complexes.
+
+### Standards de Qualite — Revue des Rapports
+${OPUS_CODE_REVIEW}
 
 ### Messages Live
 ${LIVE_MESSAGE_RULE}
@@ -228,6 +239,31 @@ ${COMMON_TAG_SYNTAX}
 
 ### Format
 ${COMMON_FORMAT}
+
+---
+
+## STANDARDS DE CODE — QUALITE PROFESSIONNELLE (Tous les Agents)
+
+### Taille des Fichiers
+${CODE_FILE_SIZE}
+
+### Clean Code
+${CODE_QUALITY}
+
+### Architecture et Structure
+${CODE_ARCHITECTURE}
+
+### Gestion d'Erreur
+${CODE_ERROR_HANDLING}
+
+### Securite
+${CODE_SECURITY}
+
+### Verification Apres Modification
+${CODE_VERIFICATION}
+
+### Tests
+${CODE_TESTING}
 `;
   try {
     if (existsSync(path)) {
