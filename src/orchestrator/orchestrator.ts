@@ -817,10 +817,10 @@ export class Orchestrator {
 
     this.prewarmed = true;
 
-    // Spawn the process only — no message sent, no API connection yet.
-    // The system prompt will be sent with the first user message in startWithTask().
-    // This saves ~200ms of process spawn time.
-    await this.opus.start({ ...config, task: '' }, '', { prewarm: true });
+    // Spawn the process with --system-prompt but no message sent (no API connection yet).
+    // The user task will be sent as first message in startWithTask().
+    const opusSystemPrompt = getOpusSystemPrompt(config.projectDir);
+    await this.opus.start({ ...config, task: '' }, opusSystemPrompt, { prewarm: true });
 
     flog.info('ORCH', 'Opus process pre-spawned (waiting for first user message)');
   }
@@ -837,35 +837,32 @@ export class Orchestrator {
     this.sessionMessageHandler = (msg: Message) => this.sessionManager?.addMessage(msg);
     this.bus.on('message', this.sessionMessageHandler);
 
-    // Fast path: process was pre-spawned — send system prompt + task as first message
+    // Build user message (task only — system prompt is passed via --system-prompt flag)
+    let userMsg = task;
+    if (previousContext)
+      userMsg += `\n\n--- HISTORIQUE SESSION PRECEDENTE ---\n${previousContext}\n--- FIN HISTORIQUE ---`;
+
+    // Fast path: process was pre-spawned — send task as first message
     // (no re-spawn needed, saves ~200ms)
     if (this.prewarmed) {
       this.started = true;
       this.prewarmed = false;
 
-      let opusPrompt = getOpusSystemPrompt(config.projectDir);
-      if (previousContext)
-        opusPrompt += `\n\n--- HISTORIQUE SESSION PRECEDENTE ---\n${previousContext}\n--- FIN HISTORIQUE ---`;
-      opusPrompt += `\n\nMESSAGE DU USER: ${task}`;
-
-      this.opus.send(opusPrompt);
-      flog.info('ORCH', 'Opus pre-spawned — system prompt + task sent (no re-spawn)');
+      this.opus.send(userMsg);
+      flog.info('ORCH', 'Opus pre-spawned — task sent (no re-spawn)');
       return;
     }
 
-    // Cold start path — spawn Opus with task in system prompt
+    // Cold start path — spawn Opus with system prompt via --system-prompt flag
     ensureClaudeMd(config.projectDir);
 
-    let opusPrompt = getOpusSystemPrompt(config.projectDir);
-    if (previousContext)
-      opusPrompt += `\n\n--- HISTORIQUE SESSION PRECEDENTE ---\n${previousContext}\n--- FIN HISTORIQUE ---`;
-    opusPrompt += `\n\nMESSAGE DU USER: ${task}`;
+    const opusSystemPrompt = getOpusSystemPrompt(config.projectDir);
 
     this.opusQueue.start();
     this.sonnetQueue.start();
     this.codexQueue.start();
 
-    await this.opus.start({ ...config, task }, opusPrompt);
+    await this.opus.start({ ...config, task }, opusSystemPrompt);
     this.started = true;
 
     if (this.opus.getSessionId()) {
@@ -874,6 +871,10 @@ export class Orchestrator {
         : `[NOUVELLE TACHE DU USER] ${task}`;
       this.opus.send(resumeMsg);
       flog.info('ORCH', 'Opus resumed session — sent new task as follow-up');
+    } else {
+      // Fresh session — system prompt sent via flag, now send the task
+      this.opus.send(userMsg);
+      flog.info('ORCH', 'Opus cold start — task sent as first message');
     }
 
     flog.info('ORCH', 'Opus started (Sonnet, Codex on standby — lazy start)');
