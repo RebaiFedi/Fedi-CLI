@@ -859,4 +859,101 @@ describe('Orchestrator', () => {
       );
     });
   });
+
+  // ── Opus output deduplication ─────────────────────────────────────────────
+
+  describe('Opus output deduplication', () => {
+    it('emits simple Opus text exactly once (no duplicate)', async () => {
+      // Opus says "Salut" with no relay tags → should appear once, not twice
+      h.log.outputs.length = 0;
+      h.opus.emitText('Salut ! Comment ça va ?');
+      h.opus.setStatus('waiting');
+      await h.flush();
+
+      const opusOutputs = h.log.outputs.filter(
+        (o) => o.agent === 'opus' && o.line.type === 'stdout',
+      );
+      assert.equal(
+        opusOutputs.length,
+        1,
+        `Expected 1 Opus output, got ${opusOutputs.length}: ${opusOutputs.map((o) => o.line.text.slice(0, 50)).join(' | ')}`,
+      );
+      assert.match(opusOutputs[0].line.text, /Salut/);
+    });
+
+    it('emits pre-tag text separately from relay tag text', async () => {
+      // Opus says "OK !" then delegates → pre-tag text should appear
+      h.log.outputs.length = 0;
+      h.opus.emitText('OK ! Je lance Sonnet.\n[TO:SONNET] Analyse le code');
+      await h.flush();
+
+      const opusStdout = h.log.outputs.filter(
+        (o) => o.agent === 'opus' && o.line.type === 'stdout',
+      );
+      // Pre-tag text "OK ! Je lance Sonnet." must be emitted at least once
+      assert.ok(opusStdout.length >= 1, 'Pre-tag text should be emitted');
+      assert.match(opusStdout[0].line.text, /OK/);
+      assert.ok(
+        !opusStdout[0].line.text.includes('[TO:SONNET]'),
+        'Pre-tag output should not contain relay tags',
+      );
+      // Relay should be detected
+      assert.ok(
+        h.log.relays.length >= 1 || h.orchestrator.hasPendingDelegates,
+        'Relay tag should create a delegate',
+      );
+    });
+
+    it('does not emit pre-tag when delegates are already pending', async () => {
+      // First, establish a pending delegate
+      h.opus.emitText('[TO:SONNET] First task');
+      await h.flush();
+      h.log.outputs.length = 0;
+
+      // Opus sends more text while delegate is pending → should be buffered, not emitted
+      h.opus.emitText('Some follow-up text');
+      await h.flush();
+
+      const opusStdout = h.log.outputs.filter(
+        (o) => o.agent === 'opus' && o.line.type === 'stdout',
+      );
+      assert.equal(opusStdout.length, 0, 'Should buffer all Opus stdout while delegates pending');
+    });
+  });
+
+  // ── clearHandlers prevents duplicates on re-bind ──────────────────────────
+
+  describe('clearHandlers on re-bind', () => {
+    it('calling bind() twice does not duplicate output handlers', async () => {
+      // Re-bind with the same callbacks
+      h.orchestrator.bind({
+        onAgentOutput: (agent, line) => {
+          h.log.outputs.push({ agent, line });
+        },
+        onAgentStatus: (agent, status) => {
+          h.log.statuses.push({ agent, status });
+        },
+        onRelay: (msg) => {
+          h.log.relays.push(msg);
+        },
+        onRelayBlocked: (msg) => {
+          h.log.relaysBlocked.push(msg);
+        },
+      });
+
+      h.log.outputs.length = 0;
+      h.opus.emitText('Test after re-bind');
+      h.opus.setStatus('waiting');
+      await h.flush();
+
+      const opusOutputs = h.log.outputs.filter(
+        (o) => o.agent === 'opus' && o.line.type === 'stdout',
+      );
+      assert.equal(
+        opusOutputs.length,
+        1,
+        `After re-bind, expected 1 output, got ${opusOutputs.length} (duplicate handlers?)`,
+      );
+    });
+  });
 });
