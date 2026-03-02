@@ -9,6 +9,12 @@ import { loadUserConfig } from '../config/user-config.js';
 
 const _cfg = loadUserConfig();
 
+/** Circuit breaker state per agent */
+interface CircuitState {
+  failures: number;
+  openedAt: number | null;
+}
+
 /** Dependencies injected into DelegateTracker */
 export interface DelegateTrackerDeps {
   agents: Record<AgentId, AgentProcess>;
@@ -44,6 +50,11 @@ export class DelegateTracker {
   private readonly HEARTBEAT_INTERVAL_MS = 10_000;
   private readonly CODEX_TIMEOUT_MS = _cfg.codexTimeoutMs;
 
+  /** Circuit breaker — track consecutive failures per agent */
+  private readonly circuitBreaker: Map<AgentId, CircuitState> = new Map();
+  private readonly CB_THRESHOLD = _cfg.circuitBreakerThreshold;
+  private readonly CB_COOLDOWN_MS = _cfg.circuitBreakerCooldownMs;
+
   private readonly deps: DelegateTrackerDeps;
 
   constructor(deps: DelegateTrackerDeps) {
@@ -65,6 +76,11 @@ export class DelegateTracker {
   }
 
   // ── Safety-net timers ──
+
+  setSafetyNetTimer(agentId: AgentId, timer: ReturnType<typeof setTimeout>): void {
+    this.clearSafetyNetTimer(agentId);
+    this.safetyNetTimers.set(agentId, timer);
+  }
 
   clearSafetyNetTimer(agentId: AgentId): void {
     const timer = this.safetyNetTimers.get(agentId);
@@ -182,9 +198,41 @@ export class DelegateTracker {
     this.lastActivity.clear();
   }
 
+  // ── Circuit breaker ──
+
+  /** Record a successful completion — resets failure count */
+  recordSuccess(agent: AgentId): void {
+    this.circuitBreaker.delete(agent);
+  }
+
+  /** Record a failure — increments count, opens breaker if threshold reached */
+  recordFailure(agent: AgentId): void {
+    const state = this.circuitBreaker.get(agent) ?? { failures: 0, openedAt: null };
+    state.failures++;
+    if (state.failures >= this.CB_THRESHOLD) {
+      state.openedAt = Date.now();
+      flog.warn('ORCH', `Circuit breaker OPEN for ${agent} (${state.failures} consecutive failures)`);
+    }
+    this.circuitBreaker.set(agent, state);
+  }
+
+  /** Check if circuit is open (agent should not receive fallback work) */
+  isCircuitOpen(agent: AgentId): boolean {
+    const state = this.circuitBreaker.get(agent);
+    if (!state?.openedAt) return false;
+    if (Date.now() - state.openedAt >= this.CB_COOLDOWN_MS) {
+      flog.info('ORCH', `Circuit breaker HALF-OPEN for ${agent} (cooldown elapsed) — allowing retry`);
+      state.openedAt = null;
+      state.failures = 0;
+      return false;
+    }
+    return true;
+  }
+
   // ── Fallback ──
 
   pickFallbackAgent(failedAgent: AgentId): AgentId | null {
+    this.recordFailure(failedAgent);
     const fallbackMap: Record<string, AgentId[]> = {
       sonnet: ['codex'],
       codex: ['sonnet'],
@@ -194,6 +242,10 @@ export class DelegateTracker {
     for (const candidate of candidates) {
       if (!this.deps.isAgentEnabled(candidate)) continue;
       if (this.expectedDelegates.has(candidate)) continue;
+      if (this.isCircuitOpen(candidate)) {
+        flog.info('ORCH', `Fallback candidate ${candidate} skipped (circuit breaker open)`);
+        continue;
+      }
       const agent = this.deps.agents[candidate];
       if (agent.status === 'error' || agent.status === 'stopped') {
         flog.info('ORCH', `Fallback candidate ${candidate} skipped (status=${agent.status})`);
@@ -425,6 +477,7 @@ INSTRUCTIONS CRITIQUES:
     this.lastDelegationContent.clear();
     for (const timer of this.safetyNetTimers.values()) clearTimeout(timer);
     this.safetyNetTimers.clear();
+    this.circuitBreaker.clear();
     this.stopHeartbeat();
   }
 

@@ -13,7 +13,10 @@ import {
 } from './prompts.js';
 import { flog } from '../utils/log.js';
 import { SessionManager } from '../utils/session-manager.js';
+import { loadUserConfig } from '../config/user-config.js';
 import { ensureClaudeMd } from './claude-md-manager.js';
+
+const _cfg = loadUserConfig();
 import { CrossTalkManager } from './cross-talk-manager.js';
 import { BufferManager } from './buffer-manager.js';
 import { DelegateTracker } from './delegate-tracker.js';
@@ -312,19 +315,21 @@ export class Orchestrator {
           return;
         }
         this.opusRestartPending = true;
+        const backoffDelay = _cfg.opusRestartBaseDelayMs * Math.pow(2, this.opusRestartCount);
+        flog.info('ORCH', `Opus restart scheduled in ${backoffDelay}ms (attempt ${this.opusRestartCount + 1}/${this.MAX_OPUS_RESTARTS})`);
         this.opusRestartTimer = setTimeout(async () => {
           this.opusRestartTimer = null;
           this.opusRestartPending = false;
           if (!this.started || !this.config) return;
           this.opusRestartCount++;
-          flog.warn('ORCH', 'Opus crashed — auto-restarting...');
-          cb.onAgentOutput('opus', { text: 'Opus redémarrage en cours...', timestamp: Date.now(), type: 'info' });
+          flog.warn('ORCH', `Opus crashed — auto-restarting (attempt ${this.opusRestartCount})...`);
+          cb.onAgentOutput('opus', { text: `Opus redémarrage en cours (tentative ${this.opusRestartCount})...`, timestamp: Date.now(), type: 'info' });
           try {
             await this.opus.start({ ...this.config, task: '' }, getOpusSystemPrompt(this.config.projectDir));
           } catch (e) {
             flog.error('ORCH', `Opus restart failed: ${e}`);
           }
-        }, 2_000);
+        }, backoffDelay);
       }
     });
 
@@ -393,7 +398,8 @@ export class Orchestrator {
 
   private bindWorkerAgent(agentId: AgentId, agent: AgentProcess, cb: OrchestratorCallbacks): void {
     const label = agentId.charAt(0).toUpperCase() + agentId.slice(1);
-    const crossTalkClearThreshold = 2_000;
+    const crossTalkMuteTimeout = _cfg.crossTalkMuteTimeoutMs;
+    const crossTalkClearThreshold = _cfg.crossTalkClearThresholdMs;
 
     agent.onOutput((line) => {
       flog.debug('AGENT', 'Output', { agent: agentId, type: line.type, text: line.text.slice(0, 150) });
@@ -431,8 +437,8 @@ export class Orchestrator {
       // Cross-talk mute handling
       if (this.crossTalk.isOnCrossTalk(agentId)) {
         const muteTime = this.crossTalk.getCrossTalkTime(agentId)!;
-        if (Date.now() - muteTime > 15_000) {
-          flog.warn('ORCH', `${label} cross-talk mute timeout (15s) — unmuting`);
+        if (Date.now() - muteTime > crossTalkMuteTimeout) {
+          flog.warn('ORCH', `${label} cross-talk mute timeout (${crossTalkMuteTimeout / 1000}s) — unmuting`);
           this.crossTalk.clearOnCrossTalk(agentId);
         } else {
           this.relay.detectRelayPatterns(agentId, line.text);
@@ -565,7 +571,6 @@ export class Orchestrator {
 
       // Safety-net auto-relay
       if (s === 'waiting' && this.relay.agentsOnRelay.has(agentId) && !this.crossTalk.isAwaitingReply(agentId)) {
-        this.delegates.clearSafetyNetTimer(agentId);
         const timer = setTimeout(() => {
           if (!this.relay.agentsOnRelay.has(agentId) || this.delegates.pendingReports.has(agentId)) return;
           const agentInstance = this.agents[agentId];
@@ -575,8 +580,7 @@ export class Orchestrator {
           }
           this.delegates.autoRelayBuffer(agentId, this.relay);
         }, 500);
-        // Store timer reference via delegates for cleanup
-        (this as unknown as Record<string, unknown>)[`_safetyNet_${agentId}`] = timer;
+        this.delegates.setSafetyNetTimer(agentId, timer);
       }
 
       cb.onAgentStatus(agentId, s);

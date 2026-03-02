@@ -12,6 +12,7 @@ import { loadUserConfig } from '../config/user-config.js';
 const _cfg = loadUserConfig();
 const RELAY_WINDOW_MS = _cfg.relayWindowMs;
 const MAX_RELAYS_PER_WINDOW = _cfg.maxRelaysPerWindow;
+const MAX_RELAY_CONTENT_LENGTH = _cfg.maxRelayContentLength;
 
 /** Dependencies injected into RelayRouter */
 export interface RelayRouterDeps {
@@ -249,10 +250,23 @@ export class RelayRouter {
     return foundRelayTag;
   }
 
+  // ── Content sanitization ──
+
+  private sanitizeRelayContent(content: string): string {
+    // Strip control characters (keep newlines and tabs)
+    let sanitized = content.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '');
+    // Enforce max length
+    if (sanitized.length > MAX_RELAY_CONTENT_LENGTH) {
+      flog.warn('RELAY', `Content truncated: ${sanitized.length} → ${MAX_RELAY_CONTENT_LENGTH} chars`);
+      sanitized = sanitized.slice(0, MAX_RELAY_CONTENT_LENGTH) + '\n... [contenu tronqué]';
+    }
+    return sanitized;
+  }
+
   // ── Core routing with guard rails ──
 
   routeRelayMessage(from: AgentId, target: AgentId, rawContent: string): void {
-    const content = rawContent.trim();
+    const content = this.sanitizeRelayContent(rawContent.trim());
     if (!content) return;
     if (content.replace(/[`'".,;:\-–—\s]/g, '').length < 3) {
       flog.debug('RELAY', `Dropping fragment relay ${from}->${target}: "${content}"`);
@@ -365,6 +379,7 @@ export class RelayRouter {
 
     // Agent reporting back to Opus — buffer for combined delivery
     if (target === 'opus' && from !== 'opus' && this.deps.delegates.expectedDelegates.has(from)) {
+      this.deps.delegates.recordSuccess(from);
       this.deps.delegates.pendingReports.set(from, content);
       this.agentsOnRelay.delete(from);
       this.deps.buffers.clearBuffer(from);
