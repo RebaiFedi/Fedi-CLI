@@ -9,7 +9,7 @@ import { flog } from '../utils/log.js';
 import stripAnsi from 'strip-ansi';
 import { THEME, agentHex, agentDisplayName, agentChalkColor } from '../config/theme.js';
 import { getMaxMessages, getFlushInterval, INDENT } from '../config/constants.js';
-import { outputToEntries, extractTasks } from '../rendering/output-transform.js';
+import { extractTasks } from '../rendering/output-transform.js';
 import { entriesToAnsiOutputLines } from '../rendering/ansi-renderer.js';
 import { compactOutputLines } from '../rendering/compact.js';
 import { ThinkingSpinner } from './ThinkingSpinner.js';

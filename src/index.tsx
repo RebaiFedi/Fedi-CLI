@@ -351,6 +351,11 @@ export async function main() {
   );
 
   await waitUntilExit();
+
+  // Safety-net: finalize session even if SIGINT handler didn't run
+  // (e.g. terminal closed, Ink exited naturally, EOF on stdin)
+  await orchestrator.stop().catch((err) => flog.error('SYSTEM', `Cleanup error: ${err}`));
+
   flog.info('SYSTEM', '=== Fedi CLI exiting ===');
 }
 

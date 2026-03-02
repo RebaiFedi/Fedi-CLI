@@ -23,10 +23,11 @@ Quand Opus delegue une tache a Sonnet et/ou Codex via [TO:SONNET] / [TO:CODEX]:
 - [FROM:USER] → reponds directement au user. PAS de [TO:OPUS]
 - Fais EXACTEMENT ce qu'on te demande. "analyse" = analyse seulement, "fix" = modifie
 
-## REGLE CRITIQUE — ANTI-BOUCLE CROSS-TALK (Sonnet & Codex)
+## CROSS-TALK — COLLABORATION ENTRE AGENTS (Sonnet & Codex)
 
-- Apres avoir envoye [TO:OPUS]: ta tache est TERMINEE. SILENCE TOTAL.
-- NE reponds PLUS a l'autre agent (pas de "Merci!", "Bonne continuation!", "A la prochaine!")
-- Le cross-talk est pour la COORDINATION TECHNIQUE pendant le travail, PAS pour les au-revoir
-- Sequence: travail → cross-talk technique si besoin → [TO:OPUS] → STOP. Plus un mot.
-- Chaque message inutile apres [TO:OPUS] BLOQUE la livraison du rapport a Opus
+- PENDANT le travail: parlez-vous LIBREMENT! Coordonnez, informez, aidez. C'est une equipe.
+- Codex peut envoyer des messages a Sonnet, Sonnet peut envoyer a Codex — c'est NORMAL et ENCOURAGE.
+- Utilisez le cross-talk pour: contrats API, types partages, coordination front/back, aide mutuelle.
+- APRES avoir envoye [TO:OPUS]: votre tache est finie. Ne renvoyez plus de messages.
+- PAS de politesses APRES le rapport ("Merci!", "Bonne continuation!") — ca bloque la livraison.
+- Sequence: travail → cross-talk libre → [TO:OPUS] rapport final → fin.

@@ -12,7 +12,7 @@ import type { TodoItem } from './TodoPanel.js';
 import type { Orchestrator } from '../orchestrator/orchestrator.js';
 import { THEME, agentHex, agentDisplayName, agentChalkColor } from '../config/theme.js';
 import { INDENT } from '../config/constants.js';
-import { outputToEntries, extractTasks } from '../rendering/output-transform.js';
+import { outputToEntries } from '../rendering/output-transform.js';
 import { entriesToAnsiOutputLines } from '../rendering/ansi-renderer.js';
 import { compactOutputLines } from '../rendering/compact.js';
 import { printSessionResume } from './SessionResumeView.js';
@@ -306,11 +306,14 @@ export function useOrchestratorBinding({
     };
     process.on('SIGINT', handleExit);
     process.on('SIGTERM', handleExit);
+    // Capture current ref values for cleanup (React hooks lint rule)
+    const capturedFlushTimer = flushTimer;
+    const capturedThinkingTimer = thinkingClearTimer;
     return () => {
       process.off('SIGINT', handleExit);
       process.off('SIGTERM', handleExit);
-      if (flushTimer.current) clearTimeout(flushTimer.current);
-      if (thinkingClearTimer.current) clearTimeout(thinkingClearTimer.current);
+      if (capturedFlushTimer.current) clearTimeout(capturedFlushTimer.current);
+      if (capturedThinkingTimer.current) clearTimeout(capturedThinkingTimer.current);
     };
   }, [
     orchestrator,

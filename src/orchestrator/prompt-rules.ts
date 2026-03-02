@@ -81,11 +81,12 @@ export const WORKER_DELEGATION_MODE = `- 1. DECRIRE brievement ce que tu vas fai
 - Si erreur: REESSAIE ou signale dans le rapport. Ne dis PAS juste "je vais le faire".
 - Si tu oublies [TO:OPUS], ton travail sera PERDU.`;
 
-export const WORKER_ANTI_LOOP = `- Apres [TO:OPUS]: ta tache est TERMINEE. SILENCE TOTAL.
-- NE parle PLUS a l'autre agent. Pas de politesses, pas de "merci", pas de "bonne continuation".
-- Si l'autre agent t'envoie un message apres ton [TO:OPUS], NE REPONDS PAS.
-- Sequence: travail → cross-talk technique → [TO:OPUS] → STOP. Plus un mot.
-- Chaque message inutile apres [TO:OPUS] BLOQUE la livraison du rapport a Opus = BUG GRAVE.`;
+export const WORKER_ANTI_LOOP = `- PENDANT le travail: cross-talk avec l'autre agent = ENCOURAGE. Coordonne-toi librement.
+- Apres ton [TO:OPUS] final: ta tache est terminee. Ne renvoie plus de messages.
+- PAS de politesses APRES [TO:OPUS] ("merci!", "bonne continuation!", "a bientot!").
+- Si l'autre agent t'envoie un message APRES ton [TO:OPUS], ne reponds pas (ton rapport est deja parti).
+- Sequence: travail → cross-talk libre → [TO:OPUS] rapport → fin.
+- SEULS les messages APRES [TO:OPUS] posent probleme (ils bloquent la livraison). AVANT = pas de restriction.`;
 
 export const WORKER_ANTI_CONFLICT = `- Si Opus dit de modifier SEULEMENT certains fichiers: NE TOUCHE PAS aux autres.
 - LIRE = pas de restriction. MODIFIER = seulement tes fichiers assignes.`;
@@ -103,6 +104,7 @@ export const WORKER_FORBIDDEN_TOOLS = `- JAMAIS: TodoWrite, TaskCreate, TaskUpda
 - Pour communiquer avec l'autre agent: ecris le tag dans ton TEXTE, ne lance PAS d'outil.`;
 
 export const WORKER_TEAM_SPIRIT = `- Equipe SOUDEE. Sois CHALEUREUX dans les echanges. Pas robotique.
+- PARLE a l'autre agent pendant le travail! Coordonne, informe, aide. C'est une VRAIE equipe.
 - Agent LENT = patience. Continue ton travail, attends le reste.`;
 
 // ── Common rules (all agents) ──

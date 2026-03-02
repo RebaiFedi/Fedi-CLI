@@ -261,7 +261,22 @@ export class Orchestrator {
         type: line.type,
         text: line.text.slice(0, 150),
       });
-      this.relay.detectRelayPatterns('opus', line.text);
+      const delegatesBefore = this.delegates.expectedDelegateCount;
+      const { preTagLines } = this.relay.detectRelayPatterns('opus', line.text);
+
+      // Emit pre-tag conversational lines that Opus wrote before [TO:*] tags.
+      // These are text the user should see (e.g. "Alright ! Let's go.")
+      // They must be emitted BEFORE the buffering check because detectRelayPatterns
+      // may have added new delegates, causing the buffer check to swallow them.
+      if (preTagLines.length > 0 && delegatesBefore === 0 && line.type === 'stdout') {
+        const preTagText = preTagLines.join('\n');
+        flog.debug('ORCH', `Opus pre-tag text emitted: ${preTagText.slice(0, 100)}`);
+        cb.onAgentOutput('opus', {
+          text: preTagText,
+          timestamp: line.timestamp,
+          type: 'stdout',
+        });
+      }
 
       if (this.delegates.expectedDelegateCount > 0) {
         if (line.type === 'stdout') {
@@ -506,7 +521,7 @@ export class Orchestrator {
 
       if (this.opusAllMode && this.delegates.expectedDelegateCount > 0 && line.type === 'stdout') {
         flog.debug('ORCH', `${label} stdout BLOCKED (@tous delegation active)`);
-        this.relay.detectRelayPatterns(agentId, line.text);
+        this.relay.detectRelayPatterns(agentId, line.text); // preTagLines unused for workers
         this.buffers.pushToBuffer(agentId, line);
         this.buffers.maybeEmitStatusSnippet(agentId, line.text, cb);
         return;
@@ -584,8 +599,8 @@ export class Orchestrator {
         }
       }
 
-      const hasRelay = this.relay.detectRelayPatterns(agentId, line.text);
-      if (!hasRelay) cb.onAgentOutput(agentId, line);
+      const { foundRelayTag } = this.relay.detectRelayPatterns(agentId, line.text);
+      if (!foundRelayTag) cb.onAgentOutput(agentId, line);
     });
 
     agent.onStatusChange((s) => {
@@ -753,6 +768,7 @@ export class Orchestrator {
 
   async startWithTask(task: string, previousContext?: string): Promise<void> {
     if (this.started || !this.config) return;
+    this.stopping = false;
     const config = this.config;
     flog.info('ORCH', `Starting Opus with task: ${task.slice(0, 80)}`);
 
@@ -992,7 +1008,11 @@ export class Orchestrator {
 
   // ── Shutdown ──
 
+  private stopping = false;
+
   async stop(): Promise<void> {
+    if (this.stopping) return; // idempotent — already shutting down
+    this.stopping = true;
     flog.info('ORCH', 'Shutting down...');
     this.started = false;
 

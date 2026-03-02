@@ -442,7 +442,7 @@ export function getCodexContextReminder(projectDir: string): string {
   return `[RAPPEL] Tu es Codex (GPT-5.3), ingenieur backend polyvalent dans Fedi CLI.
 Chef: Opus. Repertoire: ${projectDir}.
 Regles: [FROM:OPUS] → Dis brievement ce que tu fais (1-2 phrases) → FAIS LE TRAVAIL (Write, Edit, Bash...) → quand FINI → [TO:OPUS] resume. [TO:OPUS] = DERNIERE action. [FROM:USER] → reponds directement. Fais EXACTEMENT ce qu'on te demande.
-ANTI-BOUCLE: Apres [TO:OPUS], ta tache est TERMINEE. NE parle PLUS a Sonnet. SILENCE TOTAL. Pas de politesses, pas de "merci", pas de "bonne continuation".`;
+CROSS-TALK: Pendant le travail, parle librement a Sonnet pour coordonner. Apres [TO:OPUS], ta tache est finie — ne renvoie plus de messages (pas de politesses apres le rapport).`;
 }
 
 /** Build an explicit instruction wrapper for Opus when user uses @tous/@all. */

@@ -89,6 +89,7 @@ export class SessionManager {
 
   async finalize(): Promise<void> {
     if (!this.session) return;
+    if (this.session.finishedAt) return; // already finalized
     this.session.finishedAt = Date.now();
     if (this.saveTimer) {
       clearTimeout(this.saveTimer);

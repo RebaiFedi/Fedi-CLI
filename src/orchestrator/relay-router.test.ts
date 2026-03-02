@@ -168,8 +168,8 @@ describe('RelayRouter', () => {
   describe('detectRelayPatterns', () => {
     it('detects a relay tag and creates a draft', () => {
       const { router } = makeRouter();
-      const found = router.detectRelayPatterns('opus', '[TO:SONNET] Do the work');
-      assert.equal(found, true);
+      const { foundRelayTag } = router.detectRelayPatterns('opus', '[TO:SONNET] Do the work');
+      assert.equal(foundRelayTag, true);
       const draft = router.getDraft('opus');
       assert.ok(draft);
       assert.equal(draft.target, 'sonnet');
@@ -177,29 +177,54 @@ describe('RelayRouter', () => {
 
     it('returns false for no relay tag', () => {
       const { router } = makeRouter();
-      const found = router.detectRelayPatterns('opus', 'Just regular text');
-      assert.equal(found, false);
+      const { foundRelayTag } = router.detectRelayPatterns('opus', 'Just regular text');
+      assert.equal(foundRelayTag, false);
     });
 
     it('skips markdown context lines', () => {
       const { router } = makeRouter();
-      const found = router.detectRelayPatterns('opus', '```\n[TO:SONNET] inside code\n```');
-      // The ``` line is markdown context — tag on second line should still be detected
-      // because only ``` lines themselves are skipped, not subsequent lines
-      // Actually the first line (```) is skipped, the tag line is processed normally
-      assert.equal(found, true);
+      const { foundRelayTag } = router.detectRelayPatterns(
+        'opus',
+        '```\n[TO:SONNET] inside code\n```',
+      );
+      assert.equal(foundRelayTag, true);
     });
 
     it('skips inline code with relay tags', () => {
       const { router } = makeRouter();
-      const found = router.detectRelayPatterns('opus', '`[TO:SONNET] example tag`');
-      assert.equal(found, false);
+      const { foundRelayTag } = router.detectRelayPatterns('opus', '`[TO:SONNET] example tag`');
+      assert.equal(foundRelayTag, false);
     });
 
     it('splits multiple tags on same line', () => {
       const { router } = makeRouter();
-      const found = router.detectRelayPatterns('opus', '[TO:SONNET] frontend[TO:CODEX] backend');
-      assert.equal(found, true);
+      const { foundRelayTag } = router.detectRelayPatterns(
+        'opus',
+        '[TO:SONNET] frontend[TO:CODEX] backend',
+      );
+      assert.equal(foundRelayTag, true);
+    });
+
+    it('returns pre-tag lines before relay tags', () => {
+      const { router } = makeRouter();
+      const { foundRelayTag, preTagLines } = router.detectRelayPatterns(
+        'opus',
+        'Haha, alright !\n---\nOpus: Bon les gars.\n[TO:SONNET] Do the work',
+      );
+      assert.equal(foundRelayTag, true);
+      assert.ok(preTagLines.length >= 2, `expected pre-tag lines, got ${preTagLines.length}`);
+      assert.ok(preTagLines.some((l) => l.includes('Haha')));
+      assert.ok(preTagLines.some((l) => l.includes('Bon les gars')));
+    });
+
+    it('returns empty preTagLines when no pre-tag text', () => {
+      const { router } = makeRouter();
+      const { foundRelayTag, preTagLines } = router.detectRelayPatterns(
+        'opus',
+        '[TO:SONNET] Do the work',
+      );
+      assert.equal(foundRelayTag, true);
+      assert.equal(preTagLines.length, 0);
     });
 
     it('appends content to existing draft', () => {
@@ -214,8 +239,8 @@ describe('RelayRouter', () => {
 
     it('prevents self-delegation (sonnet→sonnet)', () => {
       const { router } = makeRouter();
-      const found = router.detectRelayPatterns('sonnet', '[TO:SONNET] self');
-      assert.equal(found, false);
+      const { foundRelayTag } = router.detectRelayPatterns('sonnet', '[TO:SONNET] self');
+      assert.equal(foundRelayTag, false);
     });
   });
 

@@ -242,7 +242,10 @@ export class RelayRouter {
 
   // ── Pattern detection (streamed output) ──
 
-  detectRelayPatterns(from: AgentId, text: string): boolean {
+  detectRelayPatterns(
+    from: AgentId,
+    text: string,
+  ): { foundRelayTag: boolean; preTagLines: string[] } {
     const rawLines = text.split('\n');
     const lines: string[] = [];
     const multiTagRe = /(\[TO:(?:SONNET|CODEX|OPUS)\])/g;
@@ -273,6 +276,7 @@ export class RelayRouter {
     }
 
     let foundRelayTag = false;
+    const preTagLines: string[] = [];
     for (const line of lines) {
       const match = this.matchRelayTag(line, from);
       if (match) {
@@ -312,10 +316,13 @@ export class RelayRouter {
           !line.trim() || /^\s*---+\s*$/.test(line) || /^\s*\[TASK:(add|done)\]/i.test(line);
         if (!isNoise) draft.parts.push(line);
         this.scheduleRelayDraftFlush(from);
+      } else if (!foundRelayTag) {
+        // Lines before any relay tag — these are conversational text from the agent
+        if (line.trim()) preTagLines.push(line);
       }
     }
 
-    return foundRelayTag;
+    return { foundRelayTag, preTagLines };
   }
 
   // ── Content sanitization ──
