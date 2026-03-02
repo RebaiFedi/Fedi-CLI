@@ -95,7 +95,11 @@ export abstract class BaseSonnetAgent implements AgentProcess {
     this.procErrorHandler = null;
   }
 
-  async start(config: SessionConfig, systemPrompt: string): Promise<void> {
+  async start(
+    config: SessionConfig,
+    systemPrompt: string,
+    options?: { muted?: boolean; prewarm?: boolean },
+  ): Promise<void> {
     if (this.process) {
       flog.warn('AGENT', `${this.logTag}: Already running, stopping first`);
       await this.stop();
@@ -142,9 +146,33 @@ export abstract class BaseSonnetAgent implements AgentProcess {
         CLAUDE_CODE_MAX_OUTPUT_TOKENS: process.env.CLAUDE_CODE_MAX_OUTPUT_TOKENS ?? '128000',
       },
       stdio: ['pipe', 'pipe', 'pipe'],
+      // Create new process group so we can kill the entire tree on stop
+      detached: true,
     });
 
+    // Prewarm mode: spawn the process but don't send any message.
+    // Status stays idle (no spinner). I/O handlers attached so process doesn't hang.
+    if (options?.prewarm) {
+      this.attachIOHandlers();
+      flog.info('AGENT', `${this.logTag}: Process pre-spawned (no message sent)`);
+      return;
+    }
+
     this.setStatus('running');
+    this.attachIOHandlers();
+
+    // When resuming a session, the CLI already has the conversation history.
+    // Don't re-send the system prompt — it would be redundant.
+    if (!this.sessionId) {
+      await this.sendInitialMessage(systemPrompt);
+    } else {
+      flog.info('AGENT', `${this.logTag}: Skipping initial message (resumed session)`);
+    }
+  }
+
+  /** Attach stdout/stderr/exit/error handlers to the spawned process. */
+  private attachIOHandlers(): void {
+    if (!this.process) return;
 
     const rl = createInterface({ input: this.process.stdout! });
     this.stdoutRl = rl;
@@ -179,14 +207,6 @@ export abstract class BaseSonnetAgent implements AgentProcess {
       this.setStatus('error');
     };
     this.process.on('error', this.procErrorHandler);
-
-    // When resuming a session, the CLI already has the conversation history.
-    // Don't re-send the system prompt — it would be redundant.
-    if (!this.sessionId) {
-      await this.sendInitialMessage(systemPrompt);
-    } else {
-      flog.info('AGENT', `${this.logTag}: Skipping initial message (resumed session)`);
-    }
   }
 
   /** Send the first message after spawn. Override to customize (e.g., mute response). */
@@ -461,18 +481,14 @@ export abstract class BaseSonnetAgent implements AgentProcess {
     flog.info('AGENT', `${this.logTag}: Stopping...`);
     this.clearProcessHandlers();
     proc.stdin?.end();
-    proc.kill('SIGTERM');
+
+    // Kill the entire process group (detached: true gives each agent its own group).
+    // This ensures claude's sub-processes (subagents, tools) are also terminated.
+    this.killProcessGroup(proc, 'SIGTERM');
 
     await new Promise<void>((resolve) => {
       const timeout = setTimeout(() => {
-        try {
-          proc.kill('SIGKILL');
-        } catch (err) {
-          flog.debug(
-            'AGENT',
-            `${this.logTag}: SIGKILL ignored in stop(): ${String(err).slice(0, 120)}`,
-          );
-        }
+        this.killProcessGroup(proc, 'SIGKILL');
         flog.warn('AGENT', `${this.logTag}: Force killing after 3s`);
         resolve();
       }, 3000);
@@ -486,5 +502,23 @@ export abstract class BaseSonnetAgent implements AgentProcess {
     this.process = null;
     this.clearProcessHandlers();
     this.setStatus('stopped');
+  }
+
+  /** Kill the process and its entire process group. */
+  private killProcessGroup(proc: ChildProcess, signal: NodeJS.Signals): void {
+    try {
+      // Kill the process group (negative PID) — kills the main process + all children
+      if (proc.pid) process.kill(-proc.pid, signal);
+    } catch {
+      // Group kill failed — fall back to direct kill
+      try {
+        proc.kill(signal);
+      } catch (err) {
+        flog.debug(
+          'AGENT',
+          `${this.logTag}: ${signal} ignored in stop(): ${String(err).slice(0, 120)}`,
+        );
+      }
+    }
   }
 }

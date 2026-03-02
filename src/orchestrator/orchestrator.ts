@@ -67,6 +67,7 @@ export class Orchestrator {
   private codexQueue = new PQueue({ concurrency: 1 });
   private callbacks: OrchestratorCallbacks | null = null;
   private started = false;
+  private prewarmed = false;
   private config: Omit<SessionConfig, 'task'> | null = null;
   private sessionManager: SessionManager | null = null;
   private sessionMessageHandler: ((msg: Message) => void) | null = null;
@@ -263,6 +264,10 @@ export class Orchestrator {
 
     // Opus output handler
     this.opus.onOutput((line) => {
+      // Checkpoints are internal signals — never display them
+      if (line.type === 'checkpoint') return;
+      // Drop output after stop initiated — prevents ghost messages after Escape
+      if (this.stopping) return;
       flog.debug('AGENT', 'Output', {
         agent: 'opus',
         type: line.type,
@@ -326,6 +331,11 @@ export class Orchestrator {
     // Opus status handler
     this.opus.onStatusChange((s) => {
       flog.info('AGENT', `opus: ${s}`, { agent: 'opus' });
+      // Skip all orchestration logic after stop — prevents ghost flushes/relays
+      if (this.stopping) {
+        cb.onAgentStatus('opus', s);
+        return;
+      }
       if (s === 'waiting' || s === 'stopped' || s === 'error') {
         this.relay.flushRelayDraft('opus');
       }
@@ -508,6 +518,11 @@ export class Orchestrator {
     const crossTalkClearThreshold = cfg.crossTalkClearThresholdMs;
 
     agent.onOutput((line) => {
+      // Checkpoints are internal signals — never display them
+      if ((line.type as string) === 'checkpoint') return;
+      // Drop output after stop initiated — prevents ghost messages after Escape
+      if (this.stopping) return;
+
       flog.debug('AGENT', 'Output', {
         agent: agentId,
         type: line.type,
@@ -615,6 +630,11 @@ export class Orchestrator {
 
     agent.onStatusChange((s) => {
       flog.info('AGENT', `${agentId}: ${s}`, { agent: agentId });
+      // Skip all orchestration logic after stop — prevents ghost flushes/relays
+      if (this.stopping) {
+        cb.onAgentStatus(agentId, s);
+        return;
+      }
       this.delegates.recordActivity(agentId);
 
       if (s === 'running') {
@@ -779,18 +799,62 @@ export class Orchestrator {
 
   // ── Lifecycle ──
 
+  /**
+   * Pre-spawn the Opus CLI process at app startup so it's ready when the
+   * user types. No message is sent — the system prompt + user task will be
+   * sent together on first input. Saves ~200ms of process spawn time.
+   */
+  async prewarmOpus(): Promise<void> {
+    if (this.started || this.prewarmed || !this.config) return;
+    const config = this.config;
+    flog.info('ORCH', 'Pre-spawning Opus process...');
+
+    ensureClaudeMd(config.projectDir);
+
+    this.opusQueue.start();
+    this.sonnetQueue.start();
+    this.codexQueue.start();
+
+    this.prewarmed = true;
+
+    // Spawn the process only — no message sent, no API connection yet.
+    // The system prompt will be sent with the first user message in startWithTask().
+    // This saves ~200ms of process spawn time.
+    await this.opus.start({ ...config, task: '' }, '', { prewarm: true });
+
+    flog.info('ORCH', 'Opus process pre-spawned (waiting for first user message)');
+  }
+
   async startWithTask(task: string, previousContext?: string): Promise<void> {
     if (this.started || !this.config) return;
     this.stopping = false;
     const config = this.config;
     flog.info('ORCH', `Starting Opus with task: ${task.slice(0, 80)}`);
 
-    ensureClaudeMd(config.projectDir);
     await this.sessionManager?.createSession(task, config.projectDir);
 
     if (this.sessionMessageHandler) this.bus.off('message', this.sessionMessageHandler);
     this.sessionMessageHandler = (msg: Message) => this.sessionManager?.addMessage(msg);
     this.bus.on('message', this.sessionMessageHandler);
+
+    // Fast path: process was pre-spawned — send system prompt + task as first message
+    // (no re-spawn needed, saves ~200ms)
+    if (this.prewarmed) {
+      this.started = true;
+      this.prewarmed = false;
+
+      let opusPrompt = getOpusSystemPrompt(config.projectDir);
+      if (previousContext)
+        opusPrompt += `\n\n--- HISTORIQUE SESSION PRECEDENTE ---\n${previousContext}\n--- FIN HISTORIQUE ---`;
+      opusPrompt += `\n\nMESSAGE DU USER: ${task}`;
+
+      this.opus.send(opusPrompt);
+      flog.info('ORCH', 'Opus pre-spawned — system prompt + task sent (no re-spawn)');
+      return;
+    }
+
+    // Cold start path — spawn Opus with task in system prompt
+    ensureClaudeMd(config.projectDir);
 
     let opusPrompt = getOpusSystemPrompt(config.projectDir);
     if (previousContext)
@@ -816,6 +880,13 @@ export class Orchestrator {
   }
 
   async restart(task: string): Promise<void> {
+    // Fast path: if Opus was booted at startup, reuse the session
+    if (this.prewarmed) {
+      flog.info('ORCH', `Fast start — Opus already booted, sending task directly`);
+      await this.startWithTask(task);
+      return;
+    }
+
     const previousContext = this.buildConversationSummary();
     await this.sessionManager?.finalize();
     this.resetState();
@@ -981,6 +1052,7 @@ export class Orchestrator {
 
   private resetState(): void {
     this.started = false;
+    this.prewarmed = false;
     if (this.opusRestartTimer) {
       clearTimeout(this.opusRestartTimer);
       this.opusRestartTimer = null;
@@ -1028,6 +1100,7 @@ export class Orchestrator {
     this.stopping = true;
     flog.info('ORCH', 'Shutting down...');
     this.started = false;
+    this.prewarmed = false;
 
     this.opusQueue.pause();
     this.sonnetQueue.pause();

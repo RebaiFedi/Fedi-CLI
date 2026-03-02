@@ -208,6 +208,8 @@ export abstract class BaseAppServerAgent implements AgentProcess {
       cwd: this.projectDir,
       env: { ...process.env },
       stdio: ['pipe', 'pipe', 'pipe'],
+      // Create new process group so we can kill the entire tree on stop
+      detached: true,
     });
 
     // Wire up stdout line reader
@@ -403,15 +405,11 @@ export abstract class BaseAppServerAgent implements AgentProcess {
       flog.info('AGENT', `${this.logTag}: Stopping process...`);
       this.cleanupReadlines();
       proc.stdin?.end();
-      proc.kill('SIGTERM');
+      this.killProcessGroup(proc, 'SIGTERM');
 
       await new Promise<void>((resolve) => {
         const timeout = setTimeout(() => {
-          try {
-            proc.kill('SIGKILL');
-          } catch {
-            /* ignore */
-          }
+          this.killProcessGroup(proc, 'SIGKILL');
           flog.warn('AGENT', `${this.logTag}: Force killed after 3s`);
           resolve();
         }, 3000);
@@ -426,6 +424,22 @@ export abstract class BaseAppServerAgent implements AgentProcess {
 
     this.rpc.rejectAll(`${this.logTag}: stopped`);
     this.setStatus('stopped');
+  }
+
+  /** Kill the process and its entire process group. */
+  private killProcessGroup(proc: ChildProcess, signal: NodeJS.Signals): void {
+    try {
+      if (proc.pid) process.kill(-proc.pid, signal);
+    } catch {
+      try {
+        proc.kill(signal);
+      } catch (err) {
+        flog.debug(
+          'AGENT',
+          `${this.logTag}: ${signal} ignored in stop(): ${String(err).slice(0, 120)}`,
+        );
+      }
+    }
   }
 
   // ── Turn management ─────────────────────────────────────────────────────

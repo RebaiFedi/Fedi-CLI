@@ -101,6 +101,7 @@ export function useOrchestratorBinding({
     orchestrator.setEnabledAgents(enabledAgentSet);
     orchestrator.bind({
       onAgentOutput: (agent: AgentId, line: OutputLine) => {
+        if (stoppedRef.current) return;
         if (line.type === 'stdout') processTaskTags(agent, line.text);
         const entries = outputToEntries(line);
         if (entries.length === 0) return;
@@ -222,6 +223,7 @@ export function useOrchestratorBinding({
         }
       },
       onRelay: (msg: Message) => {
+        if (stoppedRef.current) return;
         flog.info('UI', `Relay: ${msg.from}->${msg.to}`);
         const trimmedContent = msg.content.trim();
         if (!trimmedContent || trimmedContent.replace(/[`'".,;:\-–—\s]/g, '').length < 3) {
@@ -252,6 +254,15 @@ export function useOrchestratorBinding({
         flog.info('UI', `Relay blocked: ${msg.from}->${msg.to}`);
       },
     });
+
+    // Pre-spawn Opus process at app startup (unless resuming a session).
+    // Just spawns the CLI process (~200ms) — no message sent, no API connection.
+    // The system prompt + user task will be sent together on first user input.
+    if (!resumeSessionId) {
+      orchestrator.prewarmOpus().catch((err) => {
+        flog.error('UI', `[DASHBOARD] Opus pre-spawn error: ${err}`);
+      });
+    }
 
     // Resume session if --resume flag was passed
     if (resumeSessionId) {

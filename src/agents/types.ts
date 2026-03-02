@@ -89,7 +89,7 @@ export interface AgentProcess {
   /** Inject a message directly into the agent's stdin without changing status.
    *  Used for LIVE user messages and cross-talk while the agent is running. */
   sendUrgent(prompt: string): void;
-  start(config: SessionConfig, systemPrompt: string, options?: { muted?: boolean }): Promise<void>;
+  start(config: SessionConfig, systemPrompt: string, options?: { muted?: boolean; prewarm?: boolean }): Promise<void>;
   stop(): Promise<void>;
   onOutput(handler: (line: OutputLine) => void): void;
   onStatusChange(handler: (status: AgentStatus) => void): void;

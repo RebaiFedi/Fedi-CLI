@@ -44,6 +44,7 @@ interface BufferedEntry {
 
 const AGENT_IDS = ['opus', 'sonnet', 'codex'] as const;
 
+
 // ── Dashboard ───────────────────────────────────────────────────────────────
 
 export function Dashboard({
