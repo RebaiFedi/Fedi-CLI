@@ -1,5 +1,12 @@
 import PQueue from 'p-queue';
-import type { AgentProcess, AgentId, AgentStatus, Message, OutputLine, SessionConfig } from '../agents/types.js';
+import type {
+  AgentProcess,
+  AgentId,
+  AgentStatus,
+  Message,
+  OutputLine,
+  SessionConfig,
+} from '../agents/types.js';
 import { SonnetAgent } from '../agents/sonnet.js';
 import { CodexAgent } from '../agents/codex.js';
 import { OpusAgent } from '../agents/opus.js';
@@ -178,26 +185,40 @@ export class Orchestrator {
   private getOpusContextReminder(): string {
     const lines: string[] = [];
     lines.push('[RAPPEL SYSTEME]');
-    lines.push('- Tu es Opus, DIRECTEUR. Tu DELEGUES: frontend→Sonnet, backend→Codex. Tu ne travailles JAMAIS seul sauf si le user dit "toi-meme" ou [FALLBACK].');
-    lines.push('- Apres [TO:SONNET]/[TO:CODEX]: UNE phrase puis STOP. ZERO outil (Read, Glob, Grep, Bash, Write, Edit).');
-    lines.push('- Quand tu recois les rapports de tes agents: ecris UN rapport final complet et structure pour le user. Decris le travail en detail MAIS sans blocs de code source. Le user n\'a RIEN vu avant. REPONDS RAPIDEMENT.');
+    lines.push(
+      '- Tu es Opus, DIRECTEUR. Tu DELEGUES: frontend→Sonnet, backend→Codex. Tu ne travailles JAMAIS seul sauf si le user dit "toi-meme" ou [FALLBACK].',
+    );
+    lines.push(
+      '- Apres [TO:SONNET]/[TO:CODEX]: UNE phrase puis STOP. ZERO outil (Read, Glob, Grep, Bash, Write, Edit).',
+    );
+    lines.push(
+      "- Quand tu recois les rapports de tes agents: ecris UN rapport final complet et structure pour le user. Decris le travail en detail MAIS sans blocs de code source. Le user n'a RIEN vu avant. REPONDS RAPIDEMENT.",
+    );
 
     if (this.delegates.expectedDelegates.size > 0) {
-      const agentNames = [...this.delegates.expectedDelegates].map(a => a.charAt(0).toUpperCase() + a.slice(1)).join(' et ');
+      const agentNames = [...this.delegates.expectedDelegates]
+        .map((a) => a.charAt(0).toUpperCase() + a.slice(1))
+        .join(' et ');
       const received = this.delegates.pendingReports.size;
       const total = this.delegates.expectedDelegates.size;
-      lines.push(`- MAINTENANT: ${agentNames} travaille(nt) (${received}/${total} rapports recus). ATTENDS en silence. AUCUN outil.`);
+      lines.push(
+        `- MAINTENANT: ${agentNames} travaille(nt) (${received}/${total} rapports recus). ATTENDS en silence. AUCUN outil.`,
+      );
 
-      const activeOnRelay = [...this.relay.agentsOnRelay].filter(a => {
+      const activeOnRelay = [...this.relay.agentsOnRelay].filter((a) => {
         return this.agents[a].status === 'running';
       });
       if (activeOnRelay.length > 0) {
-        const activeNames = activeOnRelay.map(a => a.charAt(0).toUpperCase() + a.slice(1));
+        const activeNames = activeOnRelay.map((a) => a.charAt(0).toUpperCase() + a.slice(1));
         if (activeNames.length === 1) {
-          lines.push(`- Le user envoie un message PENDANT que ${activeNames[0]} travaille. Tu DOIS TRANSMETTRE ce message a ${activeNames[0]} via le tag de delegation habituel. Le systeme va l'injecter en LIVE a l'agent. Ecris le tag suivi du message du user (reformule si besoin). Puis UNE phrase au user ("Bien note, c'est transmis a ${activeNames[0]}.") et STOP.`);
+          lines.push(
+            `- Le user envoie un message PENDANT que ${activeNames[0]} travaille. Tu DOIS TRANSMETTRE ce message a ${activeNames[0]} via le tag de delegation habituel. Le systeme va l'injecter en LIVE a l'agent. Ecris le tag suivi du message du user (reformule si besoin). Puis UNE phrase au user ("Bien note, c'est transmis a ${activeNames[0]}.") et STOP.`,
+          );
         } else {
           const allNames = activeNames.join(' et ');
-          lines.push(`- Le user envoie un message PENDANT que ${allNames} travaillent. DECIDE quel agent est concerne par le message du user. Transmets-le UNIQUEMENT a l'agent concerne via le tag de delegation. Si ca concerne les deux, transmets aux deux. Puis UNE phrase au user et STOP.`);
+          lines.push(
+            `- Le user envoie un message PENDANT que ${allNames} travaillent. DECIDE quel agent est concerne par le message du user. Transmets-le UNIQUEMENT a l'agent concerne via le tag de delegation. Si ca concerne les deux, transmets aux deux. Puis UNE phrase au user et STOP.`,
+          );
         }
       }
     }
@@ -233,26 +254,41 @@ export class Orchestrator {
 
     // Opus output handler
     this.opus.onOutput((line) => {
-      flog.debug('AGENT', 'Output', { agent: 'opus', type: line.type, text: line.text.slice(0, 150) });
+      flog.debug('AGENT', 'Output', {
+        agent: 'opus',
+        type: line.type,
+        text: line.text.slice(0, 150),
+      });
       this.relay.detectRelayPatterns('opus', line.text);
 
       if (this.delegates.expectedDelegates.size > 0) {
         if (line.type === 'stdout') {
           const stripped = line.text.replace(/\[TASK:(add|done)\][^\n]*/gi, '').trim();
           if (stripped.length > 0) {
-            flog.debug('BUFFER', `Opus stdout BUFFERED (${this.delegates.expectedDelegates.size} delegates pending)`, { agent: 'opus' });
+            flog.debug(
+              'BUFFER',
+              `Opus stdout BUFFERED (${this.delegates.expectedDelegates.size} delegates pending)`,
+              { agent: 'opus' },
+            );
             this.buffers.pushToBuffer('opus', line);
             this.buffers.maybeEmitStatusSnippet('opus', line.text, cb);
             return;
           }
         }
         if (!this.opusAllMode && line.type === 'system') {
-          flog.debug('BUFFER', `Opus action HIDDEN (delegates pending, not @tous)`, { agent: 'opus' });
+          flog.debug('BUFFER', `Opus action HIDDEN (delegates pending, not @tous)`, {
+            agent: 'opus',
+          });
           return;
         }
       }
 
-      if (this.opusAllMode && this.opusAllModeResponded && this.delegates.expectedDelegates.size === 0 && line.type === 'stdout') {
+      if (
+        this.opusAllMode &&
+        this.opusAllModeResponded &&
+        this.delegates.expectedDelegates.size === 0 &&
+        line.type === 'stdout'
+      ) {
         flog.debug('ORCH', `Opus stdout SUPPRESSED (already responded in @tous non-delegation)`);
         return;
       }
@@ -268,7 +304,12 @@ export class Orchestrator {
       }
 
       // @tous: Opus finished without delegating → simple question
-      if (s === 'waiting' && this.opusAllMode && this.delegates.expectedDelegates.size === 0 && !this.opusAllModeResponded) {
+      if (
+        s === 'waiting' &&
+        this.opusAllMode &&
+        this.delegates.expectedDelegates.size === 0 &&
+        !this.opusAllModeResponded
+      ) {
         this.opusAllModeResponded = true;
         flog.info('ORCH', '@tous: Opus responded without delegating — sending to workers now');
         if (this.opusAllModeWorkerTimer) {
@@ -289,7 +330,7 @@ export class Orchestrator {
           const delegateAgent = this.agents[delegate];
           if (delegateAgent.status === 'running') {
             const history = this.bus.getHistory();
-            let lastUserMsg: typeof history[number] | undefined;
+            let lastUserMsg: (typeof history)[number] | undefined;
             for (let i = history.length - 1; i >= 0; i--) {
               if (history[i].from === 'user' && history[i].to === 'opus') {
                 lastUserMsg = history[i];
@@ -311,21 +352,35 @@ export class Orchestrator {
       if (s === 'error' && this.started && !this.opusRestartPending) {
         if (this.opusRestartCount >= this.MAX_OPUS_RESTARTS) {
           flog.error('ORCH', `Opus restart limit reached (${this.MAX_OPUS_RESTARTS})`);
-          cb.onAgentOutput('opus', { text: `Opus: restart limite atteinte (${this.MAX_OPUS_RESTARTS})`, timestamp: Date.now(), type: 'info' });
+          cb.onAgentOutput('opus', {
+            text: `Opus: restart limite atteinte (${this.MAX_OPUS_RESTARTS})`,
+            timestamp: Date.now(),
+            type: 'info',
+          });
           return;
         }
         this.opusRestartPending = true;
         const backoffDelay = _cfg.opusRestartBaseDelayMs * Math.pow(2, this.opusRestartCount);
-        flog.info('ORCH', `Opus restart scheduled in ${backoffDelay}ms (attempt ${this.opusRestartCount + 1}/${this.MAX_OPUS_RESTARTS})`);
+        flog.info(
+          'ORCH',
+          `Opus restart scheduled in ${backoffDelay}ms (attempt ${this.opusRestartCount + 1}/${this.MAX_OPUS_RESTARTS})`,
+        );
         this.opusRestartTimer = setTimeout(async () => {
           this.opusRestartTimer = null;
           this.opusRestartPending = false;
           if (!this.started || !this.config) return;
           this.opusRestartCount++;
           flog.warn('ORCH', `Opus crashed — auto-restarting (attempt ${this.opusRestartCount})...`);
-          cb.onAgentOutput('opus', { text: `Opus redémarrage en cours (tentative ${this.opusRestartCount})...`, timestamp: Date.now(), type: 'info' });
+          cb.onAgentOutput('opus', {
+            text: `Opus redémarrage en cours (tentative ${this.opusRestartCount})...`,
+            timestamp: Date.now(),
+            type: 'info',
+          });
           try {
-            await this.opus.start({ ...this.config, task: '' }, getOpusSystemPrompt(this.config.projectDir));
+            await this.opus.start(
+              { ...this.config, task: '' },
+              getOpusSystemPrompt(this.config.projectDir),
+            );
           } catch (e) {
             flog.error('ORCH', `Opus restart failed: ${e}`);
           }
@@ -339,7 +394,11 @@ export class Orchestrator {
 
     // Relay events
     this.bus.on('relay', (msg: Message) => {
-      flog.info('RELAY', `${msg.from}->${msg.to}`, { from: msg.from, to: msg.to, preview: msg.content.slice(0, 100) });
+      flog.info('RELAY', `${msg.from}->${msg.to}`, {
+        from: msg.from,
+        to: msg.to,
+        preview: msg.content.slice(0, 100),
+      });
       cb.onRelay(msg);
     });
     this.bus.on('relay-blocked', (msg: Message) => {
@@ -364,17 +423,35 @@ export class Orchestrator {
     });
 
     // Route messages to workers (lazy start)
-    this.bindWorkerRoute('sonnet', this.sonnetQueue, () => this.ensureWorkerStarted('sonnet'), () => this.workerReady.get('sonnet') ?? Promise.resolve());
-    this.bindWorkerRoute('codex', this.codexQueue, () => this.ensureWorkerStarted('codex'), () => this.workerReady.get('codex') ?? Promise.resolve());
+    this.bindWorkerRoute(
+      'sonnet',
+      this.sonnetQueue,
+      () => this.ensureWorkerStarted('sonnet'),
+      () => this.workerReady.get('sonnet') ?? Promise.resolve(),
+    );
+    this.bindWorkerRoute(
+      'codex',
+      this.codexQueue,
+      () => this.ensureWorkerStarted('codex'),
+      () => this.workerReady.get('codex') ?? Promise.resolve(),
+    );
   }
 
-  private bindWorkerRoute(agentId: WorkerAgentId, queue: PQueue, ensureStarted: () => Promise<void>, readyPromise: () => Promise<void>): void {
+  private bindWorkerRoute(
+    agentId: WorkerAgentId,
+    queue: PQueue,
+    ensureStarted: () => Promise<void>,
+    readyPromise: () => Promise<void>,
+  ): void {
     this.bus.on(`message:${agentId}`, (msg: Message) => {
       if (!this.isAgentEnabled(agentId)) return;
       flog.debug('BUS', `${msg.from}->${msg.to}`, { preview: msg.content.slice(0, 100) });
       if (msg.from === agentId) return;
       if (msg.from !== 'opus' && msg.from !== 'user' && this.crossTalk.isAwaitingReply(agentId)) {
-        flog.info('ORCH', `${agentId} received cross-talk reply from ${msg.from} — no longer awaiting`);
+        flog.info(
+          'ORCH',
+          `${agentId} received cross-talk reply from ${msg.from} — no longer awaiting`,
+        );
         this.crossTalk.clearAwaitingReply(agentId);
       }
       queue.add(async () => {
@@ -402,12 +479,20 @@ export class Orchestrator {
     const crossTalkClearThreshold = _cfg.crossTalkClearThresholdMs;
 
     agent.onOutput((line) => {
-      flog.debug('AGENT', 'Output', { agent: agentId, type: line.type, text: line.text.slice(0, 150) });
+      flog.debug('AGENT', 'Output', {
+        agent: agentId,
+        type: line.type,
+        text: line.text.slice(0, 150),
+      });
       this.delegates.recordActivity(agentId);
 
       if (line.type === 'stdout' && line.text.includes('API Error:')) {
         flog.warn('ORCH', `${label} API error detected`);
-        cb.onAgentOutput(agentId, { text: `${label}: limite de tokens atteinte — reprise en cours...`, timestamp: Date.now(), type: 'info' });
+        cb.onAgentOutput(agentId, {
+          text: `${label}: limite de tokens atteinte — reprise en cours...`,
+          timestamp: Date.now(),
+          type: 'info',
+        });
       }
 
       if (this.delegates.deliveredToOpus.has(agentId)) {
@@ -438,11 +523,18 @@ export class Orchestrator {
       if (this.crossTalk.isOnCrossTalk(agentId)) {
         const muteTime = this.crossTalk.getCrossTalkTime(agentId)!;
         if (Date.now() - muteTime > crossTalkMuteTimeout) {
-          flog.warn('ORCH', `${label} cross-talk mute timeout (${crossTalkMuteTimeout / 1000}s) — unmuting`);
+          flog.warn(
+            'ORCH',
+            `${label} cross-talk mute timeout (${crossTalkMuteTimeout / 1000}s) — unmuting`,
+          );
           this.crossTalk.clearOnCrossTalk(agentId);
         } else {
           this.relay.detectRelayPatterns(agentId, line.text);
-          if (this.relay.agentsOnRelay.has(agentId) && line.type !== 'stdout' && line.type !== 'stderr') {
+          if (
+            this.relay.agentsOnRelay.has(agentId) &&
+            line.type !== 'stdout' &&
+            line.type !== 'stderr'
+          ) {
             this.relay.relayStartTime.set(agentId, Date.now());
           }
           if (this.relay.agentsOnRelay.has(agentId) && line.type === 'stdout') {
@@ -467,11 +559,17 @@ export class Orchestrator {
         const isActive = agent.status === 'running';
 
         if (relayTimeout > 0 && elapsed > relayTimeout && !isActive) {
-          flog.warn('ORCH', `${label} relay timeout (${Math.round(elapsed / 1000)}s) — forcing auto-relay`);
+          flog.warn(
+            'ORCH',
+            `${label} relay timeout (${Math.round(elapsed / 1000)}s) — forcing auto-relay`,
+          );
           this.delegates.autoRelayBuffer(agentId, this.relay);
         } else {
           if (relayTimeout > 0 && elapsed > relayTimeout && isActive) {
-            flog.debug('ORCH', `${label} relay past timeout but agent still running — NOT timing out`);
+            flog.debug(
+              'ORCH',
+              `${label} relay past timeout but agent still running — NOT timing out`,
+            );
           }
           this.relay.detectRelayPatterns(agentId, line.text);
           if (line.type === 'stdout') {
@@ -507,19 +605,31 @@ export class Orchestrator {
         if (muteTime !== undefined) {
           const elapsed = Date.now() - muteTime;
           if (elapsed > crossTalkClearThreshold || s === 'stopped' || s === 'error') {
-            flog.info('ORCH', `Cross-talk MUTE CLEARED for ${agentId} (status=${s}, elapsed=${elapsed}ms)`);
+            flog.info(
+              'ORCH',
+              `Cross-talk MUTE CLEARED for ${agentId} (status=${s}, elapsed=${elapsed}ms)`,
+            );
             this.crossTalk.clearOnCrossTalk(agentId);
-            if (this.delegates.pendingReports.size >= this.delegates.expectedDelegates.size && this.delegates.expectedDelegates.size > 0) {
+            if (
+              this.delegates.pendingReports.size >= this.delegates.expectedDelegates.size &&
+              this.delegates.expectedDelegates.size > 0
+            ) {
               this.delegates.deliverCombinedReports();
             }
           } else {
-            flog.info('ORCH', `Cross-talk mute kept for ${agentId} (status=${s}, elapsed=${elapsed}ms — too soon)`);
+            flog.info(
+              'ORCH',
+              `Cross-talk mute kept for ${agentId} (status=${s}, elapsed=${elapsed}ms — too soon)`,
+            );
             const remaining = crossTalkClearThreshold - elapsed + 50;
             setTimeout(() => {
               if (!this.crossTalk.isOnCrossTalk(agentId)) return;
               flog.info('ORCH', `Cross-talk MUTE CLEARED for ${agentId} (deferred timer fired)`);
               this.crossTalk.clearOnCrossTalk(agentId);
-              if (this.delegates.pendingReports.size >= this.delegates.expectedDelegates.size && this.delegates.expectedDelegates.size > 0) {
+              if (
+                this.delegates.pendingReports.size >= this.delegates.expectedDelegates.size &&
+                this.delegates.expectedDelegates.size > 0
+              ) {
                 this.delegates.deliverCombinedReports();
               }
             }, remaining);
@@ -534,7 +644,10 @@ export class Orchestrator {
         this.buffers.clearBuffer(agentId);
         this.relay.relayStartTime.delete(agentId);
 
-        if (this.delegates.expectedDelegates.has(agentId) && !this.delegates.pendingReports.has(agentId)) {
+        if (
+          this.delegates.expectedDelegates.has(agentId) &&
+          !this.delegates.pendingReports.has(agentId)
+        ) {
           const originalTask = this.delegates.lastDelegationContent.get(agentId);
           const fallback = this.delegates.pickFallbackAgent(agentId);
 
@@ -548,14 +661,26 @@ export class Orchestrator {
             this.delegates.recordActivity(fallback);
             this.relay.recordRelay();
             this.bus.relay('opus', fallback, `[FALLBACK — ${agentId} ${s}] ${originalTask}`);
-            cb.onAgentOutput(agentId, { text: `${agentId} ${s} — tache transferee a ${fallback}`, timestamp: Date.now(), type: 'info' });
+            cb.onAgentOutput(agentId, {
+              text: `${agentId} ${s} — tache transferee a ${fallback}`,
+              timestamp: Date.now(),
+              type: 'info',
+            });
           } else if (fallback === 'opus' && originalTask) {
             flog.info('ORCH', `Agent ${agentId} ${s}, no worker fallback — Opus takes over`);
             this.delegates.expectedDelegates.clear();
             this.delegates.pendingReports.clear();
             this.delegates.stopHeartbeat();
-            this.bus.send({ from: 'system', to: 'opus', content: `[FALLBACK — ${agentId} ${s}, aucun agent disponible] Fais le travail toi-meme: ${originalTask}` });
-            cb.onAgentOutput(agentId, { text: `${agentId} ${s} — Opus prend le relais`, timestamp: Date.now(), type: 'info' });
+            this.bus.send({
+              from: 'system',
+              to: 'opus',
+              content: `[FALLBACK — ${agentId} ${s}, aucun agent disponible] Fais le travail toi-meme: ${originalTask}`,
+            });
+            cb.onAgentOutput(agentId, {
+              text: `${agentId} ${s} — Opus prend le relais`,
+              timestamp: Date.now(),
+              type: 'info',
+            });
           } else {
             this.delegates.pendingReports.set(agentId, `(agent ${s} — pas de rapport)`);
             if (this.delegates.pendingReports.size >= this.delegates.expectedDelegates.size) {
@@ -570,16 +695,21 @@ export class Orchestrator {
       }
 
       // Safety-net auto-relay
-      if (s === 'waiting' && this.relay.agentsOnRelay.has(agentId) && !this.crossTalk.isAwaitingReply(agentId)) {
+      if (
+        s === 'waiting' &&
+        this.relay.agentsOnRelay.has(agentId) &&
+        !this.crossTalk.isAwaitingReply(agentId)
+      ) {
         const timer = setTimeout(() => {
-          if (!this.relay.agentsOnRelay.has(agentId) || this.delegates.pendingReports.has(agentId)) return;
+          if (!this.relay.agentsOnRelay.has(agentId) || this.delegates.pendingReports.has(agentId))
+            return;
           const agentInstance = this.agents[agentId];
           if (agentInstance.status === 'running') {
             flog.info('ORCH', `Safety-net deferred for ${agentId} — agent still running`);
             return;
           }
           this.delegates.autoRelayBuffer(agentId, this.relay);
-        }, 500);
+        }, loadUserConfig().safetyNetDebounceMs);
         this.delegates.setSafetyNetTimer(agentId, timer);
       }
 
@@ -639,7 +769,8 @@ export class Orchestrator {
     this.bus.on('message', this.sessionMessageHandler);
 
     let opusPrompt = getOpusSystemPrompt(config.projectDir);
-    if (previousContext) opusPrompt += `\n\n--- HISTORIQUE SESSION PRECEDENTE ---\n${previousContext}\n--- FIN HISTORIQUE ---`;
+    if (previousContext)
+      opusPrompt += `\n\n--- HISTORIQUE SESSION PRECEDENTE ---\n${previousContext}\n--- FIN HISTORIQUE ---`;
     opusPrompt += `\n\nMESSAGE DU USER: ${task}`;
 
     this.opusQueue.start();
@@ -670,7 +801,10 @@ export class Orchestrator {
       this.sessionMessageHandler = null;
     }
     this.bus.reset();
-    flog.info('ORCH', `Restarting with context (${previousContext ? previousContext.length : 0} chars)`);
+    flog.info(
+      'ORCH',
+      `Restarting with context (${previousContext ? previousContext.length : 0} chars)`,
+    );
     await this.startWithTask(task, previousContext || undefined);
   }
 
@@ -695,7 +829,10 @@ export class Orchestrator {
 
     if (this.relay.agentsOnRelay.size > 0) {
       this.relay.liveRelayAllowed = true;
-      flog.info('ORCH', `User message while ${[...this.relay.agentsOnRelay].join(', ')} on relay — Opus will route LIVE`);
+      flog.info(
+        'ORCH',
+        `User message while ${[...this.relay.agentsOnRelay].join(', ')} on relay — Opus will route LIVE`,
+      );
     }
 
     if (this.opus.status === 'running') {
@@ -723,7 +860,11 @@ export class Orchestrator {
 
   sendToAgent(agent: AgentId, text: string): void {
     if (!this.isAgentEnabled(agent)) {
-      this.callbacks?.onAgentOutput(agent, { text: `Agent desactive: ${agent}`, timestamp: Date.now(), type: 'info' });
+      this.callbacks?.onAgentOutput(agent, {
+        text: `Agent desactive: ${agent}`,
+        timestamp: Date.now(),
+        type: 'info',
+      });
       return;
     }
     this.relay.agentsOnRelay.delete(agent);
@@ -732,7 +873,10 @@ export class Orchestrator {
     this.delegates.pendingReports.delete(agent);
     this.delegates.deliveredToOpus.delete(agent);
 
-    if (this.delegates.pendingReports.size >= this.delegates.expectedDelegates.size && this.delegates.expectedDelegates.size > 0) {
+    if (
+      this.delegates.pendingReports.size >= this.delegates.expectedDelegates.size &&
+      this.delegates.expectedDelegates.size > 0
+    ) {
       this.delegates.deliverCombinedReports();
     }
 
@@ -822,9 +966,19 @@ export class Orchestrator {
     }
     this.opusRestartPending = false;
     this.opusRestartCount = 0;
-    this.workerStarted = new Map([['sonnet', false], ['codex', false]]);
-    this.workerReady = new Map([['sonnet', Promise.resolve()], ['codex', Promise.resolve()]]);
-    this.agentLastContextIndex = new Map([['opus', 0], ['sonnet', 0], ['codex', 0]]);
+    this.workerStarted = new Map([
+      ['sonnet', false],
+      ['codex', false],
+    ]);
+    this.workerReady = new Map([
+      ['sonnet', Promise.resolve()],
+      ['codex', Promise.resolve()],
+    ]);
+    this.agentLastContextIndex = new Map([
+      ['opus', 0],
+      ['sonnet', 0],
+      ['codex', 0],
+    ]);
 
     this.relay.reset();
     this.crossTalk.reset();

@@ -39,7 +39,10 @@ export class MessageBus extends EventEmitter {
       this.history = this.history.slice(-500);
     }
     if (full.correlationId) {
-      this.correlationCounts.set(full.correlationId, (this.correlationCounts.get(full.correlationId) ?? 0) + 1);
+      this.correlationCounts.set(
+        full.correlationId,
+        (this.correlationCounts.get(full.correlationId) ?? 0) + 1,
+      );
       this.correlationTimestamps.set(full.correlationId, Date.now());
     }
     // Evict stale correlation entries periodically
@@ -83,9 +86,7 @@ export class MessageBus extends EventEmitter {
   }
 
   relay(from: AgentId, to: AgentId, content: string, correlationId?: string): boolean {
-    const relayCount = correlationId
-      ? (this.correlationCounts.get(correlationId) ?? 0)
-      : 0;
+    const relayCount = correlationId ? (this.correlationCounts.get(correlationId) ?? 0) : 0;
 
     if (relayCount >= MAX_RELAY_DEPTH) {
       const blocked: Message = {

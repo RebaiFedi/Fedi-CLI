@@ -33,10 +33,19 @@ export const MAX_RELAY_DEPTH = 5;
 // ── Agent output line ───────────────────────────────────────────────────────
 
 export type ToolAction =
-  | 'read' | 'write' | 'create' | 'edit' | 'delete'
-  | 'bash' | 'glob' | 'grep'
-  | 'fetch' | 'agent' | 'todo'
-  | 'list' | 'search';
+  | 'read'
+  | 'write'
+  | 'create'
+  | 'edit'
+  | 'delete'
+  | 'bash'
+  | 'glob'
+  | 'grep'
+  | 'fetch'
+  | 'agent'
+  | 'todo'
+  | 'list'
+  | 'search';
 
 export interface ToolMeta {
   tool: ToolAction;
@@ -113,8 +122,17 @@ export interface SessionData {
 
 export interface DisplayEntry {
   text: string;
-  kind: 'text' | 'action' | 'heading' | 'separator' | 'empty' | 'code' | 'info'
-    | 'tool-header' | 'diff-old' | 'diff-new';
+  kind:
+    | 'text'
+    | 'action'
+    | 'heading'
+    | 'separator'
+    | 'empty'
+    | 'code'
+    | 'info'
+    | 'tool-header'
+    | 'diff-old'
+    | 'diff-new';
   bold?: boolean;
   color?: string;
   /** Tool type for tool-header entries */

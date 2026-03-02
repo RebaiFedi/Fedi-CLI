@@ -95,7 +95,10 @@ export class SessionManager {
       this.saveTimer = null;
     }
     await this.saveToDisk();
-    flog.info('SESSION', `Finalized session ${this.session.id} (${this.session.messages.length} messages)`);
+    flog.info(
+      'SESSION',
+      `Finalized session ${this.session.id} (${this.session.messages.length} messages)`,
+    );
   }
 
   getSession(): SessionData | null {
@@ -131,12 +134,16 @@ export class SessionManager {
           }
           return meta;
         } catch (err) {
-          flog.debug('SESSION', `Invalid session file skipped (${file}): ${String(err).slice(0, 120)}`);
+          flog.debug(
+            'SESSION',
+            `Invalid session file skipped (${file}): ${String(err).slice(0, 120)}`,
+          );
           return null;
         }
       }),
     );
-    const sessions: Array<{ id: string; task: string; startedAt: number; finishedAt?: number }> = [];
+    const sessions: Array<{ id: string; task: string; startedAt: number; finishedAt?: number }> =
+      [];
     for (const item of loaded) {
       if (item) sessions.push(item);
     }

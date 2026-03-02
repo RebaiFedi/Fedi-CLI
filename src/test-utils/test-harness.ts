@@ -2,6 +2,17 @@ import type { AgentId, AgentStatus, Message, OutputLine } from '../agents/types.
 import { Orchestrator } from '../orchestrator/orchestrator.js';
 import { MessageBus } from '../orchestrator/message-bus.js';
 import { MockAgent } from './mock-agent.js';
+import { loadUserConfig } from '../config/user-config.js';
+
+// ── Fast test timers ───────────────────────────────────────────────────────
+// Override timer values at import time so all orchestrator modules see fast values.
+// loadUserConfig() returns a mutable cached object — mutating it affects all readers.
+const _testCfg = loadUserConfig();
+_testCfg.relayDraftFlushMs = 15;
+_testCfg.safetyNetDebounceMs = 30;
+
+/** Flush delay = max timer + small margin */
+const FLUSH_MS = 50;
 
 export interface HarnessCallbackLog {
   outputs: Array<{ agent: AgentId; line: OutputLine }>;
@@ -65,11 +76,7 @@ export function createTestOrchestrator(): TestHarness {
   });
 
   async function flush(): Promise<void> {
-    // Must be longer than the largest timer in the orchestrator:
-    // - RELAY_DRAFT_FLUSH_MS (150ms) — batches streamed chunks before routing
-    // - SAFETY_NET_DEBOUNCE_MS (500ms) — auto-relay when agent finishes without [TO:OPUS]
-    // We use 650ms to cover the safety-net debounce + margin.
-    await new Promise((r) => setTimeout(r, 650));
+    await new Promise((r) => setTimeout(r, FLUSH_MS));
   }
 
   async function start(): Promise<void> {

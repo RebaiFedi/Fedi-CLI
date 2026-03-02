@@ -6,6 +6,12 @@
   "bin": {
     "fedi": "./bin/fedi.js"
   },
+  "files": [
+    "dist/",
+    "bin/",
+    "!dist/**/*.test.*",
+    "!dist/test-utils/"
+  ],
   "scripts": {
     "dev": "tsx src/index.tsx",
     "build": "tsc",
@@ -14,7 +20,8 @@
     "lint": "eslint src/",
     "lint:fix": "eslint src/ --fix",
     "format": "prettier --write src/",
-    "format:check": "prettier --check src/"
+    "format:check": "prettier --check src/",
+    "prepublishOnly": "npm run build"
   },
   "engines": {
     "node": ">=20.0.0"

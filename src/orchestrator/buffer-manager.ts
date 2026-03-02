@@ -59,8 +59,8 @@ export class BufferManager {
   getOpusBufferedText(): string {
     const buf = this.relayBuffer.get('opus') ?? [];
     return buf
-      .filter(l => l.type === 'stdout')
-      .map(l => l.text)
+      .filter((l) => l.type === 'stdout')
+      .map((l) => l.text)
       .join('\n')
       .trim();
   }

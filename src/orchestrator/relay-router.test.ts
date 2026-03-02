@@ -56,12 +56,13 @@ function makeRouter(overrides?: Partial<RelayRouterDeps>) {
 }
 
 describe('RelayRouter', () => {
-
   // ── Tag detection ──
 
   describe('isRelayTag', () => {
     let router: RelayRouter;
-    beforeEach(() => { router = makeRouter().router; });
+    beforeEach(() => {
+      router = makeRouter().router;
+    });
 
     it('detects [TO:SONNET]', () => {
       assert.equal(router.isRelayTag('[TO:SONNET] hello'), true);
@@ -191,7 +192,7 @@ describe('RelayRouter', () => {
 
       router.flushRelayDraft('opus');
       // Wait for async relay routing
-      await new Promise(r => setTimeout(r, 50));
+      await new Promise((r) => setTimeout(r, 50));
 
       assert.ok(relays.length >= 1);
     });
@@ -228,7 +229,6 @@ describe('RelayRouter', () => {
 
     it('blocks relay to disabled agent', () => {
       const { router } = makeRouter({ isAgentEnabled: (id) => id !== 'codex' });
-      const messages: Message[] = [];
 
       router.routeRelayMessage('opus', 'codex', 'This should be blocked as a real message');
       // No relay emitted — codex is disabled

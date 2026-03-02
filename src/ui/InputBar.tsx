@@ -33,9 +33,11 @@ function InputBarComponent({ onSubmit, placeholder, projectDir }: InputBarProps)
       try {
         const raw = await fs.readFile(historyFilePath, 'utf-8');
         const parsed = JSON.parse(raw);
-        const arr =
-          Array.isArray(parsed) ? parsed :
-          parsed && typeof parsed === 'object' && Array.isArray((parsed as { history?: unknown }).history)
+        const arr = Array.isArray(parsed)
+          ? parsed
+          : parsed &&
+              typeof parsed === 'object' &&
+              Array.isArray((parsed as { history?: unknown }).history)
             ? (parsed as { history: unknown[] }).history
             : [];
         const loaded = arr
@@ -139,7 +141,8 @@ function InputBarComponent({ onSubmit, placeholder, projectDir }: InputBarProps)
       if (pastedText) {
         const pastedLines = pastedText.split('\n');
         while (pastedLines.length > 0 && pastedLines[0]!.trim() === '') pastedLines.shift();
-        while (pastedLines.length > 0 && pastedLines[pastedLines.length - 1]!.trim() === '') pastedLines.pop();
+        while (pastedLines.length > 0 && pastedLines[pastedLines.length - 1]!.trim() === '')
+          pastedLines.pop();
         const cleanPaste = pastedLines.join('\n');
 
         if (!cleanPaste && !comment) return;
@@ -151,9 +154,7 @@ function InputBarComponent({ onSubmit, placeholder, projectDir }: InputBarProps)
           msg = cleanPaste || comment;
         }
 
-        if (
-          history.current.length === 0 || history.current[history.current.length - 1] !== msg
-        ) {
+        if (history.current.length === 0 || history.current[history.current.length - 1] !== msg) {
           const nextHistory = [...history.current, msg].slice(-MAX_HISTORY);
           history.current = nextHistory;
           persistHistory(nextHistory);
@@ -170,9 +171,7 @@ function InputBarComponent({ onSubmit, placeholder, projectDir }: InputBarProps)
       const msg = text.trim();
       if (!msg) return;
 
-      if (
-        history.current.length === 0 || history.current[history.current.length - 1] !== msg
-      ) {
+      if (history.current.length === 0 || history.current[history.current.length - 1] !== msg) {
         const nextHistory = [...history.current, msg].slice(-MAX_HISTORY);
         history.current = nextHistory;
         persistHistory(nextHistory);

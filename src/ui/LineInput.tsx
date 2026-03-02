@@ -1,5 +1,5 @@
-import React, { useMemo, useState, useCallback, useEffect, useRef } from 'react';
-import { Box, Text, useInput, useStdout, type Key } from 'ink';
+import React, { useMemo, useState, useCallback } from 'react';
+import { Text, useInput, type Key } from 'ink';
 import chalk from 'chalk';
 
 interface LineInputProps {
@@ -37,16 +37,16 @@ export function LineInput({
   onClear,
 }: LineInputProps) {
   const [cursorOffset, setCursorOffset] = useState(value.length);
-  const safeOffset = Math.max(0, Math.min(cursorOffset, value.length));
+  const [prevValue, setPrevValue] = useState(value);
 
   // Keep cursor in sync when value is replaced externally (e.g. history nav)
-  const prevValueRef = useRef(value);
-  useEffect(() => {
-    if (value !== prevValueRef.current) {
-      prevValueRef.current = value;
-      setCursorOffset(value.length);
-    }
-  }, [value]);
+  // Using derived state pattern — no refs, no effects needed
+  if (value !== prevValue) {
+    setPrevValue(value);
+    setCursorOffset(value.length);
+  }
+
+  const safeOffset = Math.max(0, Math.min(cursorOffset, value.length));
 
   // ── Key handler ────────────────────────────────────────────────────────────
   useInput(
@@ -190,7 +190,7 @@ export function LineInput({
     let out = '';
     for (let i = 0; i < value.length; i++) {
       const char = value[i] ?? '';
-      out += (showCursor && focus && i === safeOffset) ? chalk.inverse(char) : char;
+      out += showCursor && focus && i === safeOffset ? chalk.inverse(char) : char;
     }
     if (showCursor && focus && safeOffset >= value.length) {
       out += chalk.inverse(' ');

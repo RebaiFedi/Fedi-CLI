@@ -10,21 +10,40 @@ export type EffortLevel = 'high' | 'medium' | 'low';
 export type ProfileName = 'high' | 'medium' | 'low';
 
 /** Profile presets — each defines effort + thinking per agent */
-export const PROFILES: Record<ProfileName, {
-  opusEffort: EffortLevel; sonnetEffort: EffortLevel; codexEffort: EffortLevel;
-  opusThinking: boolean; sonnetThinking: boolean; codexThinking: boolean;
-}> = {
+export const PROFILES: Record<
+  ProfileName,
+  {
+    opusEffort: EffortLevel;
+    sonnetEffort: EffortLevel;
+    codexEffort: EffortLevel;
+    opusThinking: boolean;
+    sonnetThinking: boolean;
+    codexThinking: boolean;
+  }
+> = {
   high: {
-    opusEffort: 'high', sonnetEffort: 'high', codexEffort: 'high',
-    opusThinking: true, sonnetThinking: true, codexThinking: true,
+    opusEffort: 'high',
+    sonnetEffort: 'high',
+    codexEffort: 'high',
+    opusThinking: true,
+    sonnetThinking: true,
+    codexThinking: true,
   },
   medium: {
-    opusEffort: 'high', sonnetEffort: 'medium', codexEffort: 'medium',
-    opusThinking: true, sonnetThinking: false, codexThinking: false,
+    opusEffort: 'high',
+    sonnetEffort: 'medium',
+    codexEffort: 'medium',
+    opusThinking: true,
+    sonnetThinking: false,
+    codexThinking: false,
   },
   low: {
-    opusEffort: 'medium', sonnetEffort: 'low', codexEffort: 'low',
-    opusThinking: false, sonnetThinking: false, codexThinking: false,
+    opusEffort: 'medium',
+    sonnetEffort: 'low',
+    codexEffort: 'low',
+    opusThinking: false,
+    sonnetThinking: false,
+    codexThinking: false,
   },
 };
 
@@ -81,35 +100,46 @@ export interface UserConfig {
   sonnetThinking: boolean;
   /** Enable thinking for Codex. Default: true */
   codexThinking: boolean;
+  /** Sandbox mode: agents require approval for destructive operations. Default: false */
+  sandboxMode: boolean;
+  /** Relay draft flush delay (ms). Default: 150 */
+  relayDraftFlushMs: number;
+  /** Safety-net debounce delay (ms). Default: 500 */
+  safetyNetDebounceMs: number;
 }
 
-const UserConfigSchema = z.object({
-  execTimeoutMs: z.number().min(1000).default(120_000),
-  codexTimeoutMs: z.number().min(0).default(0),
-  delegateTimeoutMs: z.number().min(0).default(120_000),
-  maxRelaysPerWindow: z.number().min(1).default(50),
-  relayWindowMs: z.number().min(1000).default(60_000),
-  flushIntervalMs: z.number().min(50).default(400),
-  maxMessages: z.number().min(10).default(200),
-  maxCrossTalkPerRound: z.number().min(1).default(20),
-  crossTalkMuteTimeoutMs: z.number().min(1000).default(15_000),
-  crossTalkClearThresholdMs: z.number().min(500).default(2_000),
-  maxLogFiles: z.number().min(1).default(20),
-  claudeModel: z.string().default('claude-sonnet-4-6'),
-  opusModel: z.string().default('claude-opus-4-6'),
-  codexModel: z.string().default('gpt-5.3-codex'),
-  opusRestartBaseDelayMs: z.number().min(500).default(2_000),
-  maxRelayContentLength: z.number().min(1000).default(50_000),
-  circuitBreakerThreshold: z.number().min(1).default(3),
-  circuitBreakerCooldownMs: z.number().min(5000).default(60_000),
-  checkpointThrottleMs: z.number().min(1000).default(5_000),
-  opusEffort: z.enum(['high', 'medium', 'low']).default('high'),
-  sonnetEffort: z.enum(['high', 'medium', 'low']).default('high'),
-  codexEffort: z.enum(['high', 'medium', 'low']).default('high'),
-  opusThinking: z.boolean().default(true),
-  sonnetThinking: z.boolean().default(true),
-  codexThinking: z.boolean().default(true),
-}).partial();
+const UserConfigSchema = z
+  .object({
+    execTimeoutMs: z.number().min(1000).default(120_000),
+    codexTimeoutMs: z.number().min(0).default(0),
+    delegateTimeoutMs: z.number().min(0).default(120_000),
+    maxRelaysPerWindow: z.number().min(1).default(50),
+    relayWindowMs: z.number().min(1000).default(60_000),
+    flushIntervalMs: z.number().min(50).default(400),
+    maxMessages: z.number().min(10).default(200),
+    maxCrossTalkPerRound: z.number().min(1).default(20),
+    crossTalkMuteTimeoutMs: z.number().min(1000).default(15_000),
+    crossTalkClearThresholdMs: z.number().min(500).default(2_000),
+    maxLogFiles: z.number().min(1).default(20),
+    claudeModel: z.string().default('claude-sonnet-4-6'),
+    opusModel: z.string().default('claude-opus-4-6'),
+    codexModel: z.string().default('gpt-5.3-codex'),
+    opusRestartBaseDelayMs: z.number().min(500).default(2_000),
+    maxRelayContentLength: z.number().min(1000).default(50_000),
+    circuitBreakerThreshold: z.number().min(1).default(3),
+    circuitBreakerCooldownMs: z.number().min(5000).default(60_000),
+    checkpointThrottleMs: z.number().min(1000).default(5_000),
+    opusEffort: z.enum(['high', 'medium', 'low']).default('high'),
+    sonnetEffort: z.enum(['high', 'medium', 'low']).default('high'),
+    codexEffort: z.enum(['high', 'medium', 'low']).default('high'),
+    opusThinking: z.boolean().default(true),
+    sonnetThinking: z.boolean().default(true),
+    codexThinking: z.boolean().default(true),
+    sandboxMode: z.boolean().default(false),
+    relayDraftFlushMs: z.number().min(10).default(150),
+    safetyNetDebounceMs: z.number().min(10).default(500),
+  })
+  .partial();
 
 const DEFAULTS: UserConfig = {
   execTimeoutMs: 120_000,
@@ -137,6 +167,9 @@ const DEFAULTS: UserConfig = {
   opusThinking: true,
   sonnetThinking: true,
   codexThinking: true,
+  sandboxMode: false,
+  relayDraftFlushMs: 150,
+  safetyNetDebounceMs: 500,
 };
 
 let cachedConfig: UserConfig | null = null;
@@ -170,7 +203,10 @@ export function loadUserConfig(): UserConfig {
             if (result.success) {
               merged[key] = result.data;
             } else {
-              flog.warn('SYSTEM', `Config key "${key}" invalid (${result.error.message}) — using default`);
+              flog.warn(
+                'SYSTEM',
+                `Config key "${key}" invalid (${result.error.message}) — using default`,
+              );
             }
           }
         }
@@ -211,7 +247,10 @@ export function applyProfile(profile: ProfileName): void {
   cfg.sonnetThinking = preset.sonnetThinking;
   cfg.codexThinking = preset.codexThinking;
   persistConfig();
-  flog.info('SYSTEM', `Profile "${profile}" applied: opus=${preset.opusEffort}/${preset.opusThinking ? 'thinking' : 'no-think'} sonnet=${preset.sonnetEffort} codex=${preset.codexEffort}`);
+  flog.info(
+    'SYSTEM',
+    `Profile "${profile}" applied: opus=${preset.opusEffort}/${preset.opusThinking ? 'thinking' : 'no-think'} sonnet=${preset.sonnetEffort} codex=${preset.codexEffort}`,
+  );
 }
 
 /** Override effort for a specific agent and persist */
@@ -232,6 +271,14 @@ export function setAgentThinking(agent: 'opus' | 'sonnet' | 'codex', enabled: bo
   else if (agent === 'codex') cfg.codexThinking = enabled;
   persistConfig();
   flog.info('SYSTEM', `${agent} thinking ${enabled ? 'enabled' : 'disabled'}`);
+}
+
+/** Set sandbox mode (true = safe, false = full-auto) and persist */
+export function setSandboxMode(enabled: boolean): void {
+  const cfg = loadUserConfig();
+  cfg.sandboxMode = enabled;
+  persistConfig();
+  flog.info('SYSTEM', `Sandbox mode ${enabled ? 'enabled' : 'disabled'}`);
 }
 
 /** Reset cached config (useful for tests) */

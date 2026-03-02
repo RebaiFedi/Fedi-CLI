@@ -29,7 +29,10 @@ function toolMetaToEntries(text: string, meta: ToolMeta): DisplayEntry[] {
         entries.push({ text: lines[i], kind: 'diff-old', lineNum: startLine + i });
       }
       if (meta.oldLines.length > maxDiffLines) {
-        entries.push({ text: `… ${meta.oldLines.length - maxDiffLines} more lines`, kind: 'diff-old' });
+        entries.push({
+          text: `… ${meta.oldLines.length - maxDiffLines} more lines`,
+          kind: 'diff-old',
+        });
       }
     }
     if (meta.newLines && meta.newLines.length > 0) {
@@ -38,19 +41,29 @@ function toolMetaToEntries(text: string, meta: ToolMeta): DisplayEntry[] {
         entries.push({ text: lines[i], kind: 'diff-new', lineNum: startLine + i });
       }
       if (meta.newLines.length > maxDiffLines) {
-        entries.push({ text: `… ${meta.newLines.length - maxDiffLines} more lines`, kind: 'diff-new' });
+        entries.push({
+          text: `… ${meta.newLines.length - maxDiffLines} more lines`,
+          kind: 'diff-new',
+        });
       }
     }
   }
 
   // Show content preview for write/create operations (new content only)
-  if ((meta.tool === 'write' || meta.tool === 'create') && meta.newLines && meta.newLines.length > 0) {
+  if (
+    (meta.tool === 'write' || meta.tool === 'create') &&
+    meta.newLines &&
+    meta.newLines.length > 0
+  ) {
     const lines = meta.newLines.slice(0, maxDiffLines);
     for (let i = 0; i < lines.length; i++) {
       entries.push({ text: lines[i], kind: 'diff-new', lineNum: i + 1 });
     }
     if (meta.newLines.length > maxDiffLines) {
-      entries.push({ text: `… ${meta.newLines.length - maxDiffLines} more lines`, kind: 'diff-new' });
+      entries.push({
+        text: `… ${meta.newLines.length - maxDiffLines} more lines`,
+        kind: 'diff-new',
+      });
     }
   }
 

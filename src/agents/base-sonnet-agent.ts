@@ -3,6 +3,7 @@ import { createInterface } from 'node:readline';
 import type { AgentProcess, AgentId, AgentStatus, OutputLine, SessionConfig } from './types.js';
 import { flog } from '../utils/log.js';
 import { formatAction } from '../utils/format-action.js';
+import { loadUserConfig } from '../config/user-config.js';
 import { parseMessageWithImages, type ContentBlock } from '../utils/image-utils.js';
 
 export abstract class BaseSonnetAgent implements AgentProcess {
@@ -72,13 +73,13 @@ export abstract class BaseSonnetAgent implements AgentProcess {
       '--output-format',
       'stream-json',
       '--verbose',
-      '--dangerously-skip-permissions',
       '--effort',
       this.effort,
     ];
 
-    if (this.thinking) {
-      args.push('--thinking');
+    // Only skip permissions in unsafe mode
+    if (!loadUserConfig().sandboxMode) {
+      args.push('--dangerously-skip-permissions');
     }
 
     // Resume existing session if available (preserves conversation history)
@@ -187,8 +188,14 @@ export abstract class BaseSonnetAgent implements AgentProcess {
       // If the error happened during a resumed session, the session is likely
       // corrupted from the previous interruption. Clear the sessionId so the
       // next start() creates a fresh session instead of resuming again.
-      if (this.sessionId && (subType === 'error_during_execution' || errorMsg === 'Unknown error')) {
-        flog.warn('AGENT', `${this.logTag}: Clearing corrupted session ${this.sessionId} — next start will be fresh`);
+      if (
+        this.sessionId &&
+        (subType === 'error_during_execution' || errorMsg === 'Unknown error')
+      ) {
+        flog.warn(
+          'AGENT',
+          `${this.logTag}: Clearing corrupted session ${this.sessionId} — next start will be fresh`,
+        );
         this.sessionId = null;
       }
 
@@ -203,7 +210,11 @@ export abstract class BaseSonnetAgent implements AgentProcess {
         });
         this.setStatus('error');
       } else {
-        this.emit({ text: `${this.logTag} error: ${errorMsg}`, timestamp: Date.now(), type: 'info' });
+        this.emit({
+          text: `${this.logTag} error: ${errorMsg}`,
+          timestamp: Date.now(),
+          type: 'info',
+        });
       }
     }
 
@@ -218,9 +229,10 @@ export abstract class BaseSonnetAgent implements AgentProcess {
             }
             if (block.type === 'tool_use') {
               const toolName = typeof block.name === 'string' ? block.name : 'tool';
-              const input = block.input && typeof block.input === 'object'
-                ? block.input as Record<string, unknown>
-                : undefined;
+              const input =
+                block.input && typeof block.input === 'object'
+                  ? (block.input as Record<string, unknown>)
+                  : undefined;
               this.emitToolAction(toolName, input);
             }
           }
@@ -268,8 +280,14 @@ export abstract class BaseSonnetAgent implements AgentProcess {
     if (formatted) {
       // Build rich tool metadata
       const toolMap: Record<string, import('./types.js').ToolAction> = {
-        Read: 'read', Write: 'write', Edit: 'edit', Bash: 'bash',
-        Glob: 'glob', Grep: 'grep', WebFetch: 'fetch', Agent: 'agent',
+        Read: 'read',
+        Write: 'write',
+        Edit: 'edit',
+        Bash: 'bash',
+        Glob: 'glob',
+        Grep: 'grep',
+        WebFetch: 'fetch',
+        Agent: 'agent',
         TodoWrite: 'todo',
       };
       const tool = toolMap[toolName];
@@ -357,14 +375,20 @@ export abstract class BaseSonnetAgent implements AgentProcess {
         }
       })
       .catch((err) => {
-        flog.error('AGENT', `${this.logTag}: sendWithImages queue failed: ${String(err).slice(0, 120)}`);
+        flog.error(
+          'AGENT',
+          `${this.logTag}: sendWithImages queue failed: ${String(err).slice(0, 120)}`,
+        );
       });
   }
 
   /** Remove unpaired Unicode surrogates that cause JSON encoding errors.
    *  Replaces lone surrogates (U+D800..U+DFFF) with the Unicode replacement character. */
   private sanitizeUnicode(text: string): string {
-    return text.replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, '\uFFFD');
+    return text.replace(
+      /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g,
+      '\uFFFD',
+    );
   }
 
   protected async sendRaw(obj: Record<string, unknown>) {
@@ -390,7 +414,10 @@ export abstract class BaseSonnetAgent implements AgentProcess {
       try {
         this.stdoutRl.close();
       } catch (err) {
-        flog.debug('AGENT', `${this.logTag}: stdout readline close ignored: ${String(err).slice(0, 120)}`);
+        flog.debug(
+          'AGENT',
+          `${this.logTag}: stdout readline close ignored: ${String(err).slice(0, 120)}`,
+        );
       }
       this.stdoutRl = null;
     }
@@ -399,7 +426,10 @@ export abstract class BaseSonnetAgent implements AgentProcess {
       try {
         this.stderrRl.close();
       } catch (err) {
-        flog.debug('AGENT', `${this.logTag}: stderr readline close ignored: ${String(err).slice(0, 120)}`);
+        flog.debug(
+          'AGENT',
+          `${this.logTag}: stderr readline close ignored: ${String(err).slice(0, 120)}`,
+        );
       }
       this.stderrRl = null;
     }
@@ -433,7 +463,10 @@ export abstract class BaseSonnetAgent implements AgentProcess {
         try {
           proc.kill('SIGKILL');
         } catch (err) {
-          flog.debug('AGENT', `${this.logTag}: SIGKILL ignored in stop(): ${String(err).slice(0, 120)}`);
+          flog.debug(
+            'AGENT',
+            `${this.logTag}: SIGKILL ignored in stop(): ${String(err).slice(0, 120)}`,
+          );
         }
         flog.warn('AGENT', `${this.logTag}: Force killing after 3s`);
         resolve();

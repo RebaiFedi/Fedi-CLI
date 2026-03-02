@@ -12,9 +12,9 @@ export interface TodoItem {
 }
 
 // ── Modern progress bar characters ──────────────────────────────────────
-const BAR_FILLED = '\u2588';   // █
-const BAR_PARTIAL = '\u2593';  // ▓
-const BAR_EMPTY = '\u2591';    // ░
+const BAR_FILLED = '\u2588'; // █
+const BAR_PARTIAL = '\u2593'; // ▓
+const BAR_EMPTY = '\u2591'; // ░
 
 function TodoPanelComponent({ items }: { items: TodoItem[] }) {
   if (items.length === 0) return null;
@@ -43,14 +43,18 @@ function TodoPanelComponent({ items }: { items: TodoItem[] }) {
       {/* ── Header line ───────────────────────────────────── */}
       <Box>
         <Text color="#64748B">{' \u250C\u2500 '}</Text>
-        <Text color={barColor} bold>{'TASKS'}</Text>
+        <Text color={barColor} bold>
+          {'TASKS'}
+        </Text>
         <Text color="#475569">{' \u2500\u2500 '}</Text>
         <Text color={barColor}>{BAR_FILLED.repeat(filled)}</Text>
         {filled < barWidth && (
-          <Text color={barColor} dimColor>{BAR_PARTIAL}</Text>
+          <Text color={barColor} dimColor>
+            {BAR_PARTIAL}
+          </Text>
         )}
         <Text color={barDimColor}>{BAR_EMPTY.repeat(Math.max(0, barWidth - filled - 1))}</Text>
-        <Text color="#475569">{' '}</Text>
+        <Text color="#475569"> </Text>
         <Text color={allDone ? '#22C55E' : '#94A3B8'} bold>{`${pct}%`}</Text>
         <Text color="#475569">{` (${doneCount}/${total})`}</Text>
       </Box>
@@ -58,14 +62,17 @@ function TodoPanelComponent({ items }: { items: TodoItem[] }) {
       {/* ── Task items ────────────────────────────────────── */}
       {visible.map((item) => {
         const maxLen = Math.min(55, (process.stdout.columns || 80) - 16);
-        const label = item.text.length > maxLen ? item.text.slice(0, maxLen - 1) + '\u2026' : item.text;
+        const label =
+          item.text.length > maxLen ? item.text.slice(0, maxLen - 1) + '\u2026' : item.text;
         if (item.done) {
           return (
             <Box key={item.id}>
               <Text color="#334155">{' \u2502  '}</Text>
               <Text color="#22C55E">{'\u25C9'}</Text>
-              <Text>{' '}</Text>
-              <Text color="#475569" strikethrough>{label}</Text>
+              <Text> </Text>
+              <Text color="#475569" strikethrough>
+                {label}
+              </Text>
             </Box>
           );
         }
@@ -73,7 +80,7 @@ function TodoPanelComponent({ items }: { items: TodoItem[] }) {
           <Box key={item.id}>
             <Text color="#334155">{' \u2502  '}</Text>
             <Text color={agentHex(item.agent)}>{'\u25CB'}</Text>
-            <Text>{' '}</Text>
+            <Text> </Text>
             <Text color={THEME.text}>{label}</Text>
           </Box>
         );
@@ -89,7 +96,11 @@ function TodoPanelComponent({ items }: { items: TodoItem[] }) {
 
       {/* ── Footer line ───────────────────────────────────── */}
       <Box>
-        <Text color="#334155">{' \u2514\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500'}</Text>
+        <Text color="#334155">
+          {
+            ' \u2514\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500'
+          }
+        </Text>
       </Box>
     </Box>
   );

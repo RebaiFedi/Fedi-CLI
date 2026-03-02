@@ -48,7 +48,9 @@ export class RelayRouter {
   private readonly relayDrafts: Map<AgentId, { target: AgentId; parts: string[] }> = new Map();
   private readonly relayDraftTimers: Map<AgentId, ReturnType<typeof setTimeout>> = new Map();
   private readonly relayDraftEmptyRetries: Map<AgentId, number> = new Map();
-  private readonly RELAY_DRAFT_FLUSH_MS = 150;
+  private get RELAY_DRAFT_FLUSH_MS(): number {
+    return loadUserConfig().relayDraftFlushMs;
+  }
   private readonly RELAY_DRAFT_MAX_EMPTY_RETRIES = 12;
 
   /** Per-agent relay timeouts */
@@ -67,10 +69,15 @@ export class RelayRouter {
   // ── Tag detection helpers ──
 
   isRelayTag(line: string): boolean {
-    return TO_SONNET_PATTERN.test(line) || TO_CODEX_PATTERN.test(line) || TO_OPUS_PATTERN.test(line);
+    return (
+      TO_SONNET_PATTERN.test(line) || TO_CODEX_PATTERN.test(line) || TO_OPUS_PATTERN.test(line)
+    );
   }
 
-  private matchRelayTag(line: string, from: Message['from']): { target: AgentId; firstLine: string } | null {
+  private matchRelayTag(
+    line: string,
+    from: Message['from'],
+  ): { target: AgentId; firstLine: string } | null {
     if (from !== 'sonnet' && from !== 'codex' && from !== 'opus') return null;
     if (from !== 'sonnet') {
       const m = line.match(TO_SONNET_PATTERN);
@@ -147,7 +154,10 @@ export class RelayRouter {
       const retries = this.relayDraftEmptyRetries.get(from) ?? 0;
       if (retries < this.RELAY_DRAFT_MAX_EMPTY_RETRIES) {
         this.relayDraftEmptyRetries.set(from, retries + 1);
-        flog.debug('RELAY', `Draft for ${from}->${draft.target} still empty (force=${force}), retry ${retries + 1}/${this.RELAY_DRAFT_MAX_EMPTY_RETRIES}`);
+        flog.debug(
+          'RELAY',
+          `Draft for ${from}->${draft.target} still empty (force=${force}), retry ${retries + 1}/${this.RELAY_DRAFT_MAX_EMPTY_RETRIES}`,
+        );
         this.scheduleRelayDraftFlush(from);
         return false;
       }
@@ -225,7 +235,10 @@ export class RelayRouter {
             }
             this.relayDrafts.delete(from);
             this.relayDraftEmptyRetries.delete(from);
-            flog.debug('RELAY', `Discarded empty draft ${from}->${prevDraft.target} (superseded by new tag ->${match.target})`);
+            flog.debug(
+              'RELAY',
+              `Discarded empty draft ${from}->${prevDraft.target} (superseded by new tag ->${match.target})`,
+            );
           }
         }
         const draft = { target: match.target, parts: [] as string[] };
@@ -239,9 +252,7 @@ export class RelayRouter {
       const draft = this.relayDrafts.get(from);
       if (draft) {
         const isNoise =
-          !line.trim() ||
-          /^\s*---+\s*$/.test(line) ||
-          /^\s*\[TASK:(add|done)\]/i.test(line);
+          !line.trim() || /^\s*---+\s*$/.test(line) || /^\s*\[TASK:(add|done)\]/i.test(line);
         if (!isNoise) draft.parts.push(line);
         this.scheduleRelayDraftFlush(from);
       }
@@ -257,7 +268,10 @@ export class RelayRouter {
     let sanitized = content.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '');
     // Enforce max length
     if (sanitized.length > MAX_RELAY_CONTENT_LENGTH) {
-      flog.warn('RELAY', `Content truncated: ${sanitized.length} → ${MAX_RELAY_CONTENT_LENGTH} chars`);
+      flog.warn(
+        'RELAY',
+        `Content truncated: ${sanitized.length} → ${MAX_RELAY_CONTENT_LENGTH} chars`,
+      );
       sanitized = sanitized.slice(0, MAX_RELAY_CONTENT_LENGTH) + '\n... [contenu tronqué]';
     }
     return sanitized;
@@ -298,7 +312,8 @@ export class RelayRouter {
     const isPeerToPeer = from !== 'opus' && target !== 'opus' && from !== target;
 
     if (isPeerToPeer) {
-      const bothReported = this.deps.delegates.expectedDelegates.size > 0 &&
+      const bothReported =
+        this.deps.delegates.expectedDelegates.size > 0 &&
         this.deps.delegates.pendingReports.size >= this.deps.delegates.expectedDelegates.size;
       if (bothReported) {
         flog.info('ORCH', `Cross-talk BLOCKED ${from}->${target} (all delegates already reported)`);
@@ -308,7 +323,10 @@ export class RelayRouter {
         return;
       }
       if (this.deps.delegates.pendingReports.has(from)) {
-        flog.info('ORCH', `Cross-talk BLOCKED ${from}->${target} (${from} already reported to Opus)`);
+        flog.info(
+          'ORCH',
+          `Cross-talk BLOCKED ${from}->${target} (${from} already reported to Opus)`,
+        );
         return;
       }
       if (this.deps.crossTalk.isAtLimit()) {
@@ -345,7 +363,11 @@ export class RelayRouter {
           if (targetAgent.status === 'running') {
             targetAgent.sendUrgent(`[LIVE MESSAGE DU USER — via Opus] ${content}`);
           } else {
-            this.deps.bus.send({ from: 'opus', to: target, content: `[LIVE MESSAGE DU USER — via Opus] ${content}` });
+            this.deps.bus.send({
+              from: 'opus',
+              to: target,
+              content: `[LIVE MESSAGE DU USER — via Opus] ${content}`,
+            });
           }
           this.recordRelay();
           this.deps.bus.emit('relay', {
@@ -371,7 +393,10 @@ export class RelayRouter {
       this.deps.buffers.resetSnippetTime(target);
       this.deps.delegates.expectedDelegates.add(target);
       this.deps.delegates.lastDelegationContent.set(target, content);
-      flog.info('ORCH', `Expected delegates: ${[...this.deps.delegates.expectedDelegates].join(', ')}`);
+      flog.info(
+        'ORCH',
+        `Expected delegates: ${[...this.deps.delegates.expectedDelegates].join(', ')}`,
+      );
       this.deps.delegates.resetDelegateTimeout();
     }
 
@@ -392,7 +417,10 @@ export class RelayRouter {
         this.deps.crossTalk.clearOnCrossTalk(from);
       }
 
-      flog.info('ORCH', `Buffered report from ${from} (${this.deps.delegates.pendingReports.size}/${this.deps.delegates.expectedDelegates.size} received)`);
+      flog.info(
+        'ORCH',
+        `Buffered report from ${from} (${this.deps.delegates.pendingReports.size}/${this.deps.delegates.expectedDelegates.size} received)`,
+      );
 
       const reportPreview = this.deps.buffers.extractStatusSnippet(content);
       if (reportPreview && cb) {

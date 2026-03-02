@@ -58,26 +58,30 @@ function wordWrapSingleLine(text: string, maxWidth: number, contIndent: string):
 
 function isTableLine(text: string): boolean {
   const t = stripAnsi(text).trim();
-  return (t.startsWith('|') && t.endsWith('|')) ||
-         (t.startsWith('│') && t.endsWith('│')) ||
-         t.startsWith('┌') || t.startsWith('├') || t.startsWith('└');
+  return (
+    (t.startsWith('|') && t.endsWith('|')) ||
+    (t.startsWith('│') && t.endsWith('│')) ||
+    t.startsWith('┌') ||
+    t.startsWith('├') ||
+    t.startsWith('└')
+  );
 }
 
 // ── Tool icons & colors ─────────────────────────────────────────────────────
 
 export const TOOL_STYLES: Record<ToolAction, { icon: string; label: string; color: string }> = {
-  read:   { icon: '>', label: 'Read',   color: '#38BDF8' },
-  write:  { icon: '>', label: 'Write',  color: '#A78BFA' },
+  read: { icon: '>', label: 'Read', color: '#38BDF8' },
+  write: { icon: '>', label: 'Write', color: '#A78BFA' },
   create: { icon: '+', label: 'Create', color: '#34D399' },
-  edit:   { icon: '~', label: 'Edit',   color: '#FBBF24' },
+  edit: { icon: '~', label: 'Edit', color: '#FBBF24' },
   delete: { icon: 'x', label: 'Delete', color: '#F87171' },
-  bash:   { icon: '$', label: 'Exec',   color: '#6EE7B7' },
-  glob:   { icon: '?', label: 'Search', color: '#93C5FD' },
-  grep:   { icon: '/', label: 'Grep',   color: '#93C5FD' },
-  fetch:  { icon: '@', label: 'Fetch',  color: '#67E8F9' },
-  agent:  { icon: '*', label: 'Agent',  color: '#C4B5FD' },
-  todo:   { icon: '-', label: 'Todo',   color: '#FCD34D' },
-  list:   { icon: '>', label: 'List',   color: '#38BDF8' },
+  bash: { icon: '$', label: 'Exec', color: '#6EE7B7' },
+  glob: { icon: '?', label: 'Search', color: '#93C5FD' },
+  grep: { icon: '/', label: 'Grep', color: '#93C5FD' },
+  fetch: { icon: '@', label: 'Fetch', color: '#67E8F9' },
+  agent: { icon: '*', label: 'Agent', color: '#C4B5FD' },
+  todo: { icon: '-', label: 'Todo', color: '#FCD34D' },
+  list: { icon: '>', label: 'List', color: '#38BDF8' },
   search: { icon: '?', label: 'Search', color: '#93C5FD' },
 };
 
@@ -240,7 +244,9 @@ export function entryToAnsiLines(
     const col = e.color === 'cyan' ? chalk.hex(THEME.sonnet) : chalk.hex(THEME.text);
     const marker = chalk.hex(THEME.muted)('▌ ');
     const raw = `${marker}${col.bold(e.text)}`;
-    const headingLines = wordWrap(raw, maxW, contIndent).map((l, i) => (i === 0 ? `${INDENT}${l}` : l));
+    const headingLines = wordWrap(raw, maxW, contIndent).map((l, i) =>
+      i === 0 ? `${INDENT}${l}` : l,
+    );
     return headingLines;
   }
 

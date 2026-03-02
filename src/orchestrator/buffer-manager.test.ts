@@ -8,7 +8,9 @@ function makeLine(text: string, type: OutputLine['type'] = 'stdout'): OutputLine
   return { text, timestamp: Date.now(), type };
 }
 
-function makeMockCallbacks(): OrchestratorCallbacks & { outputs: Array<{ agent: AgentId; line: OutputLine }> } {
+function makeMockCallbacks(): OrchestratorCallbacks & {
+  outputs: Array<{ agent: AgentId; line: OutputLine }>;
+} {
   const outputs: Array<{ agent: AgentId; line: OutputLine }> = [];
   return {
     outputs,
@@ -109,7 +111,10 @@ describe('BufferManager', () => {
 
   describe('extractStatusSnippet', () => {
     it('extracts meaningful text', () => {
-      assert.equal(bm.extractStatusSnippet('Analysing the database schema'), 'Analysing the database schema');
+      assert.equal(
+        bm.extractStatusSnippet('Analysing the database schema'),
+        'Analysing the database schema',
+      );
     });
 
     it('returns null for short text', () => {

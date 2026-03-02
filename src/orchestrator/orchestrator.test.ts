@@ -33,9 +33,7 @@ describe('Orchestrator', () => {
     });
 
     it('detects multi-delegation [TO:SONNET] + [TO:CODEX] in one text block', async () => {
-      h.opus.emitText(
-        '[TO:SONNET] Corrige le frontend\n[TO:CODEX] Corrige le backend',
-      );
+      h.opus.emitText('[TO:SONNET] Corrige le frontend\n[TO:CODEX] Corrige le backend');
       h.opus.setStatus('waiting');
       await h.flush();
 
@@ -132,11 +130,7 @@ describe('Orchestrator', () => {
       h.sonnet.setStatus('waiting');
       await h.flush();
 
-      assert.equal(
-        h.log.relays.length,
-        relaysBefore,
-        '21st cross-talk should not produce a relay',
-      );
+      assert.equal(h.log.relays.length, relaysBefore, '21st cross-talk should not produce a relay');
     });
   });
 
@@ -156,8 +150,8 @@ describe('Orchestrator', () => {
 
       // At this point, only Claude reported — Opus should NOT have received the combined message yet
       const opusMessagesAfterClaude = h.opus.getSentMessages();
-      const combinedAfterClaude = opusMessagesAfterClaude.filter((m) =>
-        m.includes('[FROM:SONNET]') && m.includes('[FROM:CODEX]'),
+      const combinedAfterClaude = opusMessagesAfterClaude.filter(
+        (m) => m.includes('[FROM:SONNET]') && m.includes('[FROM:CODEX]'),
       );
       assert.equal(combinedAfterClaude.length, 0, 'should not deliver until both report');
 
@@ -195,9 +189,7 @@ describe('Orchestrator', () => {
 
       // The buffered text should have been auto-relayed to Opus
       const opusMessages = h.opus.getSentMessages();
-      const autoRelayed = opusMessages.find((m) =>
-        m.includes('Here is my analysis of the code'),
-      );
+      const autoRelayed = opusMessages.find((m) => m.includes('Here is my analysis of the code'));
       assert.ok(autoRelayed, 'should auto-relay buffered text to Opus');
     });
 
@@ -304,9 +296,7 @@ describe('Orchestrator', () => {
       const claudeOut = h.log.outputs.filter(
         (o) => o.agent === 'sonnet' && o.line.type === 'stdout',
       );
-      const codexOut = h.log.outputs.filter(
-        (o) => o.agent === 'codex' && o.line.type === 'stdout',
-      );
+      const codexOut = h.log.outputs.filter((o) => o.agent === 'codex' && o.line.type === 'stdout');
       assert.ok(claudeOut.length > 0, 'sonnet stdout should pass through');
       assert.ok(codexOut.length > 0, 'codex stdout should pass through');
     });
@@ -381,9 +371,7 @@ describe('Orchestrator', () => {
 
       // Combined delivery should still happen with placeholder for Claude
       const opusMessages = h.opus.getSentMessages();
-      const combined = opusMessages.find(
-        (m) => m.includes('[FROM:CODEX]'),
-      );
+      const combined = opusMessages.find((m) => m.includes('[FROM:CODEX]'));
       assert.ok(combined, 'should deliver combined report even with crashed agent');
     });
 
@@ -482,7 +470,10 @@ describe('Orchestrator', () => {
       const sonnetMessages = h.sonnet.getSentMessages();
       const directMsg = sonnetMessages.find((m) => m.includes('[FROM:USER]'));
       assert.ok(directMsg, 'Sonnet should receive [FROM:USER] message');
-      assert.ok(directMsg!.includes('Explique le composant Header.tsx'), 'message content should be preserved');
+      assert.ok(
+        directMsg!.includes('Explique le composant Header.tsx'),
+        'message content should be preserved',
+      );
 
       // Opus should NOT receive anything for this direct message
       const opusMessagesAfter = h.opus.getSentMessages();
@@ -496,12 +487,16 @@ describe('Orchestrator', () => {
       await h.flush();
 
       // Opus delegates to Sonnet only
-      h.opus.emitText('[TO:SONNET] Corrige le bug dans le composant Login.tsx — le bouton ne fonctionne pas');
+      h.opus.emitText(
+        '[TO:SONNET] Corrige le bug dans le composant Login.tsx — le bouton ne fonctionne pas',
+      );
       h.opus.setStatus('waiting');
       await h.flush();
 
       // Sonnet works and reports back
-      h.sonnet.emitText('[TO:OPUS] Bug corrige — le onClick manquait un handler. Fix applique dans Login.tsx');
+      h.sonnet.emitText(
+        '[TO:OPUS] Bug corrige — le onClick manquait un handler. Fix applique dans Login.tsx',
+      );
       h.sonnet.setStatus('waiting');
       await h.flush();
 
@@ -531,7 +526,11 @@ describe('Orchestrator', () => {
       const combinedEarly = msgAfterSonnet.find(
         (m) => m.includes('[FROM:SONNET]') && m.includes('[FROM:CODEX]'),
       );
-      assert.equal(combinedEarly, undefined, 'should NOT deliver combined report before all reports arrive');
+      assert.equal(
+        combinedEarly,
+        undefined,
+        'should NOT deliver combined report before all reports arrive',
+      );
 
       // Codex reports
       h.codex.emitText('[TO:OPUS] Backend: 8 routes REST, base PostgreSQL');
@@ -589,7 +588,10 @@ describe('Orchestrator', () => {
       const urgentMessages = h.sonnet.getUrgentMessages();
       const liveMsg = urgentMessages.find((m) => m.includes('[LIVE MESSAGE DU USER]'));
       assert.ok(liveMsg, 'Sonnet should receive [LIVE MESSAGE DU USER]');
-      assert.ok(liveMsg!.includes('arrete et corrige le Header'), 'live message content should be preserved');
+      assert.ok(
+        liveMsg!.includes('arrete et corrige le Header'),
+        'live message content should be preserved',
+      );
     });
 
     it('Test 7 — @tous avec modification: Opus reçoit @tous puis délègue', async () => {
@@ -601,7 +603,10 @@ describe('Orchestrator', () => {
       const opusMessages = h.opus.getSentMessages();
       const tousMsg = opusMessages.find((m) => m.includes('[MODE @TOUS ACTIVE]'));
       assert.ok(tousMsg, 'Opus should receive @tous message');
-      assert.ok(tousMsg!.includes('Corrige les bugs'), 'original user text should be in @tous message');
+      assert.ok(
+        tousMsg!.includes('Corrige les bugs'),
+        'original user text should be in @tous message',
+      );
 
       // Opus delegates via relay
       h.opus.emitText('[TO:SONNET] Corrige les bugs frontend\n[TO:CODEX] Corrige les bugs backend');
@@ -635,7 +640,9 @@ describe('Orchestrator', () => {
       assert.ok(codexReport, 'Opus should receive Codex report after round 1');
 
       // Opus now delegates to Sonnet with context from Codex
-      h.opus.emitText('[TO:SONNET] Cree les composants StockList et StockForm — API dispo: GET/POST/PUT/DELETE /api/products');
+      h.opus.emitText(
+        '[TO:SONNET] Cree les composants StockList et StockForm — API dispo: GET/POST/PUT/DELETE /api/products',
+      );
       h.opus.setStatus('waiting');
       await h.flush();
 
@@ -652,7 +659,9 @@ describe('Orchestrator', () => {
 
     it('Test 9 — Module création avec cross-talk: delegation + coordination + rapport combiné', async () => {
       // Opus delegates to both with plan
-      h.opus.emitText('[TO:SONNET] Module stock — composants StockList, StockForm. Coordonne-toi avec Codex.\n[TO:CODEX] Module stock — schema products, routes API. Coordonne-toi avec Sonnet.');
+      h.opus.emitText(
+        '[TO:SONNET] Module stock — composants StockList, StockForm. Coordonne-toi avec Codex.\n[TO:CODEX] Module stock — schema products, routes API. Coordonne-toi avec Sonnet.',
+      );
       h.opus.setStatus('waiting');
       await h.flush();
 
@@ -662,11 +671,15 @@ describe('Orchestrator', () => {
       await h.flush();
 
       // Codex responds to Sonnet
-      h.codex.emitText('[TO:SONNET] GET/POST/PUT/DELETE /api/products — payload: {name, qty, price}');
+      h.codex.emitText(
+        '[TO:SONNET] GET/POST/PUT/DELETE /api/products — payload: {name, qty, price}',
+      );
       await h.flush();
 
       // Both report to Opus
-      h.sonnet.emitText('[TO:OPUS] Frontend stock cree — StockList et StockForm consomment /api/products');
+      h.sonnet.emitText(
+        '[TO:OPUS] Frontend stock cree — StockList et StockForm consomment /api/products',
+      );
       h.sonnet.setStatus('waiting');
       await h.flush();
 
@@ -684,7 +697,9 @@ describe('Orchestrator', () => {
 
     it('Test 10 — Cross-talk front↔back: Sonnet→Codex→Sonnet + rapport combiné', async () => {
       // Opus delegates to both
-      h.opus.emitText('[TO:SONNET] Integre l API users dans le frontend\n[TO:CODEX] Documente l API users');
+      h.opus.emitText(
+        '[TO:SONNET] Integre l API users dans le frontend\n[TO:CODEX] Documente l API users',
+      );
       h.opus.setStatus('waiting');
       await h.flush();
 
@@ -694,11 +709,15 @@ describe('Orchestrator', () => {
       await h.flush();
 
       // Codex responds
-      h.codex.emitText('[TO:SONNET] GET /api/users (liste), POST /api/users (creation), GET /api/users/:id (detail)');
+      h.codex.emitText(
+        '[TO:SONNET] GET /api/users (liste), POST /api/users (creation), GET /api/users/:id (detail)',
+      );
       await h.flush();
 
       // Both report
-      h.sonnet.emitText('[TO:OPUS] Integration faite — UserList et UserForm consomment les 3 endpoints');
+      h.sonnet.emitText(
+        '[TO:OPUS] Integration faite — UserList et UserForm consomment les 3 endpoints',
+      );
       h.sonnet.setStatus('waiting');
       await h.flush();
 
@@ -738,7 +757,11 @@ describe('Orchestrator', () => {
 
       // There should be a fallback or error indication for Sonnet
       const hasFallback = opusMessages.find(
-        (m) => m.includes('FALLBACK') || m.includes('erreur') || m.includes('error') || m.includes('pas de rapport'),
+        (m) =>
+          m.includes('FALLBACK') ||
+          m.includes('erreur') ||
+          m.includes('error') ||
+          m.includes('pas de rapport'),
       );
       assert.ok(hasFallback, 'Opus should receive fallback/error for crashed Sonnet');
     });
@@ -759,9 +782,16 @@ describe('Orchestrator', () => {
       // Opus should receive fallback messages for both
       const opusMessages = h.opus.getSentMessages();
       const fallbackMessages = opusMessages.filter(
-        (m) => m.includes('FALLBACK') || m.includes('erreur') || m.includes('error') || m.includes('pas de rapport'),
+        (m) =>
+          m.includes('FALLBACK') ||
+          m.includes('erreur') ||
+          m.includes('error') ||
+          m.includes('pas de rapport'),
       );
-      assert.ok(fallbackMessages.length >= 1, 'Opus should receive fallback when both agents crash');
+      assert.ok(
+        fallbackMessages.length >= 1,
+        'Opus should receive fallback when both agents crash',
+      );
     });
 
     it('Test 13 — @tous: Opus stdout bufferisé dès délégation même en mode @tous', async () => {
@@ -780,7 +810,11 @@ describe('Orchestrator', () => {
       const opusTextOutputs = h.log.outputs.filter(
         (o) => o.agent === 'opus' && o.line.type === 'stdout',
       );
-      assert.equal(opusTextOutputs.length, 0, 'Opus stdout should be BUFFERED in @tous when delegates pending');
+      assert.equal(
+        opusTextOutputs.length,
+        0,
+        'Opus stdout should be BUFFERED in @tous when delegates pending',
+      );
 
       // Actions (system type) should still pass through so user sees Opus working
       h.opus.emitAction('Read src/index.tsx');
@@ -802,7 +836,8 @@ describe('Orchestrator', () => {
       // Opus should now receive the combined report (with [RAPPORTS RECUS] header)
       const opusMessages = h.opus.getSentMessages();
       const combined = opusMessages.find(
-        (m) => m.includes('RAPPORTS RECUS') && m.includes('[FROM:SONNET]') && m.includes('[FROM:CODEX]'),
+        (m) =>
+          m.includes('RAPPORTS RECUS') && m.includes('[FROM:SONNET]') && m.includes('[FROM:CODEX]'),
       );
       assert.ok(combined, 'Opus should receive combined report after both delegates finish');
 

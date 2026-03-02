@@ -1,9 +1,17 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { createInterface } from 'node:readline';
-import type { AgentProcess, AgentId, AgentStatus, OutputLine, SessionConfig, ToolMeta, ToolAction } from './types.js';
+import type {
+  AgentProcess,
+  AgentId,
+  AgentStatus,
+  OutputLine,
+  SessionConfig,
+  ToolMeta,
+} from './types.js';
 import { flog } from '../utils/log.js';
 import { formatAction } from '../utils/format-action.js';
 import { VERSION } from '../utils/version.js';
+import { loadUserConfig } from '../config/user-config.js';
 
 /**
  * Abstract base class for agents communicating via `codex app-server` (JSON-RPC 2.0).
@@ -26,7 +34,14 @@ export abstract class BaseAppServerAgent implements AgentProcess {
   private outputHandlers: Array<(line: OutputLine) => void> = [];
   private statusHandlers: Array<(status: AgentStatus) => void> = [];
   private rpcId = 0;
-  private pendingRpc: Map<number, { resolve: (r: unknown) => void; reject: (e: Error) => void }> = new Map();
+  private pendingRpc: Map<
+    number,
+    {
+      resolve: (r: unknown) => void;
+      reject: (e: Error) => void;
+      timer: ReturnType<typeof setTimeout>;
+    }
+  > = new Map();
   private urgentQueue: string[] = [];
   private muted = false;
   private stopped = false;
@@ -89,9 +104,13 @@ export abstract class BaseAppServerAgent implements AgentProcess {
    *  even when the agent is muted (relay buffering). Only stopped agents are silenced. */
   protected emitCheckpoint(text: string) {
     if (this.stopped) return;
-    this.outputHandlers.forEach((h) => h({
-      text, timestamp: Date.now(), type: 'checkpoint',
-    }));
+    this.outputHandlers.forEach((h) =>
+      h({
+        text,
+        timestamp: Date.now(),
+        type: 'checkpoint',
+      }),
+    );
   }
 
   onOutput(handler: (line: OutputLine) => void) {
@@ -173,7 +192,11 @@ export abstract class BaseAppServerAgent implements AgentProcess {
     stderrRl.on('line', (line) => {
       if (!line.trim()) return;
       // Reconnection warnings are transient noise
-      if (/reconnect/i.test(line) || /stream disconnect/i.test(line) || /connection closed/i.test(line)) {
+      if (
+        /reconnect/i.test(line) ||
+        /stream disconnect/i.test(line) ||
+        /connection closed/i.test(line)
+      ) {
         flog.warn('AGENT', `${this.logTag} stderr (transient): ${line.slice(0, 200)}`);
         return;
       }
@@ -227,12 +250,13 @@ export abstract class BaseAppServerAgent implements AgentProcess {
         this.systemPromptSent = true;
       } else {
         // Create new thread
-        const result = await this.rpcRequest('thread/start', {
+        const sandbox = loadUserConfig().sandboxMode;
+        const result = (await this.rpcRequest('thread/start', {
           model: this.model,
           cwd: this.projectDir,
-          approvalPolicy: 'never',
-          sandbox: 'danger-full-access',
-        }) as { thread?: { id?: string } };
+          approvalPolicy: sandbox ? 'unless-allow-listed' : 'never',
+          sandbox: sandbox ? 'container' : 'danger-full-access',
+        })) as { thread?: { id?: string } };
         if (result?.thread?.id) {
           this.threadId = result.thread.id;
           flog.info('AGENT', `${this.logTag}: Thread created: ${this.threadId}`);
@@ -296,7 +320,12 @@ export abstract class BaseAppServerAgent implements AgentProcess {
     }
 
     // Prepend context reminder if session was lost
-    if (!this.threadId && this.systemPromptSent && this.contextReminder && !this.pendingSystemPrompt) {
+    if (
+      !this.threadId &&
+      this.systemPromptSent &&
+      this.contextReminder &&
+      !this.pendingSystemPrompt
+    ) {
       finalPrompt = `${this.contextReminder}\n\n${finalPrompt}`;
       flog.info('AGENT', `${this.logTag}: Session lost — prepending compact context reminder`);
     }
@@ -320,7 +349,10 @@ export abstract class BaseAppServerAgent implements AgentProcess {
     } else {
       // No active turn — queue for next send()
       this.urgentQueue.push(prompt);
-      flog.info('AGENT', `${this.logTag}: Urgent queued (${this.urgentQueue.length} pending): ${prompt.slice(0, 80)}`);
+      flog.info(
+        'AGENT',
+        `${this.logTag}: Urgent queued (${this.urgentQueue.length} pending): ${prompt.slice(0, 80)}`,
+      );
     }
   }
 
@@ -336,7 +368,10 @@ export abstract class BaseAppServerAgent implements AgentProcess {
           turnId: this.activeTurnId,
         });
       } catch (err) {
-        flog.debug('AGENT', `${this.logTag}: turn/interrupt failed (expected during shutdown): ${err}`);
+        flog.debug(
+          'AGENT',
+          `${this.logTag}: turn/interrupt failed (expected during shutdown): ${err}`,
+        );
       }
       this.activeTurnId = null;
     }
@@ -351,7 +386,11 @@ export abstract class BaseAppServerAgent implements AgentProcess {
 
       await new Promise<void>((resolve) => {
         const timeout = setTimeout(() => {
-          try { proc.kill('SIGKILL'); } catch { /* ignore */ }
+          try {
+            proc.kill('SIGKILL');
+          } catch {
+            /* ignore */
+          }
           flog.warn('AGENT', `${this.logTag}: Force killed after 3s`);
           resolve();
         }, 3000);
@@ -364,8 +403,9 @@ export abstract class BaseAppServerAgent implements AgentProcess {
       this.process = null;
     }
 
-    // Reject all pending RPCs
-    for (const [id, { reject }] of this.pendingRpc) {
+    // Reject all pending RPCs and clear their timeouts
+    for (const [id, { reject, timer }] of this.pendingRpc) {
+      clearTimeout(timer);
       reject(new Error(`${this.logTag}: stopped`));
       this.pendingRpc.delete(id);
     }
@@ -378,7 +418,9 @@ export abstract class BaseAppServerAgent implements AgentProcess {
   /** Map effort level to Codex-compatible effort string */
   private mapEffort(): string {
     const effortMap: Record<string, string> = {
-      high: 'xhigh', medium: 'high', low: 'medium',
+      high: 'xhigh',
+      medium: 'high',
+      low: 'medium',
     };
     return effortMap[this.effort] ?? 'xhigh';
   }
@@ -386,18 +428,23 @@ export abstract class BaseAppServerAgent implements AgentProcess {
   private startTurn(prompt: string) {
     if (!this.threadId || !this.process?.stdin?.writable) {
       flog.error('AGENT', `${this.logTag}: Cannot start turn — no thread or process`);
-      this.emit({ text: `${this.logTag}: processus mort — redemarrage necessaire`, timestamp: Date.now(), type: 'info' });
+      this.emit({
+        text: `${this.logTag}: processus mort — redemarrage necessaire`,
+        timestamp: Date.now(),
+        type: 'info',
+      });
       this.setStatus('error');
       return;
     }
 
+    const sandboxOn = loadUserConfig().sandboxMode;
     const turnParams: Record<string, unknown> = {
       threadId: this.threadId,
       input: [{ type: 'text', text: prompt }],
       model: this.model,
       effort: this.mapEffort(),
-      approvalPolicy: 'never',
-      sandboxPolicy: { type: 'dangerFullAccess' },
+      approvalPolicy: sandboxOn ? 'unless-allow-listed' : 'never',
+      sandboxPolicy: sandboxOn ? { type: 'container' } : { type: 'dangerFullAccess' },
     };
 
     if (this.thinking) {
@@ -422,7 +469,16 @@ export abstract class BaseAppServerAgent implements AgentProcess {
       }
 
       const id = this.rpcId++;
-      this.pendingRpc.set(id, { resolve, reject });
+
+      // Timeout for RPC responses — 30s (cleared when response arrives)
+      const timer = setTimeout(() => {
+        if (this.pendingRpc.has(id)) {
+          this.pendingRpc.delete(id);
+          reject(new Error(`${this.logTag}: RPC timeout for ${method} (#${id})`));
+        }
+      }, 30_000);
+
+      this.pendingRpc.set(id, { resolve, reject, timer });
 
       const msg = JSON.stringify({
         jsonrpc: '2.0',
@@ -436,14 +492,6 @@ export abstract class BaseAppServerAgent implements AgentProcess {
       if (!ok) {
         this.process.stdin.once('drain', () => {});
       }
-
-      // Timeout for RPC responses — 30s
-      setTimeout(() => {
-        if (this.pendingRpc.has(id)) {
-          this.pendingRpc.delete(id);
-          reject(new Error(`${this.logTag}: RPC timeout for ${method} (#${id})`));
-        }
-      }, 30_000);
     });
   }
 
@@ -470,9 +518,11 @@ export abstract class BaseAppServerAgent implements AgentProcess {
 
   private handleServerMessage(msg: Record<string, unknown>) {
     // RPC response (has 'id' field matching a pending request)
-    const msgId = typeof msg.id === 'number' ? msg.id : (typeof msg.id === 'string' ? Number(msg.id) : undefined);
+    const msgId =
+      typeof msg.id === 'number' ? msg.id : typeof msg.id === 'string' ? Number(msg.id) : undefined;
     if (msgId !== undefined && this.pendingRpc.has(msgId) && !msg.method) {
       const pending = this.pendingRpc.get(msgId)!;
+      clearTimeout(pending.timer);
       this.pendingRpc.delete(msgId);
 
       if (msg.error && typeof msg.error === 'object') {
@@ -488,11 +538,15 @@ export abstract class BaseAppServerAgent implements AgentProcess {
     // Server request or notification (has 'method' field)
     const method = typeof msg.method === 'string' ? msg.method : undefined;
     if (!method) {
-      flog.debug('AGENT', `${this.logTag}: Unknown server message: ${JSON.stringify(msg).slice(0, 200)}`);
+      flog.debug(
+        'AGENT',
+        `${this.logTag}: Unknown server message: ${JSON.stringify(msg).slice(0, 200)}`,
+      );
       return;
     }
 
-    const params = (msg.params && typeof msg.params === 'object') ? msg.params as Record<string, unknown> : {};
+    const params =
+      msg.params && typeof msg.params === 'object' ? (msg.params as Record<string, unknown>) : {};
 
     flog.debug('AGENT', `${this.logTag}: event ${method}`);
 
@@ -579,7 +633,10 @@ export abstract class BaseAppServerAgent implements AgentProcess {
   }
 
   private handleItemStarted(params: Record<string, unknown>) {
-    const item = (params.item && typeof params.item === 'object') ? params.item as Record<string, unknown> : params;
+    const item =
+      params.item && typeof params.item === 'object'
+        ? (params.item as Record<string, unknown>)
+        : params;
     const itemType = typeof item.type === 'string' ? item.type : undefined;
 
     if (itemType === 'commandExecution') {
@@ -604,27 +661,40 @@ export abstract class BaseAppServerAgent implements AgentProcess {
       // Emitting here would show a premature "~ Edit" before the real "+ Create".
     } else if (itemType === 'fileRead' || itemType === 'file_read' || itemType === 'read_file') {
       // Only emit checkpoint on start — the system action line is emitted on item/completed
-      const filename = typeof item.filename === 'string' ? item.filename
-        : typeof item.path === 'string' ? item.path : undefined;
+      const filename =
+        typeof item.filename === 'string'
+          ? item.filename
+          : typeof item.path === 'string'
+            ? item.path
+            : undefined;
       if (filename) {
         this.emitCheckpoint(`[CODEX:checkpoint] Reading: ${filename}`);
       }
     }
     // agentMessage items — reset delta buffer for new item
-    if (itemType === 'agent_message' || itemType === 'agentMessage' || itemType === 'message' || itemType === 'output_message') {
+    if (
+      itemType === 'agent_message' ||
+      itemType === 'agentMessage' ||
+      itemType === 'message' ||
+      itemType === 'output_message'
+    ) {
       this.agentMessageBuffer = '';
       this.hadAgentMessageDeltas = false;
     }
   }
 
   private handleItemCompleted(params: Record<string, unknown>) {
-    const item = (params.item && typeof params.item === 'object') ? params.item as Record<string, unknown> : params;
+    const item =
+      params.item && typeof params.item === 'object'
+        ? (params.item as Record<string, unknown>)
+        : params;
     const itemType = typeof item.type === 'string' ? item.type : undefined;
     const itemStatus = typeof item.status === 'string' ? item.status : undefined;
 
     // Reasoning — log only
     if (itemType === 'reasoning') {
-      if (typeof item.text === 'string') flog.debug('AGENT', `${this.logTag} reasoning: ${item.text.slice(0, 120)}`);
+      if (typeof item.text === 'string')
+        flog.debug('AGENT', `${this.logTag} reasoning: ${item.text.slice(0, 120)}`);
       return;
     }
 
@@ -682,8 +752,12 @@ export abstract class BaseAppServerAgent implements AgentProcess {
     // Command execution completed — show exit code
     if (itemType === 'commandExecution' || itemType === 'command_execution') {
       const command = typeof item.command === 'string' ? item.command : undefined;
-      const exitCode = typeof item.exitCode === 'number' ? item.exitCode
-        : typeof item.exit_code === 'number' ? item.exit_code : undefined;
+      const exitCode =
+        typeof item.exitCode === 'number'
+          ? item.exitCode
+          : typeof item.exit_code === 'number'
+            ? item.exit_code
+            : undefined;
       if (command) {
         // Detect file creation via heredoc: cat > file <<'EOF' ... EOF
         const fileCreateInfo = this.detectFileCreateCommand(command);
@@ -693,15 +767,28 @@ export abstract class BaseAppServerAgent implements AgentProcess {
           if (createFormatted) {
             const meta: ToolMeta = { tool: 'create', file: fileCreateInfo.file };
             if (fileCreateInfo.lines.length > 0) meta.newLines = fileCreateInfo.lines;
-            flog.debug('AGENT', `${this.logTag}: Detected file create via bash: ${fileCreateInfo.file} (${fileCreateInfo.lines.length} lines)`);
-            this.emit({ text: createFormatted, timestamp: Date.now(), type: 'system', toolMeta: meta });
+            flog.debug(
+              'AGENT',
+              `${this.logTag}: Detected file create via bash: ${fileCreateInfo.file} (${fileCreateInfo.lines.length} lines)`,
+            );
+            this.emit({
+              text: createFormatted,
+              timestamp: Date.now(),
+              type: 'system',
+              toolMeta: meta,
+            });
           }
         } else {
           const formatted = formatAction('bash', command);
           if (formatted) {
             const suffix = exitCode !== undefined && exitCode !== 0 ? ` (exit ${exitCode})` : '';
             const meta: ToolMeta = { tool: 'bash', command, exitCode };
-            this.emit({ text: `${formatted}${suffix}`, timestamp: Date.now(), type: 'system', toolMeta: meta });
+            this.emit({
+              text: `${formatted}${suffix}`,
+              timestamp: Date.now(),
+              type: 'system',
+              toolMeta: meta,
+            });
           }
         }
         if (exitCode !== undefined && exitCode !== 0) {
@@ -711,31 +798,48 @@ export abstract class BaseAppServerAgent implements AgentProcess {
             this.emit({ text: short, timestamp: Date.now(), type: 'info' });
           }
         }
-        this.emitCheckpoint(`[CODEX:checkpoint] Command: ${command.slice(0, 100)}${exitCode !== undefined ? ` (exit ${exitCode})` : ''}`);
+        this.emitCheckpoint(
+          `[CODEX:checkpoint] Command: ${command.slice(0, 100)}${exitCode !== undefined ? ` (exit ${exitCode})` : ''}`,
+        );
       }
       return;
     }
 
     // File change completed — changes: [{ path, kind, diff }]
     if (itemType === 'fileChange' || itemType === 'file_change') {
-      flog.debug('AGENT', `${this.logTag}: fileChange raw keys=${Object.keys(item).join(',')} changes=${Array.isArray(item.changes)} hasFilename=${!!item.filename} hasPath=${!!item.path} hasDiff=${!!item.diff}`);
+      flog.debug(
+        'AGENT',
+        `${this.logTag}: fileChange raw keys=${Object.keys(item).join(',')} changes=${Array.isArray(item.changes)} hasFilename=${!!item.filename} hasPath=${!!item.path} hasDiff=${!!item.diff}`,
+      );
       // Some API versions put file/diff at item level instead of inside changes[]
       const changes: Array<Record<string, unknown>> = Array.isArray(item.changes)
-        ? item.changes as Array<Record<string, unknown>>
-        : (item.filename || item.path || item.diff)
+        ? (item.changes as Array<Record<string, unknown>>)
+        : item.filename || item.path || item.diff
           ? [item as Record<string, unknown>]
           : [];
       if (changes.length > 0) {
         for (const change of changes) {
-          const file = typeof change.path === 'string' ? change.path
-            : typeof change.filename === 'string' ? change.filename : undefined;
+          const file =
+            typeof change.path === 'string'
+              ? change.path
+              : typeof change.filename === 'string'
+                ? change.filename
+                : undefined;
           const kind = typeof change.kind === 'string' ? change.kind : undefined;
-          flog.debug('AGENT', `${this.logTag}: fileChange detail: kind=${kind} file=${file} keys=${Object.keys(change).join(',')}`);
+          flog.debug(
+            'AGENT',
+            `${this.logTag}: fileChange detail: kind=${kind} file=${file} keys=${Object.keys(change).join(',')}`,
+          );
           if (file) {
             // Use diff from change object, or fall back to buffered outputDelta diff
-            const diff = typeof change.diff === 'string' ? change.diff
-              : (this.pendingFileChangeDiff ?? undefined);
-            flog.debug('AGENT', `${this.logTag}: fileChange diff source: change.diff=${typeof change.diff === 'string'} pending=${!!this.pendingFileChangeDiff} hasDiff=${!!diff} diffLen=${diff?.length ?? 0}`);
+            const diff =
+              typeof change.diff === 'string'
+                ? change.diff
+                : (this.pendingFileChangeDiff ?? undefined);
+            flog.debug(
+              'AGENT',
+              `${this.logTag}: fileChange diff source: change.diff=${typeof change.diff === 'string'} pending=${!!this.pendingFileChangeDiff} hasDiff=${!!diff} diffLen=${diff?.length ?? 0}`,
+            );
 
             // Parse diff lines
             const oldLines: string[] = [];
@@ -768,27 +872,47 @@ export abstract class BaseAppServerAgent implements AgentProcess {
             if (oldLines.length > 0) meta.oldLines = oldLines;
             if (newLines.length > 0) {
               meta.newLines = newLines;
-            } else if (diff && diff.trim().length > 0 && oldLines.length === 0 && newLines.length === 0) {
+            } else if (
+              diff &&
+              diff.trim().length > 0 &&
+              oldLines.length === 0 &&
+              newLines.length === 0
+            ) {
               // Diff has no +/- prefixes → raw file content (file creation)
               meta.newLines = diff.split('\n');
               label = 'create';
               meta.tool = 'create';
-              flog.debug('AGENT', `${this.logTag}: fileChange diff is raw content, treating as create`);
+              flog.debug(
+                'AGENT',
+                `${this.logTag}: fileChange diff is raw content, treating as create`,
+              );
             }
 
             // Fallback: content/new_content fields for create
             if (!meta.newLines?.length && label === 'create') {
-              const content = typeof change.content === 'string' ? change.content
-                : typeof change.new_content === 'string' ? change.new_content : undefined;
+              const content =
+                typeof change.content === 'string'
+                  ? change.content
+                  : typeof change.new_content === 'string'
+                    ? change.new_content
+                    : undefined;
               if (content) meta.newLines = content.split('\n');
             }
 
-            flog.debug('AGENT', `${this.logTag}: fileChange result: label=${label} old=${meta.oldLines?.length ?? 0} new=${meta.newLines?.length ?? 0}`);
+            flog.debug(
+              'AGENT',
+              `${this.logTag}: fileChange result: label=${label} old=${meta.oldLines?.length ?? 0} new=${meta.newLines?.length ?? 0}`,
+            );
 
             const formatted = formatAction(label, file);
             if (formatted) {
               const suffix = itemStatus && itemStatus !== 'completed' ? ` (${itemStatus})` : '';
-              this.emit({ text: `${formatted}${suffix}`, timestamp: Date.now(), type: 'system', toolMeta: meta });
+              this.emit({
+                text: `${formatted}${suffix}`,
+                timestamp: Date.now(),
+                type: 'system',
+                toolMeta: meta,
+              });
             }
             // Clear pending diff buffer after use
             this.pendingFileChangeDiff = null;
@@ -801,8 +925,12 @@ export abstract class BaseAppServerAgent implements AgentProcess {
 
     // File read completed
     if (itemType === 'fileRead' || itemType === 'file_read' || itemType === 'read_file') {
-      const filename = typeof item.filename === 'string' ? item.filename
-        : typeof item.path === 'string' ? item.path : undefined;
+      const filename =
+        typeof item.filename === 'string'
+          ? item.filename
+          : typeof item.path === 'string'
+            ? item.path
+            : undefined;
       if (filename) {
         const formatted = formatAction('read', filename);
         if (formatted) {
@@ -818,7 +946,10 @@ export abstract class BaseAppServerAgent implements AgentProcess {
     if (Array.isArray(item.content)) {
       if (this.suppressUserEchoCount > 0) {
         this.suppressUserEchoCount--;
-        flog.debug('AGENT', `${this.logTag}: Suppressed user-message echo (content array, fused system prompt)`);
+        flog.debug(
+          'AGENT',
+          `${this.logTag}: Suppressed user-message echo (content array, fused system prompt)`,
+        );
         return;
       }
       for (const block of item.content as Array<Record<string, unknown>>) {
@@ -832,14 +963,20 @@ export abstract class BaseAppServerAgent implements AgentProcess {
     // Catch-all text extraction — but not if we're suppressing a user echo
     if (this.suppressUserEchoCount > 0) {
       this.suppressUserEchoCount--;
-      flog.debug('AGENT', `${this.logTag}: Suppressed user-message echo (catch-all, fused system prompt)`);
+      flog.debug(
+        'AGENT',
+        `${this.logTag}: Suppressed user-message echo (catch-all, fused system prompt)`,
+      );
       return;
     }
     const fallbackText = this.extractText(item);
     if (fallbackText) {
       this.emit({ text: fallbackText, timestamp: Date.now(), type: 'stdout' });
     } else {
-      flog.debug('AGENT', `${this.logTag}: item/completed type="${itemType}" — no text extracted. Keys: ${Object.keys(item).join(', ')}`);
+      flog.debug(
+        'AGENT',
+        `${this.logTag}: item/completed type="${itemType}" — no text extracted. Keys: ${Object.keys(item).join(', ')}`,
+      );
     }
   }
 
@@ -908,13 +1045,23 @@ export abstract class BaseAppServerAgent implements AgentProcess {
     const delta = typeof params.delta === 'string' ? params.delta : undefined;
     if (delta) {
       this.pendingFileChangeDiff = (this.pendingFileChangeDiff ?? '') + delta;
-      flog.debug('AGENT', `${this.logTag}: fileChange outputDelta: +${delta.length} chars (total: ${this.pendingFileChangeDiff.length})`);
+      flog.debug(
+        'AGENT',
+        `${this.logTag}: fileChange outputDelta: +${delta.length} chars (total: ${this.pendingFileChangeDiff.length})`,
+      );
     }
     // Some API versions send the item with file info
-    const item = (params.item && typeof params.item === 'object') ? params.item as Record<string, unknown> : undefined;
+    const item =
+      params.item && typeof params.item === 'object'
+        ? (params.item as Record<string, unknown>)
+        : undefined;
     if (item) {
-      const file = typeof item.filename === 'string' ? item.filename
-        : typeof item.path === 'string' ? item.path : undefined;
+      const file =
+        typeof item.filename === 'string'
+          ? item.filename
+          : typeof item.path === 'string'
+            ? item.path
+            : undefined;
       if (file) this.pendingFileChangePath = file;
     }
   }
@@ -936,20 +1083,30 @@ export abstract class BaseAppServerAgent implements AgentProcess {
   }
 
   private handleRequestApproval(msg: Record<string, unknown>) {
-    // Auto-accept all approvals (full-auto mode)
     const id = typeof msg.id === 'number' ? msg.id : undefined;
-    if (id !== undefined) {
-      const response = JSON.stringify({
-        jsonrpc: '2.0',
-        id,
-        result: { decision: 'accept' },
-      });
-      if (this.process?.stdin?.writable) {
-        this.process.stdin.write(response + '\n');
-        flog.debug('AGENT', `${this.logTag}: Auto-accepted approval request #${id}`);
-      }
-    } else {
+    if (id === undefined) {
       flog.warn('AGENT', `${this.logTag}: Approval request without id — cannot respond`);
+      return;
+    }
+
+    if (loadUserConfig().sandboxMode) {
+      // Sandbox mode: auto-accept read-only ops, auto-accept for now
+      // (full approval UI would require user interaction which we can't do in background agents)
+      // For now, still auto-accept but log prominently
+      flog.warn(
+        'AGENT',
+        `${this.logTag}: Auto-accepting approval #${id} (sandbox mode — approval UI not yet implemented)`,
+      );
+    }
+
+    const response = JSON.stringify({
+      jsonrpc: '2.0',
+      id,
+      result: { decision: 'accept' },
+    });
+    if (this.process?.stdin?.writable) {
+      this.process.stdin.write(response + '\n');
+      flog.debug('AGENT', `${this.logTag}: Auto-accepted approval request #${id}`);
     }
   }
 
@@ -983,14 +1140,22 @@ export abstract class BaseAppServerAgent implements AgentProcess {
     const willRetry = typeof params.willRetry === 'boolean' ? params.willRetry : false;
 
     // Transient reconnection warnings — ignore
-    if (/reconnect/i.test(errorMsg) || /stream disconnect/i.test(errorMsg) || /connection closed/i.test(errorMsg)) {
+    if (
+      /reconnect/i.test(errorMsg) ||
+      /stream disconnect/i.test(errorMsg) ||
+      /connection closed/i.test(errorMsg)
+    ) {
       flog.warn('AGENT', `${this.logTag}: Transient warning (non-fatal): ${errorMsg}`);
       return;
     }
 
     if (willRetry) {
       flog.warn('AGENT', `${this.logTag}: Error (will retry): ${errorMsg}`);
-      this.emit({ text: `Codex: ${errorMsg} (retry en cours...)`, timestamp: Date.now(), type: 'info' });
+      this.emit({
+        text: `Codex: ${errorMsg} (retry en cours...)`,
+        timestamp: Date.now(),
+        type: 'info',
+      });
       return;
     }
 
@@ -1030,12 +1195,20 @@ export abstract class BaseAppServerAgent implements AgentProcess {
   private cleanupReadlines() {
     if (this.stdoutRl) {
       this.stdoutRl.removeAllListeners();
-      try { this.stdoutRl.close(); } catch { /* ignore */ }
+      try {
+        this.stdoutRl.close();
+      } catch {
+        /* ignore */
+      }
       this.stdoutRl = null;
     }
     if (this.stderrRl) {
       this.stderrRl.removeAllListeners();
-      try { this.stderrRl.close(); } catch { /* ignore */ }
+      try {
+        this.stderrRl.close();
+      } catch {
+        /* ignore */
+      }
       this.stderrRl = null;
     }
   }

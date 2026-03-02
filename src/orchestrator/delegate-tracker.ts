@@ -41,7 +41,6 @@ export class DelegateTracker {
 
   /** Safety-net timers for auto-relay */
   private readonly safetyNetTimers: Map<AgentId, ReturnType<typeof setTimeout>> = new Map();
-  private readonly SAFETY_NET_DEBOUNCE_MS = 500;
 
   /** Heartbeat interval for monitoring delegates */
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
@@ -123,14 +122,21 @@ export class DelegateTracker {
           continue;
         }
 
-        const idleTimeout = delegate === 'codex' && this.CODEX_TIMEOUT_MS >= 0
-          ? this.CODEX_TIMEOUT_MS
-          : this.IDLE_TIMEOUT_MS;
+        const idleTimeout =
+          delegate === 'codex' && this.CODEX_TIMEOUT_MS >= 0
+            ? this.CODEX_TIMEOUT_MS
+            : this.IDLE_TIMEOUT_MS;
         if (idleTimeout > 0 && idleMs >= idleTimeout) {
-          flog.warn('ORCH', `Heartbeat: ${delegate} idle for ${Math.round(idleMs / 1000)}s (status=${agent.status}) — timing out`);
+          flog.warn(
+            'ORCH',
+            `Heartbeat: ${delegate} idle for ${Math.round(idleMs / 1000)}s (status=${agent.status}) — timing out`,
+          );
           timedOut.push(delegate);
         } else {
-          flog.debug('ORCH', `Heartbeat: ${delegate} idle ${Math.round(idleMs / 1000)}s/${idleTimeout > 0 ? Math.round(idleTimeout / 1000) + 's' : '∞'} (status=${agent.status})`);
+          flog.debug(
+            'ORCH',
+            `Heartbeat: ${delegate} idle ${Math.round(idleMs / 1000)}s/${idleTimeout > 0 ? Math.round(idleTimeout / 1000) + 's' : '∞'} (status=${agent.status})`,
+          );
         }
       }
 
@@ -211,7 +217,10 @@ export class DelegateTracker {
     state.failures++;
     if (state.failures >= this.CB_THRESHOLD) {
       state.openedAt = Date.now();
-      flog.warn('ORCH', `Circuit breaker OPEN for ${agent} (${state.failures} consecutive failures)`);
+      flog.warn(
+        'ORCH',
+        `Circuit breaker OPEN for ${agent} (${state.failures} consecutive failures)`,
+      );
     }
     this.circuitBreaker.set(agent, state);
   }
@@ -221,7 +230,10 @@ export class DelegateTracker {
     const state = this.circuitBreaker.get(agent);
     if (!state?.openedAt) return false;
     if (Date.now() - state.openedAt >= this.CB_COOLDOWN_MS) {
-      flog.info('ORCH', `Circuit breaker HALF-OPEN for ${agent} (cooldown elapsed) — allowing retry`);
+      flog.info(
+        'ORCH',
+        `Circuit breaker HALF-OPEN for ${agent} (cooldown elapsed) — allowing retry`,
+      );
       state.openedAt = null;
       state.failures = 0;
       return false;
@@ -262,7 +274,10 @@ export class DelegateTracker {
   hasCrossTalkPending(): boolean {
     for (const delegate of this.expectedDelegates) {
       if (this.deps.crossTalk.isOnCrossTalk(delegate)) {
-        flog.debug('ORCH', `Cross-talk still active for delegate ${delegate} — holding combined delivery`);
+        flog.debug(
+          'ORCH',
+          `Cross-talk still active for delegate ${delegate} — holding combined delivery`,
+        );
         return true;
       }
     }
@@ -278,13 +293,17 @@ export class DelegateTracker {
       return;
     }
 
-    const agentNames = [...this.pendingReports.keys()].map(a => a.charAt(0).toUpperCase() + a.slice(1));
+    const agentNames = [...this.pendingReports.keys()].map(
+      (a) => a.charAt(0).toUpperCase() + a.slice(1),
+    );
     const parts: string[] = [];
     const REPORT_MAX_CHARS = 5000;
     for (const [agent, report] of this.pendingReports) {
-      const trimmed = report.length > REPORT_MAX_CHARS
-        ? report.slice(0, REPORT_MAX_CHARS) + '\n... [rapport tronqué — contenu complet dans les fichiers]'
-        : report;
+      const trimmed =
+        report.length > REPORT_MAX_CHARS
+          ? report.slice(0, REPORT_MAX_CHARS) +
+            '\n... [rapport tronqué — contenu complet dans les fichiers]'
+          : report;
       parts.push(`[FROM:${agent.toUpperCase()}] ${trimmed}`);
     }
     const reportsBody = parts.join('\n\n---\n\n');
@@ -339,18 +358,14 @@ INSTRUCTIONS CRITIQUES:
     const isMultiDelegate = deliveredAgents.length > 1;
     for (const agent of deliveredAgents) {
       const report = deliveredReportsCopy.get(agent) ?? '';
-      const cleanReport = report
-        .replace(/^\[(?:TO|FROM):(?:OPUS|SONNET|CODEX)\]\s*/gi, '')
-        .trim();
+      const cleanReport = report.replace(/^\[(?:TO|FROM):(?:OPUS|SONNET|CODEX)\]\s*/gi, '').trim();
       let preview: string;
       if (isMultiDelegate) {
-        preview = cleanReport.length > 80
-          ? cleanReport.slice(0, 77) + '...'
-          : cleanReport || 'terminé';
+        preview =
+          cleanReport.length > 80 ? cleanReport.slice(0, 77) + '...' : cleanReport || 'terminé';
       } else {
-        preview = cleanReport.length > 120
-          ? cleanReport.slice(0, 117) + '...'
-          : cleanReport || 'terminé';
+        preview =
+          cleanReport.length > 120 ? cleanReport.slice(0, 117) + '...' : cleanReport || 'terminé';
       }
       this.deps.bus.emit('relay', {
         from: agent,
@@ -371,7 +386,15 @@ INSTRUCTIONS CRITIQUES:
 
   // ── Auto-relay buffer (safety net) ──
 
-  autoRelayBuffer(agent: AgentId, relayRouter: { isRelayTag(line: string): boolean; agentsOnRelay: Set<AgentId>; relayStartTime: Map<AgentId, number>; recordRelay(): void }): void {
+  autoRelayBuffer(
+    agent: AgentId,
+    relayRouter: {
+      isRelayTag(line: string): boolean;
+      agentsOnRelay: Set<AgentId>;
+      relayStartTime: Map<AgentId, number>;
+      recordRelay(): void;
+    },
+  ): void {
     const buffer = this.deps.buffers.getBuffer(agent);
     const textLines = buffer
       .filter((l: OutputLine) => l.type === 'stdout')
@@ -381,10 +404,16 @@ INSTRUCTIONS CRITIQUES:
       .trim();
 
     if (textLines) {
-      flog.info('ORCH', `${agent} finished on relay without [TO:OPUS] — auto-relaying ${textLines.length} chars`);
+      flog.info(
+        'ORCH',
+        `${agent} finished on relay without [TO:OPUS] — auto-relaying ${textLines.length} chars`,
+      );
       if (this.expectedDelegates.has(agent)) {
         this.pendingReports.set(agent, textLines);
-        flog.info('ORCH', `Auto-buffered ${agent} report (${this.pendingReports.size}/${this.expectedDelegates.size})`);
+        flog.info(
+          'ORCH',
+          `Auto-buffered ${agent} report (${this.pendingReports.size}/${this.expectedDelegates.size})`,
+        );
         if (this.pendingReports.size >= this.expectedDelegates.size) {
           this.deliverCombinedReports();
         }
@@ -403,7 +432,10 @@ INSTRUCTIONS CRITIQUES:
 
       const lastErr = agentInstance.lastError ?? null;
       const placeholder = lastErr ? `(erreur: ${lastErr})` : '(pas de rapport)';
-      flog.warn('ORCH', `${agent} finished on relay — no buffered text (${placeholder}), status=${agentInstance.status}`);
+      flog.warn(
+        'ORCH',
+        `${agent} finished on relay — no buffered text (${placeholder}), status=${agentInstance.status}`,
+      );
 
       const hadExpected = this.expectedDelegates.has(agent);
       const fallback = this.pickFallbackAgent(agent);

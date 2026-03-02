@@ -1,4 +1,11 @@
-import { createWriteStream, mkdirSync, writeFileSync, readdirSync, unlinkSync, type WriteStream } from 'node:fs';
+import {
+  createWriteStream,
+  mkdirSync,
+  writeFileSync,
+  readdirSync,
+  unlinkSync,
+  type WriteStream,
+} from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { getFlowId } from './flow.js';
@@ -43,37 +50,42 @@ export function initLog(options?: { level?: LogLevel }): void {
 
   minLevel = options?.level ?? 'debug';
 
-  const logDir = join(homedir(), '.fedi-cli', 'logs');
-  mkdirSync(logDir, { recursive: true });
+  try {
+    const logDir = join(homedir(), '.fedi-cli', 'logs');
+    mkdirSync(logDir, { recursive: true });
 
-  // Rotate old log files — keep only the most recent N pairs
-  rotateLogFiles(logDir);
+    // Rotate old log files — keep only the most recent N pairs
+    rotateLogFiles(logDir);
 
-  const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-  const jsonlPath = join(logDir, `fedi-${ts}.jsonl`);
-  const humanPath = join(logDir, `fedi-${ts}.log`);
+    const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    const jsonlPath = join(logDir, `fedi-${ts}.jsonl`);
+    const humanPath = join(logDir, `fedi-${ts}.log`);
 
-  // Write header to human log
-  const header = `${'='.repeat(70)}\n  FEDI CLI — ${new Date().toISOString()}\n${'='.repeat(70)}\n\n`;
-  writeFileSync(humanPath, header, 'utf-8');
-  writeFileSync(jsonlPath, '', 'utf-8');
+    // Write header to human log
+    const header = `${'='.repeat(70)}\n  FEDI CLI — ${new Date().toISOString()}\n${'='.repeat(70)}\n\n`;
+    writeFileSync(humanPath, header, 'utf-8');
+    writeFileSync(jsonlPath, '', 'utf-8');
 
-  // Open async write streams
-  jsonlStream = createWriteStream(jsonlPath, { flags: 'a', encoding: 'utf-8' });
-  humanStream = createWriteStream(humanPath, { flags: 'a', encoding: 'utf-8' });
+    // Open async write streams
+    jsonlStream = createWriteStream(jsonlPath, { flags: 'a', encoding: 'utf-8' });
+    humanStream = createWriteStream(humanPath, { flags: 'a', encoding: 'utf-8' });
 
-  // Silently handle stream errors to avoid crashing on disk issues
-  jsonlStream.on('error', () => {});
-  humanStream.on('error', () => {});
+    // Silently handle stream errors to avoid crashing on disk issues
+    jsonlStream.on('error', () => {});
+    humanStream.on('error', () => {});
 
-  // Flush and close streams on process exit to prevent data loss
-  const closeStreams = () => {
-    jsonlStream?.end();
-    humanStream?.end();
-  };
-  process.once('exit', closeStreams);
-  process.once('SIGINT', closeStreams);
-  process.once('SIGTERM', closeStreams);
+    // Flush and close streams on process exit to prevent data loss
+    const closeStreams = () => {
+      jsonlStream?.end();
+      humanStream?.end();
+    };
+    process.once('exit', closeStreams);
+    process.once('SIGINT', closeStreams);
+    process.once('SIGTERM', closeStreams);
+  } catch {
+    // Log initialization failed (disk full, permissions, etc.)
+    // CLI continues without file logging — no crash.
+  }
 }
 
 // ── Core write ─────────────────────────────────────────────────────────────
@@ -87,7 +99,12 @@ function formatTimestamp(): string {
   return `${h}:${m}:${s}.${ms}`;
 }
 
-function write(level: LogLevel, cat: LogCategory, msg: string, ctx?: Record<string, unknown>): void {
+function write(
+  level: LogLevel,
+  cat: LogCategory,
+  msg: string,
+  ctx?: Record<string, unknown>,
+): void {
   if (!initialized) return;
   if (LEVEL_PRIORITY[level] < LEVEL_PRIORITY[minLevel]) return;
 
@@ -113,7 +130,10 @@ function write(level: LogLevel, cat: LogCategory, msg: string, ctx?: Record<stri
     const category = `[${cat}]`.padEnd(10);
     const flowStr = flowId ? `flow=${flowId} ` : '';
     const ctxStr = ctx
-      ? ' ' + Object.entries(ctx).map(([k, v]) => `${k}=${v}`).join(' ')
+      ? ' ' +
+        Object.entries(ctx)
+          .map(([k, v]) => `${k}=${v}`)
+          .join(' ')
       : '';
     humanStream.write(`${timestamp} ${lvl} ${category} ${flowStr}${msg}${ctxStr}\n`);
   }
@@ -138,9 +158,13 @@ function rotateLogFiles(logDir: string): void {
     for (const file of toDelete) {
       try {
         unlinkSync(join(logDir, file));
-      } catch { /* ignore individual file errors */ }
+      } catch {
+        /* ignore individual file errors */
+      }
     }
-  } catch { /* ignore rotation errors — don't block startup */ }
+  } catch {
+    /* ignore rotation errors — don't block startup */
+  }
 }
 
 // ── Public API ─────────────────────────────────────────────────────────────

@@ -37,3 +37,16 @@ jobs:
 
       - name: Test
         run: npm test
+
+      - name: Smoke test — pack and install tarball
+        run: |
+          npm pack
+          TARBALL=$(ls fedi-cli-*.tgz)
+          mkdir /tmp/smoke-test && cd /tmp/smoke-test
+          npm init -y
+          npm install "$GITHUB_WORKSPACE/$TARBALL"
+          # Verify bin/fedi.js is present
+          test -f node_modules/.bin/fedi
+          echo "OK: bin/fedi exists"
+          # Verify main() is exported and loadable
+          node --input-type=module -e 'import("fedi-cli/dist/index.js").then(m => { if (typeof m.main === "function") { console.log("OK: main() exported"); process.exit(0); } else { console.error("FAIL: main() not found"); process.exit(1); } })'

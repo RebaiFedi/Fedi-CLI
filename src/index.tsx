@@ -9,7 +9,15 @@ import { ErrorBoundary } from './ui/ErrorBoundary.js';
 import { SessionManager } from './utils/session-manager.js';
 import { THEME } from './config/theme.js';
 import { VERSION } from './utils/version.js';
-import { applyProfile, setAgentEffort, setAgentThinking, type EffortLevel, type ProfileName, PROFILES } from './config/user-config.js';
+import {
+  applyProfile,
+  setAgentEffort,
+  setAgentThinking,
+  setSandboxMode,
+  type EffortLevel,
+  type ProfileName,
+  PROFILES,
+} from './config/user-config.js';
 
 async function printSessionList(projectDir: string) {
   const sm = new SessionManager(projectDir);
@@ -146,6 +154,8 @@ ${chalk.white.bold('PROFILS & PERFORMANCE')}
   --codex-effort <high|medium|low>   Effort Codex
   --thinking                   Activer thinking pour Opus
   --no-thinking                Desactiver thinking pour tous
+  --sandbox                    Mode securise (defaut): approbation requise
+  --unsafe                     Mode full-auto: aucune approbation
 
   ${chalk.dim('Profils:')}
     ${chalk.hex(THEME.opus)('high')}     opus=high/think  sonnet=high/think  codex=high/think
@@ -175,17 +185,17 @@ ${chalk.dim('Sessions: ./sessions/')}
 }
 
 export async function main() {
-  // Initialize unified logging — writes to ~/.fedi-cli/logs/
-  initLog();
-  flog.info('SYSTEM', '=== Fedi CLI starting ===');
-
   const args = process.argv.slice(2);
 
-  // Handle --help flag
+  // Handle --help flag BEFORE initLog so it never crashes on disk issues
   if (args.includes('--help') || args.includes('-h')) {
     printHelp();
     process.exit(0);
   }
+
+  // Initialize unified logging — writes to ~/.fedi-cli/logs/
+  initLog();
+  flog.info('SYSTEM', '=== Fedi CLI starting ===');
 
   // Handle --sessions flag
   if (args.includes('--sessions')) {
@@ -271,6 +281,14 @@ export async function main() {
     setAgentThinking('opus', false);
     setAgentThinking('sonnet', false);
     setAgentThinking('codex', false);
+  }
+
+  // Handle --sandbox / --unsafe flags
+  if (args.includes('--sandbox')) {
+    setSandboxMode(true);
+  }
+  if (args.includes('--unsafe')) {
+    setSandboxMode(false);
   }
 
   const clis = await detectAll();

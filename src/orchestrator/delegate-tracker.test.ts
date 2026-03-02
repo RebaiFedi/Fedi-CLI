@@ -1,4 +1,4 @@
-import { describe, it, beforeEach } from 'node:test';
+import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { DelegateTracker } from './delegate-tracker.js';
 import type { DelegateTrackerDeps } from './delegate-tracker.js';
@@ -6,7 +6,7 @@ import { CrossTalkManager } from './cross-talk-manager.js';
 import { BufferManager } from './buffer-manager.js';
 import { MessageBus } from './message-bus.js';
 import { MockAgent } from '../test-utils/mock-agent.js';
-import type { AgentId, Message } from '../agents/types.js';
+import type { Message } from '../agents/types.js';
 
 function makeTracker(overrides?: Partial<DelegateTrackerDeps>) {
   const opus = new MockAgent('opus');
@@ -39,7 +39,6 @@ function makeTracker(overrides?: Partial<DelegateTrackerDeps>) {
 }
 
 describe('DelegateTracker', () => {
-
   // ── Basic state ──
 
   describe('basic state', () => {
@@ -75,7 +74,9 @@ describe('DelegateTracker', () => {
     it('setSafetyNetTimer stores and clearSafetyNetTimer removes', () => {
       const { tracker } = makeTracker();
       let fired = false;
-      const timer = setTimeout(() => { fired = true; }, 10_000);
+      const timer = setTimeout(() => {
+        fired = true;
+      }, 10_000);
       tracker.setSafetyNetTimer('sonnet', timer);
       tracker.clearSafetyNetTimer('sonnet');
       // Timer was cleared — should not fire
@@ -84,8 +85,7 @@ describe('DelegateTracker', () => {
 
     it('setSafetyNetTimer clears previous timer', () => {
       const { tracker } = makeTracker();
-      let firstFired = false;
-      const timer1 = setTimeout(() => { firstFired = true; }, 10_000);
+      const timer1 = setTimeout(() => {}, 10_000);
       tracker.setSafetyNetTimer('sonnet', timer1);
 
       const timer2 = setTimeout(() => {}, 10_000);
@@ -158,7 +158,7 @@ describe('DelegateTracker', () => {
     });
 
     it('returns opus when no worker fallback available', () => {
-      const { tracker, sonnet, codex } = makeTracker();
+      const { tracker } = makeTracker();
       tracker.expectedDelegates.add('sonnet');
       tracker.expectedDelegates.add('codex');
       // Both are expected delegates — codex can't be fallback for sonnet
@@ -235,7 +235,7 @@ describe('DelegateTracker', () => {
       tracker.deliverCombinedReports();
 
       assert.ok(sentToOpus.length >= 1);
-      const combined = sentToOpus.find(m => m.content.includes('[RAPPORTS RECUS'));
+      const combined = sentToOpus.find((m) => m.content.includes('[RAPPORTS RECUS'));
       assert.ok(combined, 'should send combined report');
       assert.ok(combined!.content.includes('Frontend report'));
       assert.ok(combined!.content.includes('Backend report'));
@@ -284,13 +284,17 @@ describe('DelegateTracker', () => {
 
     it('includes Opus buffered analysis when available', () => {
       const { tracker, buffers, sentToOpus } = makeTracker();
-      buffers.pushToBuffer('opus', { text: 'My opus analysis', timestamp: Date.now(), type: 'stdout' });
+      buffers.pushToBuffer('opus', {
+        text: 'My opus analysis',
+        timestamp: Date.now(),
+        type: 'stdout',
+      });
       tracker.expectedDelegates.add('sonnet');
       tracker.pendingReports.set('sonnet', 'Report');
 
       tracker.deliverCombinedReports();
 
-      const combined = sentToOpus.find(m => m.content.includes('My opus analysis'));
+      const combined = sentToOpus.find((m) => m.content.includes('My opus analysis'));
       assert.ok(combined, 'should include opus buffered analysis');
     });
   });

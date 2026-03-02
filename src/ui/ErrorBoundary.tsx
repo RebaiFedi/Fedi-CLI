@@ -1,7 +1,10 @@
 import React from 'react';
 import { Box, Text } from 'ink';
 
-interface State { hasError: boolean; error?: Error }
+interface State {
+  hasError: boolean;
+  error?: Error;
+}
 
 export class ErrorBoundary extends React.Component<{ children: React.ReactNode }, State> {
   state: State = { hasError: false };

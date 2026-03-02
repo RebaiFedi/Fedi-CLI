@@ -1,4 +1,10 @@
-import type { AgentProcess, AgentId, AgentStatus, OutputLine, SessionConfig } from '../agents/types.js';
+import type {
+  AgentProcess,
+  AgentId,
+  AgentStatus,
+  OutputLine,
+  SessionConfig,
+} from '../agents/types.js';
 
 /**
  * MockAgent implements AgentProcess without spawning any process.
@@ -33,7 +39,11 @@ export class MockAgent implements AgentProcess {
     this.urgentMessages.push(prompt);
   }
 
-  async start(_config: SessionConfig, _systemPrompt: string, _options?: Record<string, unknown>): Promise<void> {
+  async start(
+    _config: SessionConfig,
+    _systemPrompt: string,
+    _options?: Record<string, unknown>,
+  ): Promise<void> {
     this._started = true;
     // Set status to idle — NOT waiting, because 'waiting' triggers the
     // orchestrator's safety-net auto-relay logic for agents on relay.
@@ -60,11 +70,19 @@ export class MockAgent implements AgentProcess {
     this.contextReminder = reminder;
   }
 
-  mute(): void { this._muted = true; }
-  isMuted(): boolean { return this._muted; }
+  mute(): void {
+    this._muted = true;
+  }
+  isMuted(): boolean {
+    return this._muted;
+  }
 
-  interruptCurrentTask(): void { this._interrupted = true; }
-  isInterrupted(): boolean { return this._interrupted; }
+  interruptCurrentTask(): void {
+    this._interrupted = true;
+  }
+  isInterrupted(): boolean {
+    return this._interrupted;
+  }
 
   // ── Test control methods ────────────────────────────────────────────────
 

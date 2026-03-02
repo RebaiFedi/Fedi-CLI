@@ -25,7 +25,15 @@ import { printWelcomeBanner } from './WelcomeBanner.js';
 import { printSessionResume } from './SessionResumeView.js';
 import { buildResumePrompt } from '../utils/session-manager.js';
 import { printUserBubble } from './UserBubble.js';
-import { loadUserConfig, applyProfile, setAgentEffort, setAgentThinking, PROFILES, type EffortLevel, type ProfileName } from '../config/user-config.js';
+import {
+  loadUserConfig,
+  applyProfile,
+  setAgentEffort,
+  setAgentThinking,
+  PROFILES,
+  type EffortLevel,
+  type ProfileName,
+} from '../config/user-config.js';
 import { SlashMenu } from './SlashMenu.js';
 // trace functions replaced by unified flog
 
@@ -73,7 +81,11 @@ export function Dashboard({
     }),
     { opus: 'idle', sonnet: 'idle', codex: 'idle' } as Record<string, AgentStatus>,
   );
-  const agentStatusesRef = useRef<Record<string, AgentStatus>>({ opus: 'idle', sonnet: 'idle', codex: 'idle' });
+  const agentStatusesRef = useRef<Record<string, AgentStatus>>({
+    opus: 'idle',
+    sonnet: 'idle',
+    codex: 'idle',
+  });
   const [agentErrors, setAgentErrors] = useState<Partial<Record<string, string>>>({});
   const [stopped, setStopped] = useState(false);
   const stoppedRef = useRef(false);
@@ -171,7 +183,10 @@ export function Dashboard({
     // lines because each call triggers Ink to erase + redraw its dynamic zone.
     const outputLines: string[] = [];
 
-    const flushPendingActions = (agent: AgentId, agentColor: 'green' | 'yellow' | 'magenta' | 'cyan') => {
+    const flushPendingActions = (
+      agent: AgentId,
+      agentColor: 'green' | 'yellow' | 'magenta' | 'cyan',
+    ) => {
       const actions = pendingActions.current.get(agent);
       if (!actions || actions.length === 0) return;
       // Show each action individually for full live visibility
@@ -201,7 +216,10 @@ export function Dashboard({
       for (const e of entries) {
         if (e.kind === 'action') {
           newActions.push(e.text);
-        } else if (!hasOpenMsg && (e.kind === 'tool-header' || e.kind === 'diff-old' || e.kind === 'diff-new')) {
+        } else if (
+          !hasOpenMsg &&
+          (e.kind === 'tool-header' || e.kind === 'diff-old' || e.kind === 'diff-new')
+        ) {
           inlineToolEntries.push(e);
         } else {
           contentEntries.push(e);
@@ -325,11 +343,19 @@ export function Dashboard({
     // agent separation (we need it when agents switch between flushes)
     const compacted = compactOutputLines(outputLines);
     // Allow a single leading blank line (for agent switch spacing), trim rest
-    while (compacted.length > 1 && stripAnsi(compacted[0]).trim() === '' && stripAnsi(compacted[1]).trim() === '') {
+    while (
+      compacted.length > 1 &&
+      stripAnsi(compacted[0]).trim() === '' &&
+      stripAnsi(compacted[1]).trim() === ''
+    ) {
       compacted.shift();
     }
     // If no previous output was printed, trim the remaining leading blank too
-    if (!lastPrintedAgent.current && compacted.length > 0 && stripAnsi(compacted[0]).trim() === '') {
+    if (
+      !lastPrintedAgent.current &&
+      compacted.length > 0 &&
+      stripAnsi(compacted[0]).trim() === ''
+    ) {
       compacted.shift();
     }
 
@@ -344,8 +370,15 @@ export function Dashboard({
   const enqueueOutput = useCallback(
     (agent: AgentId, entries: DisplayEntry[]) => {
       const isFirstChunk = !currentMsgRef.current.has(agent);
-      const isActionLike = entries.length > 0 && entries.every((e) =>
-        e.kind === 'action' || e.kind === 'tool-header' || e.kind === 'diff-old' || e.kind === 'diff-new');
+      const isActionLike =
+        entries.length > 0 &&
+        entries.every(
+          (e) =>
+            e.kind === 'action' ||
+            e.kind === 'tool-header' ||
+            e.kind === 'diff-old' ||
+            e.kind === 'diff-new',
+        );
       outputBuffer.current.push({ agent, entries });
       if (isFirstChunk) {
         // Flush immediately on first token for perceived speed
@@ -372,13 +405,18 @@ export function Dashboard({
       const now = Date.now();
       let needsFlush = false;
       for (const [, lastTime] of lastActionTime.current.entries()) {
-        if (now - lastTime >= 5000) { needsFlush = true; break; }
+        if (now - lastTime >= 5000) {
+          needsFlush = true;
+          break;
+        }
       }
       if (needsFlush && !flushTimer.current) {
         flushTimer.current = setTimeout(flushBuffer, 0);
       }
     }, 3000);
-    return () => { if (heartbeatTimer.current) clearInterval(heartbeatTimer.current); };
+    return () => {
+      if (heartbeatTimer.current) clearInterval(heartbeatTimer.current);
+    };
   }, [flushBuffer]);
 
   useInput((_input, key) => {
@@ -399,7 +437,10 @@ export function Dashboard({
       // Stop all agents — fire-and-forget but agents are killed immediately
       orchestrator.stop().catch((err) => flog.error('UI', `Stop error: ${err}`));
       console.log(
-        '\n' + chalk.dim(`${INDENT}Agents arretes. Tapez un message pour relancer, ou Ctrl+C pour quitter.\n`),
+        '\n' +
+          chalk.dim(
+            `${INDENT}Agents arretes. Tapez un message pour relancer, ou Ctrl+C pour quitter.\n`,
+          ),
       );
     }
   });
@@ -437,38 +478,41 @@ export function Dashboard({
     });
   }, []);
 
-  const processTaskTags = useCallback((agent: AgentId, text: string) => {
-    const { adds, dones } = extractTasks(text);
-    if (adds.length === 0 && dones.length === 0) return;
+  const processTaskTags = useCallback(
+    (agent: AgentId, text: string) => {
+      const { adds, dones } = extractTasks(text);
+      if (adds.length === 0 && dones.length === 0) return;
 
-    // ── Adds: always immediate (any agent) ───────────────────────────────────
-    if (adds.length > 0) {
-      setTodos((prev) => {
-        let updated = [...prev];
-        let hasNewItems = false;
-        for (const add of adds) {
-          if (!updated.some((t) => t.text.toLowerCase() === add.toLowerCase())) {
-            updated.push({ id: randomUUID(), text: add, done: false, agent });
-            hasNewItems = true;
+      // ── Adds: always immediate (any agent) ───────────────────────────────────
+      if (adds.length > 0) {
+        setTodos((prev) => {
+          let updated = [...prev];
+          let hasNewItems = false;
+          for (const add of adds) {
+            if (!updated.some((t) => t.text.toLowerCase() === add.toLowerCase())) {
+              updated.push({ id: randomUUID(), text: add, done: false, agent });
+              hasNewItems = true;
+            }
           }
-        }
-        if (hasNewItems) setTodosHiddenAt(0);
-        return updated;
-      });
-    }
-
-    // ── Dones: batch for sub-agents (claude/codex), immediate for opus/user ──
-    if (dones.length > 0) {
-      if (agent === 'sonnet' || agent === 'codex') {
-        // Accumulate — will be flushed as a single update when agent finishes
-        const existing = pendingAgentDones.current.get(agent) ?? [];
-        pendingAgentDones.current.set(agent, [...existing, ...dones]);
-      } else {
-        // Opus or user-triggered: apply immediately
-        applyDones(dones);
+          if (hasNewItems) setTodosHiddenAt(0);
+          return updated;
+        });
       }
-    }
-  }, [applyDones]);
+
+      // ── Dones: batch for sub-agents (claude/codex), immediate for opus/user ──
+      if (dones.length > 0) {
+        if (agent === 'sonnet' || agent === 'codex') {
+          // Accumulate — will be flushed as a single update when agent finishes
+          const existing = pendingAgentDones.current.get(agent) ?? [];
+          pendingAgentDones.current.set(agent, [...existing, ...dones]);
+        } else {
+          // Opus or user-triggered: apply immediately
+          applyDones(dones);
+        }
+      }
+    },
+    [applyDones],
+  );
 
   useEffect(() => {
     orchestrator.setConfig({ projectDir, claudePath, codexPath });
@@ -506,7 +550,10 @@ export function Dashboard({
         if (status === 'running') {
           // Cancel grace-period timer — agent resumed, keep message open
           const graceTimer = msgCloseTimers.current.get(agent);
-          if (graceTimer) { clearTimeout(graceTimer); msgCloseTimers.current.delete(agent); }
+          if (graceTimer) {
+            clearTimeout(graceTimer);
+            msgCloseTimers.current.delete(agent);
+          }
           if (thinkingClearTimer.current) {
             clearTimeout(thinkingClearTimer.current);
             thinkingClearTimer.current = null;
@@ -553,7 +600,10 @@ export function Dashboard({
           if (remaining && remaining.length > 0) {
             const ac = agentChalkColor(agent);
             // Show each remaining action individually
-            const summary: DisplayEntry[] = remaining.map((a) => ({ text: a, kind: 'action' as const }));
+            const summary: DisplayEntry[] = remaining.map((a) => ({
+              text: a,
+              kind: 'action' as const,
+            }));
             const lines = entriesToAnsiOutputLines(summary, ac);
             if (lines.length > 0) console.log(compactOutputLines(lines).join('\n'));
             pendingActions.current.set(agent, []);
@@ -581,7 +631,10 @@ export function Dashboard({
             } else {
               // stopped / error / idle — close immediately
               const prevTimer = msgCloseTimers.current.get(agent);
-              if (prevTimer) { clearTimeout(prevTimer); msgCloseTimers.current.delete(agent); }
+              if (prevTimer) {
+                clearTimeout(prevTimer);
+                msgCloseTimers.current.delete(agent);
+              }
               const msg = chatMessagesMap.current.get(currentId);
               if (msg) msg.status = 'done';
               currentMsgRef.current.delete(agent);
@@ -607,17 +660,21 @@ export function Dashboard({
         const isFromUser = fromId === 'user';
         // Validate agent IDs before using theme functions
         const validAgents = VALID_AGENT_IDS;
-        const fromAgent: AgentId = validAgents.has(fromId) ? fromId as AgentId : 'opus';
-        const toAgent: AgentId = validAgents.has(toId) ? toId as AgentId : 'opus';
+        const fromAgent: AgentId = validAgents.has(fromId) ? (fromId as AgentId) : 'opus';
+        const toAgent: AgentId = validAgents.has(toId) ? (toId as AgentId) : 'opus';
         const fromName = isFromUser ? 'User' : agentDisplayName(fromAgent);
         const toName = agentDisplayName(toAgent);
         const fromColor = isFromUser ? THEME.userPrefix : agentHex(fromAgent);
         const toColor = agentHex(toAgent);
         const relayHeader = `${INDENT}${chalk.hex(fromColor).bold(fromName)} ${chalk.dim('to')} ${chalk.hex(toColor).bold(toName)}`;
         // Render relay content through the markdown pipeline (tables, bold, wrapping)
-        const fakeOutputLine: OutputLine = { text: msg.content, timestamp: Date.now(), type: 'stdout' };
+        const fakeOutputLine: OutputLine = {
+          text: msg.content,
+          timestamp: Date.now(),
+          type: 'stdout',
+        };
         const entries = outputToEntries(fakeOutputLine);
-        const relayChalkColor = isFromUser ? 'cyan' as const : agentChalkColor(fromAgent);
+        const relayChalkColor = isFromUser ? ('cyan' as const) : agentChalkColor(fromAgent);
         const relayOut = entriesToAnsiOutputLines(entries, relayChalkColor);
         console.log(`\n${relayHeader}\n${relayOut.join('\n')}\n`);
       },
@@ -639,12 +696,10 @@ export function Dashboard({
             printSessionResume(session, match.id);
             const resumePrompt = buildResumePrompt(session);
             setThinking(true);
-            orchestrator
-              .startWithTask(resumePrompt)
-              .catch((err) => {
-                flog.error('UI',`[DASHBOARD] Resume error: ${err}`);
-                if (stoppedRef.current) setThinking(false);
-              });
+            orchestrator.startWithTask(resumePrompt).catch((err) => {
+              flog.error('UI', `[DASHBOARD] Resume error: ${err}`);
+              if (stoppedRef.current) setThinking(false);
+            });
           } else {
             console.log(chalk.red(`  Session ${resumeSessionId} non trouvee ou corrompue.`));
           }
@@ -652,7 +707,7 @@ export function Dashboard({
           console.log(chalk.red(`  Session ${resumeSessionId} non trouvee.`));
           console.log(chalk.dim('  Utilisez: fedi --sessions pour voir la liste.'));
         }
-      })().catch((err) => flog.error('UI',`[DASHBOARD] Session resume error: ${err}`));
+      })().catch((err) => flog.error('UI', `[DASHBOARD] Session resume error: ${err}`));
     }
 
     const handleExit = () => {
@@ -667,7 +722,11 @@ export function Dashboard({
         .map(([a]) => a);
       if (activeAgents.length > 0 && !stoppedRef.current) {
         exitInProgress.current = true;
-        console.log(chalk.yellow(`\n  Agents actifs (${activeAgents.join(', ')}) — Ctrl+C encore pour forcer.`));
+        console.log(
+          chalk.yellow(
+            `\n  Agents actifs (${activeAgents.join(', ')}) — Ctrl+C encore pour forcer.`,
+          ),
+        );
       } else {
         exitInProgress.current = true;
       }
@@ -677,7 +736,8 @@ export function Dashboard({
         clearTimeout(flushTimer.current);
         flushBuffer();
       }
-      orchestrator.stop()
+      orchestrator
+        .stop()
         .catch((err) => flog.error('UI', `Shutdown error: ${err}`))
         .finally(() => {
           flog.info('UI', 'Shutdown complete');
@@ -707,128 +767,151 @@ export function Dashboard({
   ]);
 
   // ── Slash command handler ─────────────────────────────────────────────────
-  const handleSlashCommand = useCallback((cmd: string, args: string[]): boolean => {
-    const cfg = loadUserConfig();
-    const agents = ['opus', 'sonnet', 'codex'] as const;
-    const effortLevels: EffortLevel[] = ['high', 'medium', 'low'];
+  const handleSlashCommand = useCallback(
+    (cmd: string, args: string[]): boolean => {
+      const cfg = loadUserConfig();
+      const agents = ['opus', 'sonnet', 'codex'] as const;
+      const effortLevels: EffortLevel[] = ['high', 'medium', 'low'];
 
-    // /profile [high|medium|low]
-    if (cmd === 'profile' || cmd === 'profil') {
-      const name = args[0]?.toLowerCase() as ProfileName | undefined;
-      if (!name || !PROFILES[name]) {
-        console.log(chalk.yellow(`\n  Usage: /profile <high|medium|low>`));
-        console.log(chalk.dim(`  Profils disponibles:`));
-        console.log(chalk.dim(`    high   — opus=high/thinking  sonnet=high  codex=high`));
-        console.log(chalk.dim(`    medium — opus=high           sonnet=medium  codex=medium`));
-        console.log(chalk.dim(`    low    — opus=medium         sonnet=low   codex=low\n`));
+      // /profile [high|medium|low]
+      if (cmd === 'profile' || cmd === 'profil') {
+        const name = args[0]?.toLowerCase() as ProfileName | undefined;
+        if (!name || !PROFILES[name]) {
+          console.log(chalk.yellow(`\n  Usage: /profile <high|medium|low>`));
+          console.log(chalk.dim(`  Profils disponibles:`));
+          console.log(chalk.dim(`    high   — opus=high/thinking  sonnet=high  codex=high`));
+          console.log(chalk.dim(`    medium — opus=high           sonnet=medium  codex=medium`));
+          console.log(chalk.dim(`    low    — opus=medium         sonnet=low   codex=low\n`));
+          return true;
+        }
+        applyProfile(name);
+        const p = PROFILES[name];
+        console.log(`\n  ${chalk.hex(THEME.text).bold(`Profil "${name}" applique`)}`);
+        for (const a of agents) {
+          const effort = p[`${a}Effort`];
+          const think = p[`${a}Thinking`];
+          const color = agentHex(a as AgentId);
+          console.log(
+            `  ${chalk.hex(color)(agentDisplayName(a as AgentId))}  effort=${chalk.white(effort)}  thinking=${think ? chalk.hex(THEME.codex)('on') : chalk.dim('off')}`,
+          );
+        }
+        console.log('');
         return true;
       }
-      applyProfile(name);
-      const p = PROFILES[name];
-      console.log(`\n  ${chalk.hex(THEME.text).bold(`Profil "${name}" applique`)}`);
-      for (const a of agents) {
-        const effort = p[`${a}Effort`];
-        const think = p[`${a}Thinking`];
-        const color = agentHex(a as AgentId);
-        console.log(`  ${chalk.hex(color)(agentDisplayName(a as AgentId))}  effort=${chalk.white(effort)}  thinking=${think ? chalk.hex(THEME.codex)('on') : chalk.dim('off')}`);
-      }
-      console.log('');
-      return true;
-    }
 
-    // /effort <agent> <level> or /effort (show all)
-    if (cmd === 'effort') {
-      if (args.length === 0) {
-        console.log(`\n  ${chalk.hex(THEME.text).bold('Effort actuel')}`);
+      // /effort <agent> <level> or /effort (show all)
+      if (cmd === 'effort') {
+        if (args.length === 0) {
+          console.log(`\n  ${chalk.hex(THEME.text).bold('Effort actuel')}`);
+          for (const a of agents) {
+            const effort = cfg[`${a}Effort`];
+            const color = agentHex(a as AgentId);
+            console.log(
+              `  ${chalk.hex(color)(agentDisplayName(a as AgentId))}  ${chalk.white(effort)}`,
+            );
+          }
+          console.log(chalk.dim(`\n  Usage: /effort <opus|sonnet|codex> <high|medium|low>\n`));
+          return true;
+        }
+        const agent = args[0]?.toLowerCase();
+        const level = args[1]?.toLowerCase() as EffortLevel | undefined;
+        if (!agent || !agents.includes(agent as (typeof agents)[number])) {
+          console.log(chalk.yellow(`\n  Agent inconnu: ${agent}. Agents: opus, sonnet, codex\n`));
+          return true;
+        }
+        if (!level || !effortLevels.includes(level)) {
+          console.log(chalk.yellow(`\n  Niveau invalide. Niveaux: high, medium, low\n`));
+          return true;
+        }
+        setAgentEffort(agent as (typeof agents)[number], level);
+        const color = agentHex(agent as AgentId);
+        console.log(
+          `\n  ${chalk.hex(color)(agentDisplayName(agent as AgentId))} effort → ${chalk.white.bold(level)}\n`,
+        );
+        return true;
+      }
+
+      // /thinking <agent> <on|off> or /thinking (show all)
+      if (cmd === 'thinking' || cmd === 'think') {
+        if (args.length === 0) {
+          console.log(`\n  ${chalk.hex(THEME.text).bold('Thinking actuel')}`);
+          for (const a of agents) {
+            const think = cfg[`${a}Thinking`];
+            const color = agentHex(a as AgentId);
+            console.log(
+              `  ${chalk.hex(color)(agentDisplayName(a as AgentId))}  ${think ? chalk.hex(THEME.codex)('on') : chalk.dim('off')}`,
+            );
+          }
+          console.log(chalk.dim(`\n  Usage: /thinking <opus|sonnet|codex> <on|off>\n`));
+          return true;
+        }
+        const agent = args[0]?.toLowerCase();
+        const toggle = args[1]?.toLowerCase();
+        if (!agent || !agents.includes(agent as (typeof agents)[number])) {
+          console.log(chalk.yellow(`\n  Agent inconnu: ${agent}. Agents: opus, sonnet, codex\n`));
+          return true;
+        }
+        if (!toggle || !['on', 'off'].includes(toggle)) {
+          console.log(chalk.yellow(`\n  Usage: /thinking ${agent} <on|off>\n`));
+          return true;
+        }
+        const enabled = toggle === 'on';
+        setAgentThinking(agent as (typeof agents)[number], enabled);
+        const color = agentHex(agent as AgentId);
+        console.log(
+          `\n  ${chalk.hex(color)(agentDisplayName(agent as AgentId))} thinking → ${enabled ? chalk.hex(THEME.codex).bold('on') : chalk.dim('off')}\n`,
+        );
+        return true;
+      }
+
+      // /config — show current full config
+      if (cmd === 'config' || cmd === 'settings' || cmd === 'status') {
+        console.log(`\n  ${chalk.hex(THEME.text).bold('Configuration agents')}`);
+        console.log(chalk.dim('  ' + '─'.repeat(40)));
         for (const a of agents) {
           const effort = cfg[`${a}Effort`];
-          const color = agentHex(a as AgentId);
-          console.log(`  ${chalk.hex(color)(agentDisplayName(a as AgentId))}  ${chalk.white(effort)}`);
-        }
-        console.log(chalk.dim(`\n  Usage: /effort <opus|sonnet|codex> <high|medium|low>\n`));
-        return true;
-      }
-      const agent = args[0]?.toLowerCase();
-      const level = args[1]?.toLowerCase() as EffortLevel | undefined;
-      if (!agent || !agents.includes(agent as typeof agents[number])) {
-        console.log(chalk.yellow(`\n  Agent inconnu: ${agent}. Agents: opus, sonnet, codex\n`));
-        return true;
-      }
-      if (!level || !effortLevels.includes(level)) {
-        console.log(chalk.yellow(`\n  Niveau invalide. Niveaux: high, medium, low\n`));
-        return true;
-      }
-      setAgentEffort(agent as typeof agents[number], level);
-      const color = agentHex(agent as AgentId);
-      console.log(`\n  ${chalk.hex(color)(agentDisplayName(agent as AgentId))} effort → ${chalk.white.bold(level)}\n`);
-      return true;
-    }
-
-    // /thinking <agent> <on|off> or /thinking (show all)
-    if (cmd === 'thinking' || cmd === 'think') {
-      if (args.length === 0) {
-        console.log(`\n  ${chalk.hex(THEME.text).bold('Thinking actuel')}`);
-        for (const a of agents) {
           const think = cfg[`${a}Thinking`];
           const color = agentHex(a as AgentId);
-          console.log(`  ${chalk.hex(color)(agentDisplayName(a as AgentId))}  ${think ? chalk.hex(THEME.codex)('on') : chalk.dim('off')}`);
+          const enabled = enabledAgentSet.has(a)
+            ? chalk.hex(THEME.codex)('actif')
+            : chalk.dim('inactif');
+          console.log(
+            `  ${chalk.hex(color).bold(agentDisplayName(a as AgentId))}  ${enabled}  effort=${chalk.white(effort)}  thinking=${think ? chalk.hex(THEME.codex)('on') : chalk.dim('off')}`,
+          );
         }
-        console.log(chalk.dim(`\n  Usage: /thinking <opus|sonnet|codex> <on|off>\n`));
+        console.log('');
         return true;
       }
-      const agent = args[0]?.toLowerCase();
-      const toggle = args[1]?.toLowerCase();
-      if (!agent || !agents.includes(agent as typeof agents[number])) {
-        console.log(chalk.yellow(`\n  Agent inconnu: ${agent}. Agents: opus, sonnet, codex\n`));
+
+      // /help — show available slash commands
+      if (cmd === 'help' || cmd === '?') {
+        console.log(`\n  ${chalk.hex(THEME.text).bold('Commandes disponibles')}`);
+        console.log(chalk.dim('  ' + '─'.repeat(40)));
+        console.log(
+          `  ${chalk.white('/profile')} ${chalk.dim('<high|medium|low>')}      Appliquer un profil`,
+        );
+        console.log(
+          `  ${chalk.white('/effort')} ${chalk.dim('<agent> <level>')}        Changer l'effort d'un agent`,
+        );
+        console.log(
+          `  ${chalk.white('/thinking')} ${chalk.dim('<agent> <on|off>')}     Activer/desactiver thinking`,
+        );
+        console.log(`  ${chalk.white('/config')}                          Voir la config actuelle`);
+        console.log(`  ${chalk.white('/help')}                            Cette aide`);
+        console.log('');
+        console.log(chalk.dim('  Exemples:'));
+        console.log(chalk.dim('    /profile high'));
+        console.log(chalk.dim('    /effort opus medium'));
+        console.log(chalk.dim('    /thinking sonnet on'));
+        console.log('');
         return true;
       }
-      if (!toggle || !['on', 'off'].includes(toggle)) {
-        console.log(chalk.yellow(`\n  Usage: /thinking ${agent} <on|off>\n`));
-        return true;
-      }
-      const enabled = toggle === 'on';
-      setAgentThinking(agent as typeof agents[number], enabled);
-      const color = agentHex(agent as AgentId);
-      console.log(`\n  ${chalk.hex(color)(agentDisplayName(agent as AgentId))} thinking → ${enabled ? chalk.hex(THEME.codex).bold('on') : chalk.dim('off')}\n`);
-      return true;
-    }
 
-    // /config — show current full config
-    if (cmd === 'config' || cmd === 'settings' || cmd === 'status') {
-      console.log(`\n  ${chalk.hex(THEME.text).bold('Configuration agents')}`);
-      console.log(chalk.dim('  ' + '─'.repeat(40)));
-      for (const a of agents) {
-        const effort = cfg[`${a}Effort`];
-        const think = cfg[`${a}Thinking`];
-        const color = agentHex(a as AgentId);
-        const enabled = enabledAgentSet.has(a) ? chalk.hex(THEME.codex)('actif') : chalk.dim('inactif');
-        console.log(`  ${chalk.hex(color).bold(agentDisplayName(a as AgentId))}  ${enabled}  effort=${chalk.white(effort)}  thinking=${think ? chalk.hex(THEME.codex)('on') : chalk.dim('off')}`);
-      }
-      console.log('');
-      return true;
-    }
-
-    // /help — show available slash commands
-    if (cmd === 'help' || cmd === '?') {
-      console.log(`\n  ${chalk.hex(THEME.text).bold('Commandes disponibles')}`);
-      console.log(chalk.dim('  ' + '─'.repeat(40)));
-      console.log(`  ${chalk.white('/profile')} ${chalk.dim('<high|medium|low>')}      Appliquer un profil`);
-      console.log(`  ${chalk.white('/effort')} ${chalk.dim('<agent> <level>')}        Changer l'effort d'un agent`);
-      console.log(`  ${chalk.white('/thinking')} ${chalk.dim('<agent> <on|off>')}     Activer/desactiver thinking`);
-      console.log(`  ${chalk.white('/config')}                          Voir la config actuelle`);
-      console.log(`  ${chalk.white('/help')}                            Cette aide`);
-      console.log('');
-      console.log(chalk.dim('  Exemples:'));
-      console.log(chalk.dim('    /profile high'));
-      console.log(chalk.dim('    /effort opus medium'));
-      console.log(chalk.dim('    /thinking sonnet on'));
-      console.log('');
-      return true;
-    }
-
-    // Unknown slash command — don't consume, let it pass through
-    return false;
-  }, [enabledAgentSet]);
+      // Unknown slash command — don't consume, let it pass through
+      return false;
+    },
+    [enabledAgentSet],
+  );
 
   const handleInput = useCallback(
     (text: string) => {
@@ -900,7 +983,9 @@ export function Dashboard({
             sessionLines.push('', chalk.dim('    Voir en detail: fedi --view <id>'), '');
             console.log(sessionLines.join('\n'));
           }
-        })().catch((err) => flog.error('UI',`[DASHBOARD] Sessions list error: ${err}`)).finally(() => setThinking(false));
+        })()
+          .catch((err) => flog.error('UI', `[DASHBOARD] Sessions list error: ${err}`))
+          .finally(() => setThinking(false));
         return;
       }
 
@@ -920,7 +1005,7 @@ export function Dashboard({
             .then(() => {
               orchestrator.sendToAllDirect(allMessage);
             })
-            .catch((err) => flog.error('UI',`[DASHBOARD] Start error: ${err}`));
+            .catch((err) => flog.error('UI', `[DASHBOARD] Start error: ${err}`));
         } else {
           orchestrator.sendToAllDirect(allMessage);
         }
@@ -947,7 +1032,9 @@ export function Dashboard({
       // Block commands to disabled agents
       if (targetAgent && !enabledAgentSet.has(targetAgent)) {
         console.log(
-          chalk.yellow(`  Agent @${targetAgent} est desactive. Agents actifs: ${[...enabledAgentSet].join(', ')}`),
+          chalk.yellow(
+            `  Agent @${targetAgent} est desactive. Agents actifs: ${[...enabledAgentSet].join(', ')}`,
+          ),
         );
         setThinking(false);
         return;
@@ -959,16 +1046,16 @@ export function Dashboard({
         const typed = unknownAtMatch[1].toLowerCase();
         const knownCommands = ['opus', 'codex', 'sonnet', 'claude', 'tous', 'all', 'sessions'];
         const suggestion = knownCommands.find(
-          (cmd) =>
-            cmd.startsWith(typed.slice(0, 2)) ||
-            typed.startsWith(cmd.slice(0, 2)),
+          (cmd) => cmd.startsWith(typed.slice(0, 2)) || typed.startsWith(cmd.slice(0, 2)),
         );
-        const suggestionText = suggestion ? ` Vous vouliez dire ${chalk.white(`@${suggestion}`)} ?` : '';
+        const suggestionText = suggestion
+          ? ` Vous vouliez dire ${chalk.white(`@${suggestion}`)} ?`
+          : '';
+        console.log(chalk.yellow(`  Commande inconnue: @${typed}.${suggestionText}`));
         console.log(
-          chalk.yellow(`  Commande inconnue: @${typed}.${suggestionText}`),
-        );
-        console.log(
-          chalk.dim('  Commandes disponibles: @opus, @codex, @claude, @sonnet, @tous, @all, @sessions'),
+          chalk.dim(
+            '  Commandes disponibles: @opus, @codex, @claude, @sonnet, @tous, @all, @sessions',
+          ),
         );
         setThinking(false);
         return;
@@ -992,12 +1079,12 @@ export function Dashboard({
             .then(() => {
               orchestrator.sendToAgent(targetAgent!, agentMessage);
             })
-            .catch((err) => flog.error('UI',`[DASHBOARD] Start error: ${err}`));
+            .catch((err) => flog.error('UI', `[DASHBOARD] Start error: ${err}`));
         } else {
           if (isRestart) console.log('Redemarrage...');
           orchestrator
             .restart(targetAgent === 'opus' ? agentMessage : text)
-            .catch((err) => flog.error('UI',`[DASHBOARD] Start error: ${err}`));
+            .catch((err) => flog.error('UI', `[DASHBOARD] Start error: ${err}`));
         }
         return;
       }
@@ -1009,7 +1096,7 @@ export function Dashboard({
 
       orchestrator.sendUserMessage(text);
     },
-    [orchestrator, stopped, enabledAgentSet],
+    [orchestrator, stopped, enabledAgentSet, handleSlashCommand],
   );
 
   const anyRunning = useMemo(
@@ -1025,20 +1112,42 @@ export function Dashboard({
         <Box paddingX={1} flexDirection="column">
           {Object.entries(agentErrors).map(([agent, msg]) => (
             <Text key={agent} color="red">
-              {' ⚠ '}{msg}
+              {' ⚠ '}
+              {msg}
             </Text>
           ))}
         </Box>
       )}
       {todosVisible && <TodoPanel items={todos} />}
       <Box paddingX={1}>
-        <Text color={anyRunning ? THEME.opus : THEME.panelBorder}>{'─'.repeat(Math.max(10, (process.stdout.columns || 80) - 4))}</Text>
+        <Text color={anyRunning ? THEME.opus : THEME.panelBorder}>
+          {'─'.repeat(Math.max(10, (stdout.columns || 80) - 2))}
+        </Text>
       </Box>
       {showSlashMenu ? (
         <Box paddingX={1} flexDirection="column">
           <SlashMenu
             onClose={() => setShowSlashMenu(false)}
             enabledAgents={enabledAgentSet}
+            projectDir={projectDir}
+            onResumeSession={(sessionId) => {
+              setShowSlashMenu(false);
+              (async () => {
+                const sm = orchestrator.getSessionManager();
+                if (!sm) return;
+                const session = await sm.loadSession(sessionId);
+                if (session) {
+                  printSessionResume(session, sessionId);
+                  const resumePrompt = buildResumePrompt(session);
+                  setThinking(true);
+                  orchestrator.startWithTask(resumePrompt).catch((err) => {
+                    flog.error('UI', `[DASHBOARD] Resume error: ${err}`);
+                  });
+                } else {
+                  console.log(chalk.red(`  Session non trouvee ou corrompue.`));
+                }
+              })().catch((err) => flog.error('UI', `[DASHBOARD] Session resume error: ${err}`));
+            }}
           />
         </Box>
       ) : (
@@ -1052,24 +1161,25 @@ export function Dashboard({
         </Box>
       )}
       <Box paddingX={1}>
-        <Text color={anyRunning ? THEME.opus : THEME.panelBorder}>{'─'.repeat(Math.max(10, (process.stdout.columns || 80) - 4))}</Text>
+        <Text color={anyRunning ? THEME.opus : THEME.panelBorder}>
+          {'─'.repeat(Math.max(10, (stdout.columns || 80) - 2))}
+        </Text>
       </Box>
-      <Box paddingX={1} paddingTop={0} justifyContent="space-between">
+      <Box paddingX={1} paddingTop={0} width={stdout.columns || 80}>
         <Text>
           <Text dimColor>{'esc '}</Text>
           <Text color={THEME.muted}>{'stop'}</Text>
-          <Text dimColor>{'  \u00B7  '}</Text>
+          <Text dimColor>{' \u00B7 '}</Text>
           <Text dimColor>{'^C '}</Text>
           <Text color={THEME.muted}>{'quit'}</Text>
-          <Text dimColor>{'  \u00B7  '}</Text>
+          <Text dimColor>{' \u00B7 '}</Text>
           <Text dimColor>{'/ '}</Text>
-          <Text color={THEME.muted}>{'commands'}</Text>
+          <Text color={THEME.muted}>{'cmds'}</Text>
         </Text>
-        <Box gap={1}>
+        <Box flexGrow={1} justifyContent="flex-end" gap={1}>
           {visibleAgents.map((id) => {
             const s = agentStatuses[id];
-            const color =
-              s === 'running' ? THEME[id] : s === 'error' ? 'red' : THEME.muted;
+            const color = s === 'running' ? THEME[id] : s === 'error' ? 'red' : THEME.muted;
             const icon = s === 'running' ? '●' : s === 'error' ? '✖' : '○';
             return (
               <Text key={id} color={color}>
