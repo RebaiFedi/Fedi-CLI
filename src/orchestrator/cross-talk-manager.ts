@@ -1,15 +1,15 @@
 import type { AgentId } from '../agents/types.js';
 import { loadUserConfig } from '../config/user-config.js';
 
-const _cfg = loadUserConfig();
-
 /**
  * Manages cross-talk state between worker agents (Sonnet ↔ Codex).
  * Tracks message count, mute timers, and pending reply expectations.
  */
 export class CrossTalkManager {
   private count = 0;
-  private readonly maxPerRound: number = _cfg.maxCrossTalkPerRound;
+  private get maxPerRound(): number {
+    return loadUserConfig().maxCrossTalkPerRound;
+  }
 
   /** Agents responding to a cross-talk message — stdout muted until timeout */
   private readonly onCrossTalk: Map<AgentId, number> = new Map();

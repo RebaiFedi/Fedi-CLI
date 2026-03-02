@@ -9,11 +9,6 @@ import type { BufferManager } from './buffer-manager.js';
 import { flog } from '../utils/log.js';
 import { loadUserConfig } from '../config/user-config.js';
 
-const _cfg = loadUserConfig();
-const RELAY_WINDOW_MS = _cfg.relayWindowMs;
-const MAX_RELAYS_PER_WINDOW = _cfg.maxRelaysPerWindow;
-const MAX_RELAY_CONTENT_LENGTH = _cfg.maxRelayContentLength;
-
 /** Dependencies injected into RelayRouter */
 export interface RelayRouterDeps {
   agents: Record<AgentId, AgentProcess>;
@@ -34,12 +29,12 @@ export interface RelayRouterDeps {
  */
 export class RelayRouter {
   /** Agents currently working on a relay from Opus */
-  readonly agentsOnRelay: Set<AgentId> = new Set();
+  private readonly _agentsOnRelay: Set<AgentId> = new Set();
   /** Timestamp when relay started for each agent */
-  readonly relayStartTime: Map<AgentId, number> = new Map();
+  private readonly _relayStartTime: Map<AgentId, number> = new Map();
 
   /** When true, next opus→agent relay is a LIVE message forwarding */
-  liveRelayAllowed = false;
+  private _liveRelayAllowed = false;
 
   /** Rate limiting */
   private relayTimestamps: number[] = [];
@@ -53,17 +48,76 @@ export class RelayRouter {
   }
   private readonly RELAY_DRAFT_MAX_EMPTY_RETRIES = 12;
 
-  /** Per-agent relay timeouts */
-  private readonly RELAY_TIMEOUT_MS = _cfg.execTimeoutMs;
-  private readonly CODEX_RELAY_TIMEOUT_MS = _cfg.codexTimeoutMs;
+  /** Per-agent relay timeouts (live from config) */
+  private get RELAY_TIMEOUT_MS(): number {
+    return loadUserConfig().execTimeoutMs;
+  }
+  private get CODEX_RELAY_TIMEOUT_MS(): number {
+    return loadUserConfig().codexTimeoutMs;
+  }
 
   /** Direct mode agents — relays from Opus blocked */
-  readonly directModeAgents: Set<AgentId> = new Set();
+  private readonly _directModeAgents: Set<AgentId> = new Set();
 
   private readonly deps: RelayRouterDeps;
 
   constructor(deps: RelayRouterDeps) {
     this.deps = deps;
+  }
+
+  // ── State accessors (encapsulated) ──
+
+  get liveRelayAllowed(): boolean {
+    return this._liveRelayAllowed;
+  }
+  set liveRelayAllowed(v: boolean) {
+    this._liveRelayAllowed = v;
+  }
+
+  isOnRelay(agent: AgentId): boolean {
+    return this._agentsOnRelay.has(agent);
+  }
+  addOnRelay(agent: AgentId): void {
+    this._agentsOnRelay.add(agent);
+  }
+  removeFromRelay(agent: AgentId): void {
+    this._agentsOnRelay.delete(agent);
+  }
+  clearOnRelay(): void {
+    this._agentsOnRelay.clear();
+  }
+  /** Get a snapshot of all agents currently on relay */
+  getAgentsOnRelay(): AgentId[] {
+    return [...this._agentsOnRelay];
+  }
+  hasAnyOnRelay(): boolean {
+    return this._agentsOnRelay.size > 0;
+  }
+
+  getRelayStart(agent: AgentId): number | undefined {
+    return this._relayStartTime.get(agent);
+  }
+  setRelayStart(agent: AgentId, time = Date.now()): void {
+    this._relayStartTime.set(agent, time);
+  }
+  removeRelayStart(agent: AgentId): void {
+    this._relayStartTime.delete(agent);
+  }
+  clearRelayStarts(): void {
+    this._relayStartTime.clear();
+  }
+
+  isDirectMode(agent: AgentId): boolean {
+    return this._directModeAgents.has(agent);
+  }
+  setDirectMode(agent: AgentId): void {
+    this._directModeAgents.add(agent);
+  }
+  removeDirectMode(agent: AgentId): void {
+    this._directModeAgents.delete(agent);
+  }
+  clearDirectMode(): void {
+    this._directModeAgents.clear();
   }
 
   // ── Tag detection helpers ──
@@ -108,10 +162,13 @@ export class RelayRouter {
   // ── Rate limiting ──
 
   isRateLimited(now = Date.now()): boolean {
-    while (this.relayTimestamps.length > 0 && now - this.relayTimestamps[0] >= RELAY_WINDOW_MS) {
+    while (
+      this.relayTimestamps.length > 0 &&
+      now - this.relayTimestamps[0] >= loadUserConfig().relayWindowMs
+    ) {
       this.relayTimestamps.shift();
     }
-    return this.relayTimestamps.length >= MAX_RELAYS_PER_WINDOW;
+    return this.relayTimestamps.length >= loadUserConfig().maxRelaysPerWindow;
   }
 
   recordRelay(): void {
@@ -121,7 +178,7 @@ export class RelayRouter {
   // ── Relay waiting check ──
 
   isOpusWaitingForRelays(): boolean {
-    for (const agent of this.agentsOnRelay) {
+    for (const agent of this._agentsOnRelay) {
       if (agent !== 'opus') return true;
     }
     return false;
@@ -267,12 +324,13 @@ export class RelayRouter {
     // Strip control characters (keep newlines and tabs)
     let sanitized = content.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '');
     // Enforce max length
-    if (sanitized.length > MAX_RELAY_CONTENT_LENGTH) {
+    if (sanitized.length > loadUserConfig().maxRelayContentLength) {
       flog.warn(
         'RELAY',
-        `Content truncated: ${sanitized.length} → ${MAX_RELAY_CONTENT_LENGTH} chars`,
+        `Content truncated: ${sanitized.length} → ${loadUserConfig().maxRelayContentLength} chars`,
       );
-      sanitized = sanitized.slice(0, MAX_RELAY_CONTENT_LENGTH) + '\n... [contenu tronqué]';
+      sanitized =
+        sanitized.slice(0, loadUserConfig().maxRelayContentLength) + '\n... [contenu tronqué]';
     }
     return sanitized;
   }
@@ -301,7 +359,7 @@ export class RelayRouter {
       return;
     }
 
-    if (from === 'opus' && this.directModeAgents.has(target)) {
+    if (from === 'opus' && this._directModeAgents.has(target)) {
       flog.info('RELAY', `BLOCKED ${from}->${target} (user speaking directly to ${target})`);
       return;
     }
@@ -313,8 +371,8 @@ export class RelayRouter {
 
     if (isPeerToPeer) {
       const bothReported =
-        this.deps.delegates.expectedDelegates.size > 0 &&
-        this.deps.delegates.pendingReports.size >= this.deps.delegates.expectedDelegates.size;
+        this.deps.delegates.expectedDelegateCount > 0 &&
+        this.deps.delegates.pendingReportCount >= this.deps.delegates.expectedDelegateCount;
       if (bothReported) {
         flog.info('ORCH', `Cross-talk BLOCKED ${from}->${target} (all delegates already reported)`);
         this.deps.crossTalk.clearOnCrossTalk(from);
@@ -322,7 +380,7 @@ export class RelayRouter {
         this.deps.delegates.deliverCombinedReports();
         return;
       }
-      if (this.deps.delegates.pendingReports.has(from)) {
+      if (this.deps.delegates.hasPendingReport(from)) {
         flog.info(
           'ORCH',
           `Cross-talk BLOCKED ${from}->${target} (${from} already reported to Opus)`,
@@ -355,9 +413,9 @@ export class RelayRouter {
 
     // ── Standard delegation / report flow ──
     if (from === 'opus' && target !== 'opus') {
-      if (this.agentsOnRelay.has(target) && this.deps.delegates.expectedDelegates.has(target)) {
-        if (this.liveRelayAllowed) {
-          this.liveRelayAllowed = false;
+      if (this._agentsOnRelay.has(target) && this.deps.delegates.isExpectedDelegate(target)) {
+        if (this._liveRelayAllowed) {
+          this._liveRelayAllowed = false;
           flog.info('RELAY', `LIVE relay opus->${target}: ${content.slice(0, 80)}`);
           const targetAgent = this.deps.agents[target];
           if (targetAgent.status === 'running') {
@@ -387,15 +445,15 @@ export class RelayRouter {
       // Opus delegated — notify for @tous timer cancellation
       this.deps.onOpusDelegated?.();
 
-      this.deps.delegates.deliveredToOpus.delete(target);
-      this.agentsOnRelay.add(target);
-      this.relayStartTime.set(target, Date.now());
+      this.deps.delegates.removeDeliveredToOpus(target);
+      this._agentsOnRelay.add(target);
+      this._relayStartTime.set(target, Date.now());
       this.deps.buffers.resetSnippetTime(target);
-      this.deps.delegates.expectedDelegates.add(target);
-      this.deps.delegates.lastDelegationContent.set(target, content);
+      this.deps.delegates.addExpectedDelegate(target);
+      this.deps.delegates.setLastDelegation(target, content);
       flog.info(
         'ORCH',
-        `Expected delegates: ${[...this.deps.delegates.expectedDelegates].join(', ')}`,
+        `Expected delegates: ${this.deps.delegates.getExpectedDelegates().join(', ')}`,
       );
       this.deps.delegates.resetDelegateTimeout();
     }
@@ -403,12 +461,12 @@ export class RelayRouter {
     this.recordRelay();
 
     // Agent reporting back to Opus — buffer for combined delivery
-    if (target === 'opus' && from !== 'opus' && this.deps.delegates.expectedDelegates.has(from)) {
+    if (target === 'opus' && from !== 'opus' && this.deps.delegates.isExpectedDelegate(from)) {
       this.deps.delegates.recordSuccess(from);
-      this.deps.delegates.pendingReports.set(from, content);
-      this.agentsOnRelay.delete(from);
+      this.deps.delegates.setPendingReport(from, content);
+      this._agentsOnRelay.delete(from);
       this.deps.buffers.clearBuffer(from);
-      this.relayStartTime.delete(from);
+      this._relayStartTime.delete(from);
       this.deps.crossTalk.clearAwaitingReply(from);
       this.deps.delegates.clearSafetyNetTimer(from);
 
@@ -419,7 +477,7 @@ export class RelayRouter {
 
       flog.info(
         'ORCH',
-        `Buffered report from ${from} (${this.deps.delegates.pendingReports.size}/${this.deps.delegates.expectedDelegates.size} received)`,
+        `Buffered report from ${from} (${this.deps.delegates.pendingReportCount}/${this.deps.delegates.expectedDelegateCount} received)`,
       );
 
       const reportPreview = this.deps.buffers.extractStatusSnippet(content);
@@ -431,7 +489,7 @@ export class RelayRouter {
         });
       }
 
-      if (this.deps.delegates.pendingReports.size >= this.deps.delegates.expectedDelegates.size) {
+      if (this.deps.delegates.pendingReportCount >= this.deps.delegates.expectedDelegateCount) {
         this.deps.delegates.deliverCombinedReports();
       }
       return;
@@ -446,14 +504,14 @@ export class RelayRouter {
   // ── Reset ──
 
   reset(): void {
-    this.agentsOnRelay.clear();
-    this.relayStartTime.clear();
+    this._agentsOnRelay.clear();
+    this._relayStartTime.clear();
     this.relayTimestamps = [];
     this.relayDrafts.clear();
     for (const timer of this.relayDraftTimers.values()) clearTimeout(timer);
     this.relayDraftTimers.clear();
     this.relayDraftEmptyRetries.clear();
-    this.liveRelayAllowed = false;
+    this._liveRelayAllowed = false;
   }
 
   /** Clear all timers (for shutdown) */

@@ -2,14 +2,7 @@ import React, { useState, useReducer, useEffect, useCallback, useRef, useMemo } 
 import { Box, Text, useApp, useInput, useStdout } from 'ink';
 import chalk from 'chalk';
 import { randomUUID } from 'node:crypto';
-import type {
-  AgentId,
-  AgentStatus,
-  ChatMessage,
-  DisplayEntry,
-  Message,
-  OutputLine,
-} from '../agents/types.js';
+import type { AgentId, AgentStatus, ChatMessage, DisplayEntry } from '../agents/types.js';
 import type { Orchestrator } from '../orchestrator/orchestrator.js';
 import { InputBar } from './InputBar.js';
 import { flog } from '../utils/log.js';
@@ -24,18 +17,10 @@ import { TodoPanel, type TodoItem } from './TodoPanel.js';
 import { printWelcomeBanner } from './WelcomeBanner.js';
 import { printSessionResume } from './SessionResumeView.js';
 import { buildResumePrompt } from '../utils/session-manager.js';
-import { printUserBubble } from './UserBubble.js';
-import {
-  loadUserConfig,
-  applyProfile,
-  setAgentEffort,
-  setAgentThinking,
-  PROFILES,
-  type EffortLevel,
-  type ProfileName,
-} from '../config/user-config.js';
 import { SlashMenu } from './SlashMenu.js';
-// trace functions replaced by unified flog
+import { useSlashCommands } from './useSlashCommands.js';
+import { useInputHandler } from './useInputHandler.js';
+import { useOrchestratorBinding } from './useOrchestratorBinding.js';
 
 // ── Props ───────────────────────────────────────────────────────────────────
 
@@ -58,7 +43,6 @@ interface BufferedEntry {
 // ── Constants ────────────────────────────────────────────────────────────────
 
 const AGENT_IDS = ['opus', 'sonnet', 'codex'] as const;
-const VALID_AGENT_IDS = new Set<string>(['opus', 'sonnet', 'codex']);
 
 // ── Dashboard ───────────────────────────────────────────────────────────────
 
@@ -120,27 +104,16 @@ export function Dashboard({
   const currentMsgRef = useRef<Map<string, string>>(new Map());
   const lastEntryKind = useRef<Map<string, DisplayEntry['kind']>>(new Map());
   const chatMessagesMap = useRef<Map<string, ChatMessage>>(new Map());
-  // Grace period timers for closing agent messages — prevents duplicate headers
-  // when an agent goes waiting→running in quick succession (multi-turn responses).
   const msgCloseTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
   const outputBuffer = useRef<BufferedEntry[]>([]);
   const flushTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const welcomePrinted = useRef(false);
   const lastPrintedAgent = useRef<AgentId | null>(null);
   const pendingActions = useRef<Map<AgentId, string[]>>(new Map());
-  /** Track last action time per agent — for "still working" heartbeat display */
   const lastActionTime = useRef<Map<AgentId, number>>(new Map());
   const lastHeartbeatTime = useRef<Map<AgentId, number>>(new Map());
-  /**
-   * Buffer of [TASK:done] tags emitted by agent sub-agents (claude/codex) during
-   * their current turn. We accumulate them and apply all at once when the agent
-   * finishes (idle/waiting/stopped) so the progress bar jumps 0/N → N/N in one
-   * render instead of stepping 1/N, 2/N … N/N.
-   */
   const pendingAgentDones = useRef<Map<AgentId, string[]>>(new Map());
-  /** Debounce timer for clearing the thinking spinner (avoids flicker between agent transitions) */
   const thinkingClearTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  /** Prevents double-shutdown on repeated SIGINT — must be a ref to survive re-renders */
   const exitInProgress = useRef(false);
 
   // Print welcome banner once at mount
@@ -173,14 +146,13 @@ export function Dashboard({
     };
   }, [stdout]);
 
+  // ── Output buffer + flush ─────────────────────────────────────────────────
+
   const flushBuffer = useCallback(() => {
     flushTimer.current = null;
     const items = outputBuffer.current.splice(0);
     if (items.length === 0) return;
 
-    // Collect ALL output into a single string, then emit ONE console.log.
-    // Multiple console.log calls while Ink is rendering cause ghost/duplicate
-    // lines because each call triggers Ink to erase + redraw its dynamic zone.
     const outputLines: string[] = [];
 
     const flushPendingActions = (
@@ -189,13 +161,11 @@ export function Dashboard({
     ) => {
       const actions = pendingActions.current.get(agent);
       if (!actions || actions.length === 0) return;
-      // Show each action individually for full live visibility
       const summary: DisplayEntry[] = actions.map((a) => ({ text: a, kind: 'action' as const }));
       outputLines.push(...entriesToAnsiOutputLines(summary, agentColor));
       pendingActions.current.set(agent, []);
     };
 
-    // Helper: emit agent header line when agent changes or first output
     const emitAgentHeader = (agent: AgentId) => {
       const agName = chalk.hex(agentHex(agent)).bold(agentDisplayName(agent));
       if (lastPrintedAgent.current && lastPrintedAgent.current !== agent) {
@@ -237,11 +207,9 @@ export function Dashboard({
       if (contentEntries.length === 0 && inlineToolEntries.length === 0) {
         const allActions = pendingActions.current.get(agent) ?? [];
         if (allActions.length > 0) {
-          // Print header if agent changed
           if (lastPrintedAgent.current !== agent) {
             emitAgentHeader(agent);
           }
-          // Render each action indented under the agent header
           const rendered = entriesToAnsiOutputLines(
             allActions.map((a) => ({ text: a, kind: 'action' as const })),
             agentColor,
@@ -254,11 +222,9 @@ export function Dashboard({
 
       // ── Inline tool entries (tool-header/diff without open message) ─────────
       if (inlineToolEntries.length > 0 && contentEntries.length === 0) {
-        // Print header if agent changed
         if (lastPrintedAgent.current !== agent) {
           emitAgentHeader(agent);
         }
-        // Flush pending actions first
         const allActions = pendingActions.current.get(agent) ?? [];
         if (allActions.length > 0) {
           const rendered = entriesToAnsiOutputLines(
@@ -268,7 +234,6 @@ export function Dashboard({
           outputLines.push(...rendered);
           pendingActions.current.set(agent, []);
         }
-        // Render tool entries indented under the agent
         outputLines.push(...entriesToAnsiOutputLines(inlineToolEntries, agentColor));
         lastActionTime.current.set(agent, Date.now());
         continue;
@@ -280,7 +245,6 @@ export function Dashboard({
       if (currentId) {
         const msg = chatMessagesMap.current.get(currentId);
         if (msg) {
-          // Append to existing open message
           if (lastPrintedAgent.current !== agent) {
             emitAgentHeader(agent);
           }
@@ -319,8 +283,7 @@ export function Dashboard({
       if (last) lastEntryKind.current.set(agent, last.kind);
     }
 
-    // Heartbeat — show a working indicator for agents that are running but
-    // haven't emitted any action in 5+ seconds (they're thinking/writing)
+    // Heartbeat — working indicator for agents with stale action times
     const now = Date.now();
     for (const [agent, lastTime] of lastActionTime.current.entries()) {
       const status = agentStatusesRef.current[agent];
@@ -339,10 +302,7 @@ export function Dashboard({
       }
     }
 
-    // Trim excessive leading empty lines — keep at most 1 for inter-batch
-    // agent separation (we need it when agents switch between flushes)
     const compacted = compactOutputLines(outputLines);
-    // Allow a single leading blank line (for agent switch spacing), trim rest
     while (
       compacted.length > 1 &&
       stripAnsi(compacted[0]).trim() === '' &&
@@ -350,7 +310,6 @@ export function Dashboard({
     ) {
       compacted.shift();
     }
-    // If no previous output was printed, trim the remaining leading blank too
     if (
       !lastPrintedAgent.current &&
       compacted.length > 0 &&
@@ -362,7 +321,6 @@ export function Dashboard({
     if (compacted.length > 0) {
       const final = compacted.join('\n');
       flog.debug('UI', 'Output displayed', { preview: final.slice(0, 120) });
-      // Single console.log call — Ink erases+redraws its zone only once
       console.log(final);
     }
   }, []);
@@ -381,11 +339,9 @@ export function Dashboard({
         );
       outputBuffer.current.push({ agent, entries });
       if (isFirstChunk) {
-        // Flush immediately on first token for perceived speed
         if (flushTimer.current) clearTimeout(flushTimer.current);
         flushTimer.current = setTimeout(flushBuffer, 0);
       } else if (isActionLike) {
-        // Actions and tool headers — flush quickly for live visibility
         if (!flushTimer.current) {
           flushTimer.current = setTimeout(flushBuffer, 80);
         }
@@ -396,12 +352,10 @@ export function Dashboard({
     [flushBuffer, flushInterval],
   );
 
-  // Periodic heartbeat timer — triggers flushBuffer so the heartbeat
-  // "writing report..." lines appear even when no agent is emitting output.
+  // Periodic heartbeat timer
   const heartbeatTimer = useRef<ReturnType<typeof setInterval> | null>(null);
   useEffect(() => {
     heartbeatTimer.current = setInterval(() => {
-      // Only trigger if there are running agents with stale action times
       const now = Date.now();
       let needsFlush = false;
       for (const [, lastTime] of lastActionTime.current.entries()) {
@@ -419,22 +373,21 @@ export function Dashboard({
     };
   }, [flushBuffer]);
 
+  // ── Escape key handler ──────────────────────────────────────────────────────
+
   useInput((_input, key) => {
     if (key.escape && !stopped) {
       setStopped(true);
       stoppedRef.current = true;
       setThinking(false);
-      // Clear any pending thinking timer
       if (thinkingClearTimer.current) {
         clearTimeout(thinkingClearTimer.current);
         thinkingClearTimer.current = null;
       }
-      // Flush any pending output
       if (flushTimer.current) {
         clearTimeout(flushTimer.current);
         flushBuffer();
       }
-      // Stop all agents — fire-and-forget but agents are killed immediately
       orchestrator.stop().catch((err) => flog.error('UI', `Stop error: ${err}`));
       console.log(
         '\n' +
@@ -445,23 +398,18 @@ export function Dashboard({
     }
   });
 
-  /**
-   * Apply a list of done-texts to the current todos list (pure updater).
-   * Used both for immediate (opus/user) and batched (claude/codex) completion.
-   */
+  // ── Task tags ────────────────────────────────────────────────────────────────
+
   const applyDones = useCallback((dones: string[]) => {
     if (dones.length === 0) return;
     setTodos((prev) => {
       let updated = [...prev];
       for (const done of dones) {
         const lower = done.toLowerCase();
-        // 1. Exact substring match (done text inside todo text)
         let idx = updated.findIndex((t) => !t.done && t.text.toLowerCase().includes(lower));
-        // 2. Reverse match (todo text inside done text)
         if (idx === -1) {
           idx = updated.findIndex((t) => !t.done && lower.includes(t.text.toLowerCase()));
         }
-        // 3. Fuzzy word match (at least 1 significant word overlap for short texts, 2 for longer)
         if (idx === -1) {
           const doneWords = lower.split(/\s+/).filter((w) => w.length > 3);
           const threshold = doneWords.length <= 2 ? 1 : 2;
@@ -483,7 +431,6 @@ export function Dashboard({
       const { adds, dones } = extractTasks(text);
       if (adds.length === 0 && dones.length === 0) return;
 
-      // ── Adds: always immediate (any agent) ───────────────────────────────────
       if (adds.length > 0) {
         setTodos((prev) => {
           let updated = [...prev];
@@ -499,14 +446,11 @@ export function Dashboard({
         });
       }
 
-      // ── Dones: batch for sub-agents (claude/codex), immediate for opus/user ──
       if (dones.length > 0) {
         if (agent === 'sonnet' || agent === 'codex') {
-          // Accumulate — will be flushed as a single update when agent finishes
           const existing = pendingAgentDones.current.get(agent) ?? [];
           pendingAgentDones.current.set(agent, [...existing, ...dones]);
         } else {
-          // Opus or user-triggered: apply immediately
           applyDones(dones);
         }
       }
@@ -514,245 +458,9 @@ export function Dashboard({
     [applyDones],
   );
 
-  useEffect(() => {
-    orchestrator.setConfig({ projectDir, claudePath, codexPath });
-    orchestrator.setEnabledAgents(enabledAgentSet);
-    orchestrator.bind({
-      onAgentOutput: (agent: AgentId, line: OutputLine) => {
-        if (line.type === 'stdout') processTaskTags(agent, line.text);
-        const entries = outputToEntries(line);
-        if (entries.length === 0) return;
-        enqueueOutput(agent, entries);
-      },
-      onAgentStatus: (agent: AgentId, status: AgentStatus) => {
-        // Update pill status even when stopped (so pills go grey)
-        dispatchStatus({ agent, status });
-        agentStatusesRef.current = { ...agentStatusesRef.current, [agent]: status };
+  // ── Orchestrator binding (extracted hook) ─────────────────────────────────
 
-        // Update agentErrors
-        if (status === 'error') {
-          setAgentErrors((prev) => {
-            if (prev[agent] === 'error') return prev;
-            return { ...prev, [agent]: `Agent ${agent} en erreur` };
-          });
-        } else if (status === 'running' || status === 'idle' || status === 'waiting') {
-          setAgentErrors((prev) => {
-            if (!(agent in prev)) return prev;
-            const n = { ...prev };
-            delete n[agent];
-            return n;
-          });
-        }
-
-        // Don't re-trigger spinner when we are stopped
-        if (stoppedRef.current) return;
-
-        if (status === 'running') {
-          // Cancel grace-period timer — agent resumed, keep message open
-          const graceTimer = msgCloseTimers.current.get(agent);
-          if (graceTimer) {
-            clearTimeout(graceTimer);
-            msgCloseTimers.current.delete(agent);
-          }
-          if (thinkingClearTimer.current) {
-            clearTimeout(thinkingClearTimer.current);
-            thinkingClearTimer.current = null;
-          }
-          setThinking(true);
-        } else {
-          const currentStatuses = { ...agentStatusesRef.current, [agent]: status };
-          const anyRunningNow = Object.values(currentStatuses).some((s) => s === 'running');
-          // Keep spinner active if Opus still has pending delegates (agents answered
-          // but Opus hasn't received the combined report yet — app would look frozen)
-          const pendingDelegates = orchestrator.hasPendingDelegates;
-          if (!anyRunningNow && !pendingDelegates && !thinkingClearTimer.current) {
-            thinkingClearTimer.current = setTimeout(() => {
-              thinkingClearTimer.current = null;
-              setThinking(false);
-            }, 300);
-          }
-        }
-        if (
-          status === 'waiting' ||
-          status === 'idle' ||
-          status === 'error' ||
-          status === 'stopped'
-        ) {
-          // Clean up heartbeat tracking for finished agent
-          lastActionTime.current.delete(agent);
-          lastHeartbeatTime.current.delete(agent);
-          // ── Flush batched [TASK:done] for sub-agents (claude/codex) ─────────
-          // Apply all accumulated completions in a single setState call so the
-          // progress bar jumps from 0/N straight to N/N (no intermediate steps).
-          if (agent === 'sonnet' || agent === 'codex') {
-            const buffered = pendingAgentDones.current.get(agent);
-            if (buffered && buffered.length > 0) {
-              pendingAgentDones.current.set(agent, []);
-              applyDones(buffered);
-            }
-          }
-
-          if (flushTimer.current) {
-            clearTimeout(flushTimer.current);
-            flushBuffer();
-          }
-          const remaining = pendingActions.current.get(agent);
-          if (remaining && remaining.length > 0) {
-            const ac = agentChalkColor(agent);
-            // Show each remaining action individually
-            const summary: DisplayEntry[] = remaining.map((a) => ({
-              text: a,
-              kind: 'action' as const,
-            }));
-            const lines = entriesToAnsiOutputLines(summary, ac);
-            if (lines.length > 0) console.log(compactOutputLines(lines).join('\n'));
-            pendingActions.current.set(agent, []);
-          }
-          const currentId = currentMsgRef.current.get(agent);
-          if (currentId) {
-            if (status === 'waiting') {
-              // Grace period: agent may resume (multi-turn). Close the message
-              // after 3s if the agent doesn't go back to running.
-              const prevTimer = msgCloseTimers.current.get(agent);
-              if (prevTimer) clearTimeout(prevTimer);
-              const timer = setTimeout(() => {
-                msgCloseTimers.current.delete(agent);
-                const stillId = currentMsgRef.current.get(agent);
-                if (stillId === currentId) {
-                  const msg = chatMessagesMap.current.get(currentId);
-                  if (msg) msg.status = 'done';
-                  currentMsgRef.current.delete(agent);
-                  lastEntryKind.current.delete(agent);
-                  // Add spacing after agent message closes
-                  console.log('');
-                }
-              }, 3000);
-              msgCloseTimers.current.set(agent, timer);
-            } else {
-              // stopped / error / idle — close immediately
-              const prevTimer = msgCloseTimers.current.get(agent);
-              if (prevTimer) {
-                clearTimeout(prevTimer);
-                msgCloseTimers.current.delete(agent);
-              }
-              const msg = chatMessagesMap.current.get(currentId);
-              if (msg) msg.status = 'done';
-              currentMsgRef.current.delete(agent);
-              lastEntryKind.current.delete(agent);
-              // Add spacing after agent message closes
-              console.log('');
-            }
-          }
-        }
-      },
-      onRelay: (msg: Message) => {
-        flog.info('UI', `Relay: ${msg.from}->${msg.to}`);
-        // Skip displaying relay messages with empty/garbage content
-        const trimmedContent = msg.content.trim();
-        if (!trimmedContent || trimmedContent.replace(/[`'".,;:\-–—\s]/g, '').length < 3) {
-          flog.debug('UI', `Relay display skipped (empty/fragment): ${msg.from}->${msg.to}`);
-          return;
-        }
-        // Show cross-talk and delegation messages to the user
-        const fromId = msg.from as string;
-        const toId = msg.to as string;
-        // Handle 'user' as a special case for LIVE message forwarding
-        const isFromUser = fromId === 'user';
-        // Validate agent IDs before using theme functions
-        const validAgents = VALID_AGENT_IDS;
-        const fromAgent: AgentId = validAgents.has(fromId) ? (fromId as AgentId) : 'opus';
-        const toAgent: AgentId = validAgents.has(toId) ? (toId as AgentId) : 'opus';
-        const fromName = isFromUser ? 'User' : agentDisplayName(fromAgent);
-        const toName = agentDisplayName(toAgent);
-        const fromColor = isFromUser ? THEME.userPrefix : agentHex(fromAgent);
-        const toColor = agentHex(toAgent);
-        const relayHeader = `${INDENT}${chalk.hex(fromColor).bold(fromName)} ${chalk.dim('to')} ${chalk.hex(toColor).bold(toName)}`;
-        // Render relay content through the markdown pipeline (tables, bold, wrapping)
-        const fakeOutputLine: OutputLine = {
-          text: msg.content,
-          timestamp: Date.now(),
-          type: 'stdout',
-        };
-        const entries = outputToEntries(fakeOutputLine);
-        const relayChalkColor = isFromUser ? ('cyan' as const) : agentChalkColor(fromAgent);
-        const relayOut = entriesToAnsiOutputLines(entries, relayChalkColor);
-        console.log(`\n${relayHeader}\n${relayOut.join('\n')}\n`);
-      },
-      onRelayBlocked: (msg: Message) => {
-        flog.info('UI', `Relay blocked: ${msg.from}->${msg.to}`);
-      },
-    });
-
-    // Resume session if --resume flag was passed
-    if (resumeSessionId) {
-      (async () => {
-        const sm = orchestrator.getSessionManager();
-        if (!sm) return;
-        const sessions = await sm.listSessions();
-        const match = sessions.find((s) => s.id.startsWith(resumeSessionId));
-        if (match) {
-          const session = await sm.loadSession(match.id);
-          if (session) {
-            printSessionResume(session, match.id);
-            const resumePrompt = buildResumePrompt(session);
-            setThinking(true);
-            orchestrator.startWithTask(resumePrompt).catch((err) => {
-              flog.error('UI', `[DASHBOARD] Resume error: ${err}`);
-              if (stoppedRef.current) setThinking(false);
-            });
-          } else {
-            console.log(chalk.red(`  Session ${resumeSessionId} non trouvee ou corrompue.`));
-          }
-        } else {
-          console.log(chalk.red(`  Session ${resumeSessionId} non trouvee.`));
-          console.log(chalk.dim('  Utilisez: fedi --sessions pour voir la liste.'));
-        }
-      })().catch((err) => flog.error('UI', `[DASHBOARD] Session resume error: ${err}`));
-    }
-
-    const handleExit = () => {
-      if (exitInProgress.current) {
-        // Second signal = force quit
-        flog.warn('UI', 'Force exit requested');
-        process.exit(1);
-      }
-      // Warn if agents are still active
-      const activeAgents = Object.entries(agentStatusesRef.current)
-        .filter(([, s]) => s === 'running')
-        .map(([a]) => a);
-      if (activeAgents.length > 0 && !stoppedRef.current) {
-        exitInProgress.current = true;
-        console.log(
-          chalk.yellow(
-            `\n  Agents actifs (${activeAgents.join(', ')}) — Ctrl+C encore pour forcer.`,
-          ),
-        );
-      } else {
-        exitInProgress.current = true;
-      }
-      flog.info('UI', 'Graceful shutdown initiated...');
-      // Flush pending output before stopping
-      if (flushTimer.current) {
-        clearTimeout(flushTimer.current);
-        flushBuffer();
-      }
-      orchestrator
-        .stop()
-        .catch((err) => flog.error('UI', `Shutdown error: ${err}`))
-        .finally(() => {
-          flog.info('UI', 'Shutdown complete');
-          exit();
-        });
-    };
-    process.on('SIGINT', handleExit);
-    process.on('SIGTERM', handleExit);
-    return () => {
-      process.off('SIGINT', handleExit);
-      process.off('SIGTERM', handleExit);
-      if (flushTimer.current) clearTimeout(flushTimer.current);
-      if (thinkingClearTimer.current) clearTimeout(thinkingClearTimer.current);
-    };
-  }, [
+  useOrchestratorBinding({
     orchestrator,
     exit,
     projectDir,
@@ -760,344 +468,47 @@ export function Dashboard({
     codexPath,
     resumeSessionId,
     enabledAgentSet,
+    dispatchStatus,
+    agentStatusesRef,
+    setAgentErrors,
+    stoppedRef,
+    setThinking,
+    setTodos,
+    setTodosHiddenAt,
+    currentMsgRef,
+    lastEntryKind,
+    chatMessagesMap,
+    msgCloseTimers,
+    pendingActions,
+    lastActionTime,
+    lastHeartbeatTime,
+    pendingAgentDones,
+    thinkingClearTimer,
+    exitInProgress,
+    flushTimer,
     processTaskTags,
     enqueueOutput,
     flushBuffer,
     applyDones,
-  ]);
+  });
 
-  // ── Slash command handler ─────────────────────────────────────────────────
-  const handleSlashCommand = useCallback(
-    (cmd: string, args: string[]): boolean => {
-      const cfg = loadUserConfig();
-      const agents = ['opus', 'sonnet', 'codex'] as const;
-      const effortLevels: EffortLevel[] = ['high', 'medium', 'low'];
+  // ── Slash commands + input handler (extracted hooks) ───────────────────────
 
-      // /profile [high|medium|low]
-      if (cmd === 'profile' || cmd === 'profil') {
-        const name = args[0]?.toLowerCase() as ProfileName | undefined;
-        if (!name || !PROFILES[name]) {
-          console.log(chalk.yellow(`\n  Usage: /profile <high|medium|low>`));
-          console.log(chalk.dim(`  Profils disponibles:`));
-          console.log(chalk.dim(`    high   — opus=high/thinking  sonnet=high  codex=high`));
-          console.log(chalk.dim(`    medium — opus=high           sonnet=medium  codex=medium`));
-          console.log(chalk.dim(`    low    — opus=medium         sonnet=low   codex=low\n`));
-          return true;
-        }
-        applyProfile(name);
-        const p = PROFILES[name];
-        console.log(`\n  ${chalk.hex(THEME.text).bold(`Profil "${name}" applique`)}`);
-        for (const a of agents) {
-          const effort = p[`${a}Effort`];
-          const think = p[`${a}Thinking`];
-          const color = agentHex(a as AgentId);
-          console.log(
-            `  ${chalk.hex(color)(agentDisplayName(a as AgentId))}  effort=${chalk.white(effort)}  thinking=${think ? chalk.hex(THEME.codex)('on') : chalk.dim('off')}`,
-          );
-        }
-        console.log('');
-        return true;
-      }
+  const handleSlashCommand = useSlashCommands(enabledAgentSet);
 
-      // /effort <agent> <level> or /effort (show all)
-      if (cmd === 'effort') {
-        if (args.length === 0) {
-          console.log(`\n  ${chalk.hex(THEME.text).bold('Effort actuel')}`);
-          for (const a of agents) {
-            const effort = cfg[`${a}Effort`];
-            const color = agentHex(a as AgentId);
-            console.log(
-              `  ${chalk.hex(color)(agentDisplayName(a as AgentId))}  ${chalk.white(effort)}`,
-            );
-          }
-          console.log(chalk.dim(`\n  Usage: /effort <opus|sonnet|codex> <high|medium|low>\n`));
-          return true;
-        }
-        const agent = args[0]?.toLowerCase();
-        const level = args[1]?.toLowerCase() as EffortLevel | undefined;
-        if (!agent || !agents.includes(agent as (typeof agents)[number])) {
-          console.log(chalk.yellow(`\n  Agent inconnu: ${agent}. Agents: opus, sonnet, codex\n`));
-          return true;
-        }
-        if (!level || !effortLevels.includes(level)) {
-          console.log(chalk.yellow(`\n  Niveau invalide. Niveaux: high, medium, low\n`));
-          return true;
-        }
-        setAgentEffort(agent as (typeof agents)[number], level);
-        const color = agentHex(agent as AgentId);
-        console.log(
-          `\n  ${chalk.hex(color)(agentDisplayName(agent as AgentId))} effort → ${chalk.white.bold(level)}\n`,
-        );
-        return true;
-      }
-
-      // /thinking <agent> <on|off> or /thinking (show all)
-      if (cmd === 'thinking' || cmd === 'think') {
-        if (args.length === 0) {
-          console.log(`\n  ${chalk.hex(THEME.text).bold('Thinking actuel')}`);
-          for (const a of agents) {
-            const think = cfg[`${a}Thinking`];
-            const color = agentHex(a as AgentId);
-            console.log(
-              `  ${chalk.hex(color)(agentDisplayName(a as AgentId))}  ${think ? chalk.hex(THEME.codex)('on') : chalk.dim('off')}`,
-            );
-          }
-          console.log(chalk.dim(`\n  Usage: /thinking <opus|sonnet|codex> <on|off>\n`));
-          return true;
-        }
-        const agent = args[0]?.toLowerCase();
-        const toggle = args[1]?.toLowerCase();
-        if (!agent || !agents.includes(agent as (typeof agents)[number])) {
-          console.log(chalk.yellow(`\n  Agent inconnu: ${agent}. Agents: opus, sonnet, codex\n`));
-          return true;
-        }
-        if (!toggle || !['on', 'off'].includes(toggle)) {
-          console.log(chalk.yellow(`\n  Usage: /thinking ${agent} <on|off>\n`));
-          return true;
-        }
-        const enabled = toggle === 'on';
-        setAgentThinking(agent as (typeof agents)[number], enabled);
-        const color = agentHex(agent as AgentId);
-        console.log(
-          `\n  ${chalk.hex(color)(agentDisplayName(agent as AgentId))} thinking → ${enabled ? chalk.hex(THEME.codex).bold('on') : chalk.dim('off')}\n`,
-        );
-        return true;
-      }
-
-      // /config — show current full config
-      if (cmd === 'config' || cmd === 'settings' || cmd === 'status') {
-        console.log(`\n  ${chalk.hex(THEME.text).bold('Configuration agents')}`);
-        console.log(chalk.dim('  ' + '─'.repeat(40)));
-        for (const a of agents) {
-          const effort = cfg[`${a}Effort`];
-          const think = cfg[`${a}Thinking`];
-          const color = agentHex(a as AgentId);
-          const enabled = enabledAgentSet.has(a)
-            ? chalk.hex(THEME.codex)('actif')
-            : chalk.dim('inactif');
-          console.log(
-            `  ${chalk.hex(color).bold(agentDisplayName(a as AgentId))}  ${enabled}  effort=${chalk.white(effort)}  thinking=${think ? chalk.hex(THEME.codex)('on') : chalk.dim('off')}`,
-          );
-        }
-        console.log('');
-        return true;
-      }
-
-      // /help — show available slash commands
-      if (cmd === 'help' || cmd === '?') {
-        console.log(`\n  ${chalk.hex(THEME.text).bold('Commandes disponibles')}`);
-        console.log(chalk.dim('  ' + '─'.repeat(40)));
-        console.log(
-          `  ${chalk.white('/profile')} ${chalk.dim('<high|medium|low>')}      Appliquer un profil`,
-        );
-        console.log(
-          `  ${chalk.white('/effort')} ${chalk.dim('<agent> <level>')}        Changer l'effort d'un agent`,
-        );
-        console.log(
-          `  ${chalk.white('/thinking')} ${chalk.dim('<agent> <on|off>')}     Activer/desactiver thinking`,
-        );
-        console.log(`  ${chalk.white('/config')}                          Voir la config actuelle`);
-        console.log(`  ${chalk.white('/help')}                            Cette aide`);
-        console.log('');
-        console.log(chalk.dim('  Exemples:'));
-        console.log(chalk.dim('    /profile high'));
-        console.log(chalk.dim('    /effort opus medium'));
-        console.log(chalk.dim('    /thinking sonnet on'));
-        console.log('');
-        return true;
-      }
-
-      // Unknown slash command — don't consume, let it pass through
-      return false;
-    },
-    [enabledAgentSet],
-  );
-
-  const handleInput = useCallback(
-    (text: string) => {
-      flog.info('UI', `User input: ${text.slice(0, 100)}`);
-
-      // ── Slash commands — local config, not sent to agents ──────────────
-      if (text.trim().startsWith('/')) {
-        const trimmed = text.trim();
-        // "/" alone → open interactive menu
-        if (trimmed === '/') {
-          setShowSlashMenu(true);
-          return;
-        }
-        const parts = trimmed.slice(1).split(/\s+/);
-        const cmd = parts[0]?.toLowerCase() ?? '';
-        const slashHandled = handleSlashCommand(cmd, parts.slice(1));
-        if (slashHandled) return;
-      }
-
-      printUserBubble(text);
-      const userMsgId = randomUUID();
-      chatMessagesMap.current.set(userMsgId, {
-        id: userMsgId,
-        agent: 'user',
-        lines: [{ text, kind: 'text' }],
-        timestamp: Date.now(),
-        status: 'done',
-      });
-
-      setThinking(true);
-
-      // @sessions command
-      if (/^@sessions\s*$/i.test(text.trim())) {
-        const sm = orchestrator.getSessionManager();
-        if (!sm) {
-          console.log(chalk.dim('    Session manager not initialized yet.'));
-          setThinking(false);
-          return;
-        }
-        (async () => {
-          const sessions = await sm.listSessions();
-          if (sessions.length === 0) {
-            console.log(chalk.dim('    Aucune session enregistree.'));
-          } else {
-            const sessionLines: string[] = [
-              '',
-              chalk.white.bold('    Sessions enregistrees'),
-              chalk.dim('    ' + '\u2500'.repeat(50)),
-            ];
-            for (const s of sessions.slice(0, 10)) {
-              const date = new Date(s.startedAt);
-              const dateStr = date.toLocaleDateString('fr-FR', {
-                day: '2-digit',
-                month: '2-digit',
-              });
-              const timeStr = date.toLocaleTimeString('fr-FR', {
-                hour: '2-digit',
-                minute: '2-digit',
-              });
-              const status = s.finishedAt
-                ? chalk.hex(THEME.codex)('done')
-                : chalk.hex(THEME.info)('run');
-              const task = s.task.length > 40 ? s.task.slice(0, 40) + '...' : s.task;
-              const shortId = s.id.slice(0, 8);
-              sessionLines.push(
-                `    ${chalk.dim(dateStr)} ${chalk.dim(timeStr)}  ${chalk.hex(THEME.sonnet)(shortId)}  ${status}  ${chalk.hex(THEME.text)(task)}`,
-              );
-            }
-            sessionLines.push('', chalk.dim('    Voir en detail: fedi --view <id>'), '');
-            console.log(sessionLines.join('\n'));
-          }
-        })()
-          .catch((err) => flog.error('UI', `[DASHBOARD] Sessions list error: ${err}`))
-          .finally(() => setThinking(false));
-        return;
-      }
-
-      // @tous / @all — send directly to all 3 agents
-      const allMatch = text.match(/^@(tous|all)\s+(.+)$/i);
-      if (allMatch) {
-        const allMessage = allMatch[2];
-        if (!orchestrator.isStarted || stopped) {
-          const isRestart = stopped;
-          setStopped(false);
-          stoppedRef.current = false;
-          setTodos([]);
-          pendingAgentDones.current.clear();
-          if (isRestart) console.log('Redemarrage...');
-          orchestrator
-            .restart(allMessage)
-            .then(() => {
-              orchestrator.sendToAllDirect(allMessage);
-            })
-            .catch((err) => flog.error('UI', `[DASHBOARD] Start error: ${err}`));
-        } else {
-          orchestrator.sendToAllDirect(allMessage);
-        }
-        return;
-      }
-
-      // Parse @agent commands — use indexOf(' ') to avoid hardcoded offsets
-      let targetAgent: AgentId | null = null;
-      let agentMessage = text;
-      const agentPrefixes: { prefix: string; agent: AgentId }[] = [
-        { prefix: '@opus ', agent: 'opus' },
-        { prefix: '@codex ', agent: 'codex' },
-        { prefix: '@sonnet ', agent: 'sonnet' },
-        { prefix: '@claude ', agent: 'sonnet' }, // alias retrocompat
-      ];
-      for (const { prefix, agent } of agentPrefixes) {
-        if (text.toLowerCase().startsWith(prefix)) {
-          targetAgent = agent;
-          agentMessage = text.slice(prefix.length);
-          break;
-        }
-      }
-
-      // Block commands to disabled agents
-      if (targetAgent && !enabledAgentSet.has(targetAgent)) {
-        console.log(
-          chalk.yellow(
-            `  Agent @${targetAgent} est desactive. Agents actifs: ${[...enabledAgentSet].join(', ')}`,
-          ),
-        );
-        setThinking(false);
-        return;
-      }
-
-      // Detect unknown @commands and show error + suggestion
-      const unknownAtMatch = text.match(/^@(\S+)/);
-      if (unknownAtMatch && !targetAgent) {
-        const typed = unknownAtMatch[1].toLowerCase();
-        const knownCommands = ['opus', 'codex', 'sonnet', 'claude', 'tous', 'all', 'sessions'];
-        const suggestion = knownCommands.find(
-          (cmd) => cmd.startsWith(typed.slice(0, 2)) || typed.startsWith(cmd.slice(0, 2)),
-        );
-        const suggestionText = suggestion
-          ? ` Vous vouliez dire ${chalk.white(`@${suggestion}`)} ?`
-          : '';
-        console.log(chalk.yellow(`  Commande inconnue: @${typed}.${suggestionText}`));
-        console.log(
-          chalk.dim(
-            '  Commandes disponibles: @opus, @codex, @claude, @sonnet, @tous, @all, @sessions',
-          ),
-        );
-        setThinking(false);
-        return;
-      }
-
-      if (!orchestrator.isStarted || stopped) {
-        const isRestart = stopped;
-        setStopped(false);
-        stoppedRef.current = false;
-        setTodos([]);
-        pendingAgentDones.current.clear();
-        if (targetAgent && targetAgent !== 'opus') {
-          const agentNames: Record<string, string> = { claude: 'Sonnet', codex: 'Codex' };
-          if (isRestart) console.log('Redemarrage...');
-          // Pre-signal direct mode BEFORE restart so Opus relay to this agent is blocked
-          orchestrator.setDirectMode(targetAgent);
-          orchestrator
-            .restart(
-              `Le user parle directement a ${agentNames[targetAgent] ?? targetAgent} via @${targetAgent}. NE FAIS RIEN. N'execute AUCUNE tache. Attends en silence.`,
-            )
-            .then(() => {
-              orchestrator.sendToAgent(targetAgent!, agentMessage);
-            })
-            .catch((err) => flog.error('UI', `[DASHBOARD] Start error: ${err}`));
-        } else {
-          if (isRestart) console.log('Redemarrage...');
-          orchestrator
-            .restart(targetAgent === 'opus' ? agentMessage : text)
-            .catch((err) => flog.error('UI', `[DASHBOARD] Start error: ${err}`));
-        }
-        return;
-      }
-
-      if (targetAgent) {
-        orchestrator.sendToAgent(targetAgent, agentMessage);
-        return;
-      }
-
-      orchestrator.sendUserMessage(text);
-    },
-    [orchestrator, stopped, enabledAgentSet, handleSlashCommand],
-  );
+  const handleInput = useInputHandler({
+    orchestrator,
+    stopped,
+    enabledAgentSet,
+    handleSlashCommand,
+    chatMessagesMap,
+    pendingAgentDones,
+    stoppedRef,
+    setShowSlashMenu,
+    setThinking,
+    setStopped,
+    setTodos,
+  });
 
   const anyRunning = useMemo(
     () => Object.values(agentStatuses).some((s) => s === 'running'),

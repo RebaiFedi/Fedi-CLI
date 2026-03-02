@@ -8,7 +8,6 @@ import {
 } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
-import { getFlowId } from './flow.js';
 import { loadUserConfig } from '../config/user-config.js';
 
 // ── Types ──────────────────────────────────────────────────────────────────
@@ -108,7 +107,6 @@ function write(
   if (!initialized) return;
   if (LEVEL_PRIORITY[level] < LEVEL_PRIORITY[minLevel]) return;
 
-  const flowId = getFlowId();
   const timestamp = formatTimestamp();
 
   // JSON structured log (async)
@@ -119,7 +117,6 @@ function write(
       cat,
       msg,
     };
-    if (flowId) entry.flow = flowId;
     if (ctx) Object.assign(entry, ctx);
     jsonlStream.write(JSON.stringify(entry) + '\n');
   }
@@ -128,14 +125,13 @@ function write(
   if (humanStream) {
     const lvl = level.toUpperCase().padEnd(5);
     const category = `[${cat}]`.padEnd(10);
-    const flowStr = flowId ? `flow=${flowId} ` : '';
     const ctxStr = ctx
       ? ' ' +
         Object.entries(ctx)
           .map(([k, v]) => `${k}=${v}`)
           .join(' ')
       : '';
-    humanStream.write(`${timestamp} ${lvl} ${category} ${flowStr}${msg}${ctxStr}\n`);
+    humanStream.write(`${timestamp} ${lvl} ${category} ${msg}${ctxStr}\n`);
   }
 }
 

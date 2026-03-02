@@ -142,6 +142,8 @@ ${chalk.white.bold('USAGE')}
 
 ${chalk.white.bold('OPTIONS')}
   -h, --help                   Afficher cette aide
+  -v, --version                Afficher la version
+  --log-level <level>          Niveau de log: debug, info, warn, error
   --sessions                   Lister toutes les sessions
   --view <id>                  Afficher une session (supporte les IDs courts)
   --resume <id>                Reprendre une session precedente
@@ -179,6 +181,10 @@ ${chalk.white.bold('AGENTS')}
   ${chalk.hex(THEME.codex)('Codex')}    GPT-5.3 Codex       Specialiste backend
 
 
+${chalk.white.bold("VARIABLES D'ENVIRONNEMENT")}
+  FEDI_LOG_LEVEL               Niveau de log (debug, info, warn, error)
+
+${chalk.dim('Config:   ~/.fedi-cli/config.json')}
 ${chalk.dim('Logs:     ~/.fedi-cli/logs/')}
 ${chalk.dim('Sessions: ./sessions/')}
 `);
@@ -193,8 +199,27 @@ export async function main() {
     process.exit(0);
   }
 
+  // Handle --version flag
+  if (args.includes('--version') || args.includes('-v')) {
+    console.log(`fedi-cli v${VERSION}`);
+    process.exit(0);
+  }
+
+  // Resolve log level: CLI flag > env var > config > default
+  const logLevelIdx = args.indexOf('--log-level');
+  const logLevelArg = logLevelIdx !== -1 ? args[logLevelIdx + 1] : undefined;
+  const envLogLevel = process.env.FEDI_LOG_LEVEL;
+  const validLogLevels = ['debug', 'info', 'warn', 'error'] as const;
+  type LogLevelType = (typeof validLogLevels)[number];
+  const resolvedLogLevel: LogLevelType | undefined =
+    logLevelArg && validLogLevels.includes(logLevelArg as LogLevelType)
+      ? (logLevelArg as LogLevelType)
+      : envLogLevel && validLogLevels.includes(envLogLevel as LogLevelType)
+        ? (envLogLevel as LogLevelType)
+        : undefined;
+
   // Initialize unified logging — writes to ~/.fedi-cli/logs/
-  initLog();
+  initLog({ level: resolvedLogLevel });
   flog.info('SYSTEM', '=== Fedi CLI starting ===');
 
   // Handle --sessions flag

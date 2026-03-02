@@ -7,8 +7,6 @@ import type { BufferManager } from './buffer-manager.js';
 import { flog } from '../utils/log.js';
 import { loadUserConfig } from '../config/user-config.js';
 
-const _cfg = loadUserConfig();
-
 /** Circuit breaker state per agent */
 interface CircuitState {
   failures: number;
@@ -31,13 +29,13 @@ export interface DelegateTrackerDeps {
  */
 export class DelegateTracker {
   /** Agents that Opus delegated to — we wait for ALL before delivering */
-  readonly expectedDelegates: Set<AgentId> = new Set();
+  private readonly _expectedDelegates: Set<AgentId> = new Set();
   /** Buffered reports from delegates — delivered as one combined message */
-  readonly pendingReports: Map<AgentId, string> = new Map();
+  private readonly _pendingReports: Map<AgentId, string> = new Map();
   /** Agents whose combined report has been delivered — mute ALL late output */
-  readonly deliveredToOpus: Set<AgentId> = new Set();
+  private readonly _deliveredToOpus: Set<AgentId> = new Set();
   /** Last delegation content — used for auto-fallback */
-  readonly lastDelegationContent: Map<AgentId, string> = new Map();
+  private readonly _lastDelegationContent: Map<AgentId, string> = new Map();
 
   /** Safety-net timers for auto-relay */
   private readonly safetyNetTimers: Map<AgentId, ReturnType<typeof setTimeout>> = new Map();
@@ -45,14 +43,22 @@ export class DelegateTracker {
   /** Heartbeat interval for monitoring delegates */
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   private readonly lastActivity: Map<AgentId, number> = new Map();
-  private readonly IDLE_TIMEOUT_MS = _cfg.delegateTimeoutMs;
+  private get IDLE_TIMEOUT_MS(): number {
+    return loadUserConfig().delegateTimeoutMs;
+  }
   private readonly HEARTBEAT_INTERVAL_MS = 10_000;
-  private readonly CODEX_TIMEOUT_MS = _cfg.codexTimeoutMs;
+  private get CODEX_TIMEOUT_MS(): number {
+    return loadUserConfig().codexTimeoutMs;
+  }
 
   /** Circuit breaker — track consecutive failures per agent */
   private readonly circuitBreaker: Map<AgentId, CircuitState> = new Map();
-  private readonly CB_THRESHOLD = _cfg.circuitBreakerThreshold;
-  private readonly CB_COOLDOWN_MS = _cfg.circuitBreakerCooldownMs;
+  private get CB_THRESHOLD(): number {
+    return loadUserConfig().circuitBreakerThreshold;
+  }
+  private get CB_COOLDOWN_MS(): number {
+    return loadUserConfig().circuitBreakerCooldownMs;
+  }
 
   private readonly deps: DelegateTrackerDeps;
 
@@ -60,16 +66,83 @@ export class DelegateTracker {
     this.deps = deps;
   }
 
-  // ── Public getters ──
+  // ── State accessors (encapsulated) ──
 
   get hasPendingDelegates(): boolean {
-    return this.expectedDelegates.size > 0;
+    return this._expectedDelegates.size > 0;
+  }
+  get expectedDelegateCount(): number {
+    return this._expectedDelegates.size;
+  }
+  isExpectedDelegate(agent: AgentId): boolean {
+    return this._expectedDelegates.has(agent);
+  }
+  addExpectedDelegate(agent: AgentId): void {
+    this._expectedDelegates.add(agent);
+  }
+  removeExpectedDelegate(agent: AgentId): void {
+    this._expectedDelegates.delete(agent);
+  }
+  clearExpectedDelegates(): void {
+    this._expectedDelegates.clear();
+  }
+  getExpectedDelegates(): AgentId[] {
+    return [...this._expectedDelegates];
+  }
+
+  get pendingReportCount(): number {
+    return this._pendingReports.size;
+  }
+  hasPendingReport(agent: AgentId): boolean {
+    return this._pendingReports.has(agent);
+  }
+  setPendingReport(agent: AgentId, content: string): void {
+    this._pendingReports.set(agent, content);
+  }
+  removePendingReport(agent: AgentId): void {
+    this._pendingReports.delete(agent);
+  }
+  clearPendingReports(): void {
+    this._pendingReports.clear();
+  }
+
+  isDeliveredToOpus(agent: AgentId): boolean {
+    return this._deliveredToOpus.has(agent);
+  }
+  addDeliveredToOpus(agent: AgentId): void {
+    this._deliveredToOpus.add(agent);
+  }
+  removeDeliveredToOpus(agent: AgentId): void {
+    this._deliveredToOpus.delete(agent);
+  }
+  clearDeliveredToOpus(): void {
+    this._deliveredToOpus.clear();
+  }
+  get deliveredToOpusCount(): number {
+    return this._deliveredToOpus.size;
+  }
+
+  getLastDelegation(agent: AgentId): string | undefined {
+    return this._lastDelegationContent.get(agent);
+  }
+  setLastDelegation(agent: AgentId, content: string): void {
+    this._lastDelegationContent.set(agent, content);
+  }
+  get lastDelegationCount(): number {
+    return this._lastDelegationContent.size;
+  }
+
+  /** Check if all expected reports are in */
+  allReportsReceived(): boolean {
+    return (
+      this._pendingReports.size >= this._expectedDelegates.size && this._expectedDelegates.size > 0
+    );
   }
 
   // ── Activity tracking ──
 
   recordActivity(agent: AgentId): void {
-    if (this.expectedDelegates.has(agent)) {
+    if (this._expectedDelegates.has(agent)) {
       this.lastActivity.set(agent, Date.now());
     }
   }
@@ -94,7 +167,7 @@ export class DelegateTracker {
   /** Start/reset the heartbeat that monitors delegates */
   resetDelegateTimeout(): void {
     const now = Date.now();
-    for (const delegate of this.expectedDelegates) {
+    for (const delegate of this._expectedDelegates) {
       if (!this.lastActivity.has(delegate)) {
         this.lastActivity.set(delegate, now);
       }
@@ -102,7 +175,7 @@ export class DelegateTracker {
     if (this.heartbeatTimer) return;
 
     this.heartbeatTimer = setInterval(() => {
-      if (this.expectedDelegates.size === 0) {
+      if (this._expectedDelegates.size === 0) {
         this.stopHeartbeat();
         return;
       }
@@ -110,8 +183,8 @@ export class DelegateTracker {
       const now = Date.now();
       const timedOut: AgentId[] = [];
 
-      for (const delegate of this.expectedDelegates) {
-        if (this.pendingReports.has(delegate)) continue;
+      for (const delegate of this._expectedDelegates) {
+        if (this._pendingReports.has(delegate)) continue;
         const agent = this.deps.agents[delegate];
         const lastAct = this.lastActivity.get(delegate) ?? now;
         const idleMs = now - lastAct;
@@ -144,13 +217,13 @@ export class DelegateTracker {
 
       for (const delegate of timedOut) {
         const fallback = this.pickFallbackAgent(delegate);
-        const originalTask = this.lastDelegationContent.get(delegate);
+        const originalTask = this._lastDelegationContent.get(delegate);
         const cb = this.deps.getCallbacks();
 
         if (fallback === 'opus' && originalTask) {
           flog.info('ORCH', `Heartbeat timeout: both workers unavailable — Opus takes over`);
-          this.expectedDelegates.clear();
-          this.pendingReports.clear();
+          this._expectedDelegates.clear();
+          this._pendingReports.clear();
           this.stopHeartbeat();
           this.deps.bus.send({
             from: 'system',
@@ -167,9 +240,9 @@ export class DelegateTracker {
 
         if (fallback && fallback !== 'opus' && originalTask) {
           flog.info('ORCH', `Heartbeat fallback: ${delegate} → ${fallback}`);
-          this.expectedDelegates.add(fallback);
-          this.deliveredToOpus.delete(fallback);
-          this.lastDelegationContent.set(fallback, originalTask);
+          this._expectedDelegates.add(fallback);
+          this._deliveredToOpus.delete(fallback);
+          this._lastDelegationContent.set(fallback, originalTask);
           this.lastActivity.set(fallback, Date.now());
           this.deps.bus.relay('opus', fallback, `[FALLBACK — ${delegate} timeout] ${originalTask}`);
           cb?.onAgentOutput(delegate, {
@@ -181,7 +254,7 @@ export class DelegateTracker {
         }
 
         flog.warn('ORCH', `${delegate} timeout — no fallback available, using placeholder`);
-        this.pendingReports.set(delegate, '(timeout — pas de rapport)');
+        this._pendingReports.set(delegate, '(timeout — pas de rapport)');
         cb?.onAgentOutput(delegate, {
           text: `${delegate} timeout — pas de reponse (aucun agent de secours disponible)`,
           timestamp: Date.now(),
@@ -189,7 +262,7 @@ export class DelegateTracker {
         });
       }
 
-      if (this.pendingReports.size >= this.expectedDelegates.size) {
+      if (this._pendingReports.size >= this._expectedDelegates.size) {
         this.stopHeartbeat();
         this.deliverCombinedReports();
       }
@@ -249,11 +322,11 @@ export class DelegateTracker {
       sonnet: ['codex'],
       codex: ['sonnet'],
     };
-    this.expectedDelegates.delete(failedAgent);
+    this._expectedDelegates.delete(failedAgent);
     const candidates = fallbackMap[failedAgent] ?? [];
     for (const candidate of candidates) {
       if (!this.deps.isAgentEnabled(candidate)) continue;
-      if (this.expectedDelegates.has(candidate)) continue;
+      if (this._expectedDelegates.has(candidate)) continue;
       if (this.isCircuitOpen(candidate)) {
         flog.info('ORCH', `Fallback candidate ${candidate} skipped (circuit breaker open)`);
         continue;
@@ -272,7 +345,7 @@ export class DelegateTracker {
   // ── Cross-talk pending check ──
 
   hasCrossTalkPending(): boolean {
-    for (const delegate of this.expectedDelegates) {
+    for (const delegate of this._expectedDelegates) {
       if (this.deps.crossTalk.isOnCrossTalk(delegate)) {
         flog.debug(
           'ORCH',
@@ -287,18 +360,18 @@ export class DelegateTracker {
   // ── Combined report delivery ──
 
   deliverCombinedReports(): void {
-    if (this.pendingReports.size === 0) return;
+    if (this._pendingReports.size === 0) return;
     if (this.hasCrossTalkPending()) {
       flog.info('ORCH', `Combined delivery deferred — cross-talk still active`);
       return;
     }
 
-    const agentNames = [...this.pendingReports.keys()].map(
+    const agentNames = [...this._pendingReports.keys()].map(
       (a) => a.charAt(0).toUpperCase() + a.slice(1),
     );
     const parts: string[] = [];
     const REPORT_MAX_CHARS = 5000;
-    for (const [agent, report] of this.pendingReports) {
+    for (const [agent, report] of this._pendingReports) {
       const trimmed =
         report.length > REPORT_MAX_CHARS
           ? report.slice(0, REPORT_MAX_CHARS) +
@@ -324,11 +397,14 @@ INSTRUCTIONS CRITIQUES:
 6. REPONDS RAPIDEMENT — le user attend. Synthetise et envoie
 7. Pour les TABLEAUX: utilise la syntaxe markdown avec pipes |${opusSection}\n\n${reportsBody}`;
 
-    flog.info('ORCH', `Delivering combined report to Opus (${this.pendingReports.size} delegates)`);
+    flog.info(
+      'ORCH',
+      `Delivering combined report to Opus (${this._pendingReports.size} delegates)`,
+    );
 
     // Mute and interrupt delivered agents
-    for (const delegate of this.expectedDelegates) {
-      this.deliveredToOpus.add(delegate);
+    for (const delegate of this._expectedDelegates) {
+      this._deliveredToOpus.add(delegate);
       const agent = this.deps.agents[delegate];
       if (agent.mute) {
         agent.mute();
@@ -341,16 +417,16 @@ INSTRUCTIONS CRITIQUES:
     }
 
     // Clear delegate tracking state
-    for (const delegate of this.expectedDelegates) {
+    for (const delegate of this._expectedDelegates) {
       this.deps.crossTalk.clearAgent(delegate);
       this.clearSafetyNetTimer(delegate);
     }
 
-    const deliveredAgents = [...this.pendingReports.keys()];
-    const deliveredReportsCopy = new Map(this.pendingReports);
+    const deliveredAgents = [...this._pendingReports.keys()];
+    const deliveredReportsCopy = new Map(this._pendingReports);
 
-    this.expectedDelegates.clear();
-    this.pendingReports.clear();
+    this._expectedDelegates.clear();
+    this._pendingReports.clear();
     this.deps.crossTalk.resetCount();
     this.stopHeartbeat();
 
@@ -390,8 +466,11 @@ INSTRUCTIONS CRITIQUES:
     agent: AgentId,
     relayRouter: {
       isRelayTag(line: string): boolean;
-      agentsOnRelay: Set<AgentId>;
-      relayStartTime: Map<AgentId, number>;
+      addOnRelay(agent: AgentId): void;
+      removeFromRelay(agent: AgentId): void;
+      setRelayStart(agent: AgentId, time?: number): void;
+      removeRelayStart(agent: AgentId): void;
+      isOpusWaitingForRelays(): boolean;
       recordRelay(): void;
     },
   ): void {
@@ -408,13 +487,13 @@ INSTRUCTIONS CRITIQUES:
         'ORCH',
         `${agent} finished on relay without [TO:OPUS] — auto-relaying ${textLines.length} chars`,
       );
-      if (this.expectedDelegates.has(agent)) {
-        this.pendingReports.set(agent, textLines);
+      if (this._expectedDelegates.has(agent)) {
+        this._pendingReports.set(agent, textLines);
         flog.info(
           'ORCH',
-          `Auto-buffered ${agent} report (${this.pendingReports.size}/${this.expectedDelegates.size})`,
+          `Auto-buffered ${agent} report (${this._pendingReports.size}/${this._expectedDelegates.size})`,
         );
-        if (this.pendingReports.size >= this.expectedDelegates.size) {
+        if (this._pendingReports.size >= this._expectedDelegates.size) {
           this.deliverCombinedReports();
         }
       } else {
@@ -425,8 +504,8 @@ INSTRUCTIONS CRITIQUES:
       const agentInstance = this.deps.agents[agent];
       if (agentInstance.status === 'running') {
         flog.info('ORCH', `${agent} relay buffer empty but agent still RUNNING — NOT failing over`);
-        relayRouter.agentsOnRelay.add(agent);
-        relayRouter.relayStartTime.set(agent, Date.now());
+        relayRouter.addOnRelay(agent);
+        relayRouter.setRelayStart(agent, Date.now());
         return;
       }
 
@@ -437,15 +516,15 @@ INSTRUCTIONS CRITIQUES:
         `${agent} finished on relay — no buffered text (${placeholder}), status=${agentInstance.status}`,
       );
 
-      const hadExpected = this.expectedDelegates.has(agent);
+      const hadExpected = this._expectedDelegates.has(agent);
       const fallback = this.pickFallbackAgent(agent);
-      const originalTask = this.lastDelegationContent.get(agent);
+      const originalTask = this._lastDelegationContent.get(agent);
       const cb = this.deps.getCallbacks();
 
       if (fallback === 'opus' && originalTask && hadExpected) {
         flog.info('ORCH', `Both workers unavailable — signaling Opus to handle`);
-        this.expectedDelegates.clear();
-        this.pendingReports.clear();
+        this._expectedDelegates.clear();
+        this._pendingReports.clear();
         this.deps.bus.send({
           from: 'system',
           to: 'opus',
@@ -459,14 +538,14 @@ INSTRUCTIONS CRITIQUES:
       } else if (fallback && fallback !== 'opus' && originalTask && hadExpected) {
         flog.info('ORCH', `Auto-fallback: ${agent} failed → redelegating to ${fallback}`);
         const content = `[FALLBACK — ${agent} a echoue] ${originalTask}`;
-        this.expectedDelegates.add(fallback);
-        this.deliveredToOpus.delete(fallback);
-        relayRouter.agentsOnRelay.add(fallback);
-        relayRouter.relayStartTime.set(fallback, Date.now());
+        this._expectedDelegates.add(fallback);
+        this._deliveredToOpus.delete(fallback);
+        relayRouter.addOnRelay(fallback);
+        relayRouter.setRelayStart(fallback, Date.now());
         relayRouter.recordRelay();
         this.deps.bus.relay('opus', fallback, content);
         this.lastActivity.set(fallback, Date.now());
-        this.lastDelegationContent.set(fallback, content);
+        this._lastDelegationContent.set(fallback, content);
         this.resetDelegateTimeout();
         cb?.onAgentOutput(agent, {
           text: `${agent} indisponible — tache transferee a ${fallback}`,
@@ -475,26 +554,21 @@ INSTRUCTIONS CRITIQUES:
         });
       } else {
         if (hadExpected) {
-          this.pendingReports.set(agent, placeholder);
-          if (this.pendingReports.size >= this.expectedDelegates.size) {
+          this._pendingReports.set(agent, placeholder);
+          if (this._pendingReports.size >= this._expectedDelegates.size) {
             this.deliverCombinedReports();
           }
         }
       }
     }
 
-    relayRouter.agentsOnRelay.delete(agent);
+    relayRouter.removeFromRelay(agent);
     this.deps.buffers.clearBuffer(agent);
-    relayRouter.relayStartTime.delete(agent);
+    relayRouter.removeRelayStart(agent);
 
-    const isWaiting = (() => {
-      for (const a of relayRouter.agentsOnRelay) {
-        if (a !== 'opus') return true;
-      }
-      return false;
-    })();
+    const isWaiting = relayRouter.isOpusWaitingForRelays();
 
-    if (!isWaiting && this.expectedDelegates.size === 0) {
+    if (!isWaiting && this._expectedDelegates.size === 0) {
       const cb = this.deps.getCallbacks();
       if (cb) this.deps.buffers.flushOpusBuffer(cb);
     }
@@ -503,10 +577,10 @@ INSTRUCTIONS CRITIQUES:
   // ── Reset ──
 
   reset(): void {
-    this.expectedDelegates.clear();
-    this.pendingReports.clear();
-    this.deliveredToOpus.clear();
-    this.lastDelegationContent.clear();
+    this._expectedDelegates.clear();
+    this._pendingReports.clear();
+    this._deliveredToOpus.clear();
+    this._lastDelegationContent.clear();
     for (const timer of this.safetyNetTimers.values()) clearTimeout(timer);
     this.safetyNetTimers.clear();
     this.circuitBreaker.clear();

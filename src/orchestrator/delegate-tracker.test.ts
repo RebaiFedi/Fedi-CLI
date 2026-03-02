@@ -45,12 +45,12 @@ describe('DelegateTracker', () => {
     it('starts with no pending delegates', () => {
       const { tracker } = makeTracker();
       assert.equal(tracker.hasPendingDelegates, false);
-      assert.equal(tracker.expectedDelegates.size, 0);
+      assert.equal(tracker.expectedDelegateCount, 0);
     });
 
     it('tracks expected delegates', () => {
       const { tracker } = makeTracker();
-      tracker.expectedDelegates.add('sonnet');
+      tracker.addExpectedDelegate('sonnet');
       assert.equal(tracker.hasPendingDelegates, true);
     });
   });
@@ -63,7 +63,7 @@ describe('DelegateTracker', () => {
       // Not an expected delegate — should not crash
       tracker.recordActivity('sonnet');
       // Now as expected delegate
-      tracker.expectedDelegates.add('sonnet');
+      tracker.addExpectedDelegate('sonnet');
       tracker.recordActivity('sonnet');
     });
   });
@@ -145,22 +145,22 @@ describe('DelegateTracker', () => {
   describe('pickFallbackAgent', () => {
     it('picks codex as fallback for sonnet', () => {
       const { tracker } = makeTracker();
-      tracker.expectedDelegates.add('sonnet');
+      tracker.addExpectedDelegate('sonnet');
       const fallback = tracker.pickFallbackAgent('sonnet');
       assert.equal(fallback, 'codex');
     });
 
     it('picks sonnet as fallback for codex', () => {
       const { tracker } = makeTracker();
-      tracker.expectedDelegates.add('codex');
+      tracker.addExpectedDelegate('codex');
       const fallback = tracker.pickFallbackAgent('codex');
       assert.equal(fallback, 'sonnet');
     });
 
     it('returns opus when no worker fallback available', () => {
       const { tracker } = makeTracker();
-      tracker.expectedDelegates.add('sonnet');
-      tracker.expectedDelegates.add('codex');
+      tracker.addExpectedDelegate('sonnet');
+      tracker.addExpectedDelegate('codex');
       // Both are expected delegates — codex can't be fallback for sonnet
       const fallback = tracker.pickFallbackAgent('sonnet');
       assert.equal(fallback, 'opus');
@@ -168,7 +168,7 @@ describe('DelegateTracker', () => {
 
     it('skips disabled agents', () => {
       const { tracker } = makeTracker({ isAgentEnabled: (id) => id !== 'codex' });
-      tracker.expectedDelegates.add('sonnet');
+      tracker.addExpectedDelegate('sonnet');
       const fallback = tracker.pickFallbackAgent('sonnet');
       // codex disabled — falls back to opus
       assert.equal(fallback, 'opus');
@@ -176,7 +176,7 @@ describe('DelegateTracker', () => {
 
     it('skips agents with open circuit breaker', () => {
       const { tracker } = makeTracker();
-      tracker.expectedDelegates.add('sonnet');
+      tracker.addExpectedDelegate('sonnet');
       // Open circuit for codex
       for (let i = 0; i < 3; i++) tracker.recordFailure('codex');
       const fallback = tracker.pickFallbackAgent('sonnet');
@@ -186,7 +186,7 @@ describe('DelegateTracker', () => {
 
     it('skips agents in error/stopped status', () => {
       const { tracker, codex } = makeTracker();
-      tracker.expectedDelegates.add('sonnet');
+      tracker.addExpectedDelegate('sonnet');
       codex.status = 'error';
       const fallback = tracker.pickFallbackAgent('sonnet');
       assert.equal(fallback, 'opus');
@@ -194,11 +194,11 @@ describe('DelegateTracker', () => {
 
     it('records failure for the failed agent', () => {
       const { tracker } = makeTracker();
-      tracker.expectedDelegates.add('sonnet');
+      tracker.addExpectedDelegate('sonnet');
       tracker.pickFallbackAgent('sonnet');
       // First failure recorded
       tracker.pickFallbackAgent('sonnet');
-      tracker.expectedDelegates.add('sonnet');
+      tracker.addExpectedDelegate('sonnet');
       tracker.pickFallbackAgent('sonnet');
       // After 3 pickFallbackAgent calls, sonnet circuit should be open
       assert.equal(tracker.isCircuitOpen('sonnet'), true);
@@ -210,13 +210,13 @@ describe('DelegateTracker', () => {
   describe('hasCrossTalkPending', () => {
     it('returns false when no cross-talk active', () => {
       const { tracker } = makeTracker();
-      tracker.expectedDelegates.add('sonnet');
+      tracker.addExpectedDelegate('sonnet');
       assert.equal(tracker.hasCrossTalkPending(), false);
     });
 
     it('returns true when delegate is on cross-talk', () => {
       const { tracker, crossTalk } = makeTracker();
-      tracker.expectedDelegates.add('sonnet');
+      tracker.addExpectedDelegate('sonnet');
       crossTalk.setOnCrossTalk('sonnet');
       assert.equal(tracker.hasCrossTalkPending(), true);
     });
@@ -227,10 +227,10 @@ describe('DelegateTracker', () => {
   describe('deliverCombinedReports', () => {
     it('sends combined message to opus when all reports are in', () => {
       const { tracker, sentToOpus } = makeTracker();
-      tracker.expectedDelegates.add('sonnet');
-      tracker.expectedDelegates.add('codex');
-      tracker.pendingReports.set('sonnet', 'Frontend report');
-      tracker.pendingReports.set('codex', 'Backend report');
+      tracker.addExpectedDelegate('sonnet');
+      tracker.addExpectedDelegate('codex');
+      tracker.setPendingReport('sonnet', 'Frontend report');
+      tracker.setPendingReport('codex', 'Backend report');
 
       tracker.deliverCombinedReports();
 
@@ -243,13 +243,13 @@ describe('DelegateTracker', () => {
 
     it('clears delegates and reports after delivery', () => {
       const { tracker } = makeTracker();
-      tracker.expectedDelegates.add('sonnet');
-      tracker.pendingReports.set('sonnet', 'Done');
+      tracker.addExpectedDelegate('sonnet');
+      tracker.setPendingReport('sonnet', 'Done');
 
       tracker.deliverCombinedReports();
 
-      assert.equal(tracker.expectedDelegates.size, 0);
-      assert.equal(tracker.pendingReports.size, 0);
+      assert.equal(tracker.expectedDelegateCount, 0);
+      assert.equal(tracker.pendingReportCount, 0);
     });
 
     it('does nothing when no reports', () => {
@@ -260,8 +260,8 @@ describe('DelegateTracker', () => {
 
     it('defers when cross-talk is still active', () => {
       const { tracker, crossTalk, sentToOpus } = makeTracker();
-      tracker.expectedDelegates.add('sonnet');
-      tracker.pendingReports.set('sonnet', 'Report');
+      tracker.addExpectedDelegate('sonnet');
+      tracker.setPendingReport('sonnet', 'Report');
       crossTalk.setOnCrossTalk('sonnet');
 
       tracker.deliverCombinedReports();
@@ -272,12 +272,12 @@ describe('DelegateTracker', () => {
 
     it('mutes and interrupts delivered agents', () => {
       const { tracker, sonnet } = makeTracker();
-      tracker.expectedDelegates.add('sonnet');
-      tracker.pendingReports.set('sonnet', 'Done');
+      tracker.addExpectedDelegate('sonnet');
+      tracker.setPendingReport('sonnet', 'Done');
 
       tracker.deliverCombinedReports();
 
-      assert.equal(tracker.deliveredToOpus.has('sonnet'), true);
+      assert.equal(tracker.isDeliveredToOpus('sonnet'), true);
       assert.equal(sonnet.isMuted(), true);
       assert.equal(sonnet.isInterrupted(), true);
     });
@@ -289,8 +289,8 @@ describe('DelegateTracker', () => {
         timestamp: Date.now(),
         type: 'stdout',
       });
-      tracker.expectedDelegates.add('sonnet');
-      tracker.pendingReports.set('sonnet', 'Report');
+      tracker.addExpectedDelegate('sonnet');
+      tracker.setPendingReport('sonnet', 'Report');
 
       tracker.deliverCombinedReports();
 
@@ -304,18 +304,18 @@ describe('DelegateTracker', () => {
   describe('reset', () => {
     it('clears all tracking state', () => {
       const { tracker } = makeTracker();
-      tracker.expectedDelegates.add('sonnet');
-      tracker.pendingReports.set('sonnet', 'x');
-      tracker.deliveredToOpus.add('sonnet');
-      tracker.lastDelegationContent.set('sonnet', 'y');
+      tracker.addExpectedDelegate('sonnet');
+      tracker.setPendingReport('sonnet', 'x');
+      tracker.addDeliveredToOpus('sonnet');
+      tracker.setLastDelegation('sonnet', 'y');
       for (let i = 0; i < 3; i++) tracker.recordFailure('codex');
 
       tracker.reset();
 
-      assert.equal(tracker.expectedDelegates.size, 0);
-      assert.equal(tracker.pendingReports.size, 0);
-      assert.equal(tracker.deliveredToOpus.size, 0);
-      assert.equal(tracker.lastDelegationContent.size, 0);
+      assert.equal(tracker.expectedDelegateCount, 0);
+      assert.equal(tracker.pendingReportCount, 0);
+      assert.equal(tracker.deliveredToOpusCount, 0);
+      assert.equal(tracker.lastDelegationCount, 0);
       assert.equal(tracker.isCircuitOpen('codex'), false);
     });
   });

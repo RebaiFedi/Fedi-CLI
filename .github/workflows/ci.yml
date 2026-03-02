@@ -50,3 +50,6 @@ jobs:
           echo "OK: bin/fedi exists"
           # Verify main() is exported and loadable
           node --input-type=module -e 'import("fedi-cli/dist/index.js").then(m => { if (typeof m.main === "function") { console.log("OK: main() exported"); process.exit(0); } else { console.error("FAIL: main() not found"); process.exit(1); } })'
+          # Verify fedi --help runs and exits cleanly
+          node node_modules/.bin/fedi --help | grep -q 'Fedi CLI'
+          echo "OK: fedi --help works"

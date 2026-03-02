@@ -10,11 +10,48 @@ import type { AgentId, Message } from '../agents/types.js';
 
 /** Minimal DelegateTracker stub for relay-router tests */
 function makeDelegateStub() {
+  const _expected = new Set<AgentId>();
+  const _pending = new Map<AgentId, string>();
+  const _delivered = new Set<AgentId>();
+  const _lastDelegation = new Map<AgentId, string>();
+
   return {
-    expectedDelegates: new Set<AgentId>(),
-    pendingReports: new Map<AgentId, string>(),
-    deliveredToOpus: new Set<AgentId>(),
-    lastDelegationContent: new Map<AgentId, string>(),
+    // Accessor methods matching DelegateTracker's public interface
+    isExpectedDelegate: (a: AgentId) => _expected.has(a),
+    addExpectedDelegate: (a: AgentId) => _expected.add(a),
+    removeExpectedDelegate: (a: AgentId) => _expected.delete(a),
+    clearExpectedDelegates: () => _expected.clear(),
+    getExpectedDelegates: () => [..._expected] as AgentId[],
+    get expectedDelegateCount() {
+      return _expected.size;
+    },
+    get hasPendingDelegates() {
+      return _expected.size > 0;
+    },
+
+    hasPendingReport: (a: AgentId) => _pending.has(a),
+    setPendingReport: (a: AgentId, c: string) => _pending.set(a, c),
+    removePendingReport: (a: AgentId) => _pending.delete(a),
+    clearPendingReports: () => _pending.clear(),
+    get pendingReportCount() {
+      return _pending.size;
+    },
+
+    isDeliveredToOpus: (a: AgentId) => _delivered.has(a),
+    addDeliveredToOpus: (a: AgentId) => _delivered.add(a),
+    removeDeliveredToOpus: (a: AgentId) => _delivered.delete(a),
+    clearDeliveredToOpus: () => _delivered.clear(),
+    get deliveredToOpusCount() {
+      return _delivered.size;
+    },
+
+    getLastDelegation: (a: AgentId) => _lastDelegation.get(a),
+    setLastDelegation: (a: AgentId, c: string) => _lastDelegation.set(a, c),
+    get lastDelegationCount() {
+      return _lastDelegation.size;
+    },
+
+    allReportsReceived: () => _pending.size >= _expected.size && _expected.size > 0,
     recordSuccess: () => {},
     recordActivity: () => {},
     resetDelegateTimeout: () => {},
@@ -240,15 +277,15 @@ describe('RelayRouter', () => {
   describe('reset', () => {
     it('clears all state', () => {
       const { router } = makeRouter();
-      router.agentsOnRelay.add('sonnet');
-      router.relayStartTime.set('sonnet', Date.now());
+      router.addOnRelay('sonnet');
+      router.setRelayStart('sonnet', Date.now());
       router.liveRelayAllowed = true;
       router.recordRelay();
 
       router.reset();
 
-      assert.equal(router.agentsOnRelay.size, 0);
-      assert.equal(router.relayStartTime.size, 0);
+      assert.equal(router.hasAnyOnRelay(), false);
+      assert.equal(router.getRelayStart('sonnet'), undefined);
       assert.equal(router.liveRelayAllowed, false);
       assert.equal(router.isRateLimited(), false);
     });
@@ -264,13 +301,13 @@ describe('RelayRouter', () => {
 
     it('returns true when worker is on relay', () => {
       const { router } = makeRouter();
-      router.agentsOnRelay.add('sonnet');
+      router.addOnRelay('sonnet');
       assert.equal(router.isOpusWaitingForRelays(), true);
     });
 
     it('returns false when only opus on relay', () => {
       const { router } = makeRouter();
-      router.agentsOnRelay.add('opus');
+      router.addOnRelay('opus');
       assert.equal(router.isOpusWaitingForRelays(), false);
     });
   });

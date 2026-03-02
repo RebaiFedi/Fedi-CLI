@@ -106,6 +106,8 @@ export interface UserConfig {
   relayDraftFlushMs: number;
   /** Safety-net debounce delay (ms). Default: 500 */
   safetyNetDebounceMs: number;
+  /** Log level: debug, info, warn, error. Default: 'debug' */
+  logLevel: 'debug' | 'info' | 'warn' | 'error';
 }
 
 const UserConfigSchema = z
@@ -138,6 +140,7 @@ const UserConfigSchema = z
     sandboxMode: z.boolean().default(false),
     relayDraftFlushMs: z.number().min(10).default(150),
     safetyNetDebounceMs: z.number().min(10).default(500),
+    logLevel: z.enum(['debug', 'info', 'warn', 'error']).default('debug'),
   })
   .partial();
 
@@ -170,6 +173,7 @@ const DEFAULTS: UserConfig = {
   sandboxMode: false,
   relayDraftFlushMs: 150,
   safetyNetDebounceMs: 500,
+  logLevel: 'debug',
 };
 
 let cachedConfig: UserConfig | null = null;
