@@ -313,10 +313,11 @@ export abstract class BaseAppServerAgent implements AgentProcess {
       this.suppressUserEchoCount++;
       this.startTurn(resumeMsg);
     } else {
-      this.pendingSystemPrompt = systemPrompt;
+      // System prompt is loaded via AGENTS.md — no need to fuse with first message
+      this.pendingSystemPrompt = null;
       this.setStatus('idle');
-      flog.info('AGENT', `${this.logTag}: System prompt stored — will fuse with first send()`);
-      this.systemPromptSent = false;
+      flog.info('AGENT', `${this.logTag}: Ready — system prompt via AGENTS.md`);
+      this.systemPromptSent = true;
     }
     this.muted = false;
   }

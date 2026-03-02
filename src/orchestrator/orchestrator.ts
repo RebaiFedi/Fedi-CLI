@@ -21,7 +21,7 @@ import {
 import { flog } from '../utils/log.js';
 import { SessionManager } from '../utils/session-manager.js';
 import { loadUserConfig } from '../config/user-config.js';
-import { ensureClaudeMd } from './claude-md-manager.js';
+import { ensureClaudeMd, ensureAgentsMd } from './claude-md-manager.js';
 import { CrossTalkManager } from './cross-talk-manager.js';
 import { BufferManager } from './buffer-manager.js';
 import { DelegateTracker } from './delegate-tracker.js';
@@ -810,6 +810,7 @@ export class Orchestrator {
     flog.info('ORCH', 'Pre-spawning Opus process...');
 
     ensureClaudeMd(config.projectDir);
+    ensureAgentsMd(config.projectDir);
 
     this.opusQueue.start();
     this.sonnetQueue.start();
@@ -825,7 +826,11 @@ export class Orchestrator {
     flog.info('ORCH', 'Opus process pre-spawned (waiting for first user message)');
   }
 
-  async startWithTask(task: string, previousContext?: string): Promise<void> {
+  async startWithTask(
+    task: string,
+    previousContext?: string,
+    options?: { skipFirstMessage?: boolean },
+  ): Promise<void> {
     if (this.started || !this.config) return;
     this.stopping = false;
     const config = this.config;
@@ -848,13 +853,18 @@ export class Orchestrator {
       this.started = true;
       this.prewarmed = false;
 
-      this.opus.send(userMsg);
-      flog.info('ORCH', 'Opus pre-spawned — task sent (no re-spawn)');
+      if (!options?.skipFirstMessage) {
+        this.opus.send(userMsg);
+        flog.info('ORCH', 'Opus pre-spawned — task sent (no re-spawn)');
+      } else {
+        flog.info('ORCH', 'Opus pre-spawned — skipping first message (caller will send)');
+      }
       return;
     }
 
     // Cold start path — spawn Opus with system prompt via --system-prompt flag
     ensureClaudeMd(config.projectDir);
+    ensureAgentsMd(config.projectDir);
 
     const opusSystemPrompt = getOpusSystemPrompt(config.projectDir);
 
@@ -869,22 +879,28 @@ export class Orchestrator {
       const resumeMsg = previousContext
         ? `[NOUVELLE TACHE DU USER] ${task}\n\n[RESET] La session precedente a ete INTERROMPUE par le user (Echap). TOUS les agents (Sonnet, Codex) ont ete STOPPES. Tes delegations precedentes sont ANNULEES — aucun agent ne travaille. Si le user demande une action sur le code/projet, tu DOIS re-deleguer. Ne dis PAS "c'est en cours" ou "j'ai deja lance" — c'est FAUX, les agents sont morts.`
         : `[NOUVELLE TACHE DU USER] ${task}`;
-      this.opus.send(resumeMsg);
-      flog.info('ORCH', 'Opus resumed session — sent new task as follow-up');
-    } else {
+      if (!options?.skipFirstMessage) {
+        this.opus.send(resumeMsg);
+        flog.info('ORCH', 'Opus resumed session — sent new task as follow-up');
+      } else {
+        flog.info('ORCH', 'Opus resumed — skipping first message (caller will send)');
+      }
+    } else if (!options?.skipFirstMessage) {
       // Fresh session — system prompt sent via flag, now send the task
       this.opus.send(userMsg);
       flog.info('ORCH', 'Opus cold start — task sent as first message');
+    } else {
+      flog.info('ORCH', 'Opus cold start — skipping first message (caller will send)');
     }
 
     flog.info('ORCH', 'Opus started (Sonnet, Codex on standby — lazy start)');
   }
 
-  async restart(task: string): Promise<void> {
+  async restart(task: string, options?: { skipFirstMessage?: boolean }): Promise<void> {
     // Fast path: if Opus was booted at startup, reuse the session
     if (this.prewarmed) {
       flog.info('ORCH', `Fast start — Opus already booted, sending task directly`);
-      await this.startWithTask(task);
+      await this.startWithTask(task, undefined, options);
       return;
     }
 
@@ -901,7 +917,7 @@ export class Orchestrator {
       'ORCH',
       `Restarting with context (${previousContext ? previousContext.length : 0} chars)`,
     );
-    await this.startWithTask(task, previousContext || undefined);
+    await this.startWithTask(task, previousContext || undefined, options);
   }
 
   private buildConversationSummary(): string | null {

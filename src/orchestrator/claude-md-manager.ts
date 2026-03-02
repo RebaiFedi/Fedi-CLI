@@ -1,6 +1,7 @@
 import { writeFileSync, existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { flog } from '../utils/log.js';
+import { getCodexSystemPrompt } from './prompts.js';
 import {
   OPUS_ROLE,
   OPUS_DECISION_TREE,
@@ -278,5 +279,32 @@ ${CODE_TESTING}
     flog.info('ORCH', `Created/updated CLAUDE.md in ${projectDir}`);
   } catch (err) {
     flog.warn('ORCH', `Failed to write CLAUDE.md: ${err}`);
+  }
+}
+
+/** Marker to identify Fedi-CLI-managed AGENTS.md */
+const AGENTS_MD_MARKER = '<!-- fedi-cli-managed -->';
+
+/**
+ * Generates and writes the AGENTS.md file that Codex reads at startup.
+ * Contains the Codex system prompt so it doesn't need to be sent as a user message.
+ */
+export function ensureAgentsMd(projectDir: string): void {
+  const agentsPath = join(projectDir, 'AGENTS.md');
+  const codexPrompt = getCodexSystemPrompt(projectDir);
+  const content = `${AGENTS_MD_MARKER}\n${codexPrompt}\n`;
+  try {
+    if (existsSync(agentsPath)) {
+      const existing = readFileSync(agentsPath, 'utf-8');
+      if (!existing.includes(AGENTS_MD_MARKER)) {
+        flog.debug('ORCH', 'AGENTS.md exists but is user-managed — skipping');
+        return;
+      }
+      if (existing === content) return;
+    }
+    writeFileSync(agentsPath, content, 'utf-8');
+    flog.info('ORCH', `Created/updated AGENTS.md in ${projectDir}`);
+  } catch (err) {
+    flog.warn('ORCH', `Failed to write AGENTS.md: ${err}`);
   }
 }

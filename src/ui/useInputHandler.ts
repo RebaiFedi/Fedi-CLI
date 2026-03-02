@@ -127,7 +127,7 @@ export function useInputHandler({
           pendingAgentDones.current.clear();
           if (isRestart) console.log('Redemarrage...');
           orchestrator
-            .restart(allMessage)
+            .restart(`@tous ${allMessage}`, { skipFirstMessage: true })
             .then(() => {
               orchestrator.sendToAllDirect(allMessage);
             })
