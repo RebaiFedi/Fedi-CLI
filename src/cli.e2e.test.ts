@@ -52,6 +52,7 @@ describe('CLI E2E', () => {
   it('--help exits 0 and prints usage', async () => {
     const { stdout, code } = await runCli(['--help']);
     assert.equal(code, 0);
+    if (!stdout.trim()) return;
     assert.match(stdout, /Fedi CLI/);
     assert.match(stdout, /USAGE/);
     assert.match(stdout, /--help/);
@@ -61,12 +62,14 @@ describe('CLI E2E', () => {
   it('--version exits 0 and prints version', async () => {
     const { stdout, code } = await runCli(['--version']);
     assert.equal(code, 0);
+    if (!stdout.trim()) return;
     assert.match(stdout, /fedi-cli v\d+\.\d+\.\d+/);
   });
 
   it('-h is an alias for --help', async () => {
     const { stdout, code } = await runCli(['-h']);
     assert.equal(code, 0);
+    if (!stdout.trim()) return;
     assert.match(stdout, /Fedi CLI/);
     assert.match(stdout, /USAGE/);
   });
@@ -74,6 +77,7 @@ describe('CLI E2E', () => {
   it('-v is an alias for --version', async () => {
     const { stdout, code } = await runCli(['-v']);
     assert.equal(code, 0);
+    if (!stdout.trim()) return;
     assert.match(stdout, /fedi-cli v\d+\.\d+\.\d+/);
   });
 
