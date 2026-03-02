@@ -1044,24 +1044,33 @@ export function Dashboard({
         </Box>
       )}
       {todosVisible && <TodoPanel items={todos} />}
-      <Box width="100%" flexGrow={1}>
-        <Box
-          width="100%"
-          flexGrow={1}
-          paddingY={0}
-          borderStyle="round"
-          borderColor={anyRunning ? THEME.opus : THEME.panelBorder}
-        >
-          <Text color={THEME.text}>{' \u276F '}</Text>
-          <Box flexGrow={1}>
-            <InputBar
-              onSubmit={handleInput}
-              projectDir={projectDir}
-              placeholder={stopped ? 'Tapez pour relancer les agents...' : 'Message, @agent ou /help'}
-            />
+      {showSlashMenu ? (
+        <Box width="100%" borderStyle="round" borderColor={THEME.opus} paddingX={1}>
+          <SlashMenu
+            onClose={() => setShowSlashMenu(false)}
+            enabledAgents={enabledAgentSet}
+          />
+        </Box>
+      ) : (
+        <Box width="100%" flexGrow={1}>
+          <Box
+            width="100%"
+            flexGrow={1}
+            paddingY={0}
+            borderStyle="round"
+            borderColor={anyRunning ? THEME.opus : THEME.panelBorder}
+          >
+            <Text color={THEME.text}>{' \u276F '}</Text>
+            <Box flexGrow={1}>
+              <InputBar
+                onSubmit={handleInput}
+                projectDir={projectDir}
+                placeholder={stopped ? 'Tapez pour relancer les agents...' : 'Message, @agent ou /help'}
+              />
+            </Box>
           </Box>
         </Box>
-      </Box>
+      )}
       <Box paddingX={2} paddingTop={0}>
         <Text>
           <Text dimColor>{'esc '}</Text>
