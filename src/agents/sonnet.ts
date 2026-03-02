@@ -6,12 +6,10 @@ const cfg = loadUserConfig();
 
 export class SonnetAgent extends BaseSonnetAgent {
   readonly id: AgentId = 'sonnet';
-  protected get logTag() {
-    return 'SONNET';
-  }
-  protected get model() {
-    return cfg.claudeModel;
-  }
+  protected get logTag() { return 'SONNET'; }
+  protected get model() { return cfg.claudeModel; }
+  protected get effort() { return cfg.sonnetEffort; }
+  protected get thinking() { return cfg.sonnetThinking; }
 
   protected override getExtraArgs(systemPrompt: string): string[] {
     // When resuming, the session already has its system prompt — don't override it

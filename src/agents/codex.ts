@@ -9,6 +9,8 @@ export class CodexAgent extends BaseAppServerAgent {
 
   protected get logTag() { return '[CODEX]'; }
   protected get model() { return cfg.codexModel; }
+  protected get effort() { return cfg.codexEffort; }
+  protected get thinking() { return cfg.codexThinking; }
 
   protected getCliPath(config: SessionConfig): string {
     return config.codexPath;

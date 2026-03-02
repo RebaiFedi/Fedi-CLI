@@ -7,10 +7,8 @@ const cfg = loadUserConfig();
 export class OpusAgent extends BaseSonnetAgent {
   readonly id: AgentId = 'opus';
 
-  protected get logTag() {
-    return 'OPUS';
-  }
-  protected get model() {
-    return cfg.opusModel;
-  }
+  protected get logTag() { return 'OPUS'; }
+  protected get model() { return cfg.opusModel; }
+  protected get effort() { return cfg.opusEffort; }
+  protected get thinking() { return cfg.opusThinking; }
 }

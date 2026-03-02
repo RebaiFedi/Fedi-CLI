@@ -9,6 +9,7 @@ import { ErrorBoundary } from './ui/ErrorBoundary.js';
 import { SessionManager } from './utils/session-manager.js';
 import { THEME } from './config/theme.js';
 import { VERSION } from './utils/version.js';
+import { applyProfile, setAgentEffort, setAgentThinking, type EffortLevel, type ProfileName, PROFILES } from './config/user-config.js';
 
 async function printSessionList(projectDir: string) {
   const sm = new SessionManager(projectDir);
@@ -138,6 +139,18 @@ ${chalk.white.bold('OPTIONS')}
   --resume <id>                Reprendre une session precedente
   --agents <list>              Agents a activer (ex: opus,sonnet,codex)
 
+${chalk.white.bold('PROFILS & PERFORMANCE')}
+  --profile <high|medium|low>  Profil global (effort + thinking presets)
+  --opus-effort <high|medium|low>    Effort Opus
+  --sonnet-effort <high|medium|low>  Effort Sonnet
+  --codex-effort <high|medium|low>   Effort Codex
+  --thinking                   Activer thinking pour Opus
+  --no-thinking                Desactiver thinking pour tous
+
+  ${chalk.dim('Profils:')}
+    ${chalk.hex(THEME.opus)('high')}     opus=high/think  sonnet=high/think  codex=high/think
+    ${chalk.hex(THEME.sonnet)('medium')}   opus=high/think  sonnet=medium      codex=medium
+    ${chalk.hex(THEME.codex)('low')}      opus=medium      sonnet=low         codex=low
 
 ${chalk.white.bold('COMMANDES INTERACTIVES')}
   @opus <message>              Parler directement a Opus (directeur)
@@ -223,6 +236,41 @@ export async function main() {
     // Opus is always required as director
     enabledAgents.add('opus');
     flog.info('SYSTEM', `Agents enabled: ${[...enabledAgents].join(', ')}`);
+  }
+
+  // Handle --profile flag
+  const profileIdx = args.indexOf('--profile');
+  if (profileIdx !== -1) {
+    const profileName = args[profileIdx + 1] as ProfileName | undefined;
+    if (!profileName || !PROFILES[profileName]) {
+      console.error(chalk.red('  Usage: fedi --profile <high|medium|low>'));
+      process.exit(1);
+    }
+    applyProfile(profileName);
+  }
+
+  // Handle per-agent effort flags
+  const validEfforts: EffortLevel[] = ['high', 'medium', 'low'];
+  for (const agent of ['opus', 'sonnet', 'codex'] as const) {
+    const flagIdx = args.indexOf(`--${agent}-effort`);
+    if (flagIdx !== -1) {
+      const effort = args[flagIdx + 1] as EffortLevel | undefined;
+      if (!effort || !validEfforts.includes(effort)) {
+        console.error(chalk.red(`  Usage: fedi --${agent}-effort <high|medium|low>`));
+        process.exit(1);
+      }
+      setAgentEffort(agent, effort);
+    }
+  }
+
+  // Handle --thinking / --no-thinking flags
+  if (args.includes('--thinking')) {
+    setAgentThinking('opus', true);
+  }
+  if (args.includes('--no-thinking')) {
+    setAgentThinking('opus', false);
+    setAgentThinking('sonnet', false);
+    setAgentThinking('codex', false);
   }
 
   const clis = await detectAll();

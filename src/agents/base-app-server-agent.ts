@@ -63,6 +63,10 @@ export abstract class BaseAppServerAgent implements AgentProcess {
   protected abstract get logTag(): string;
   /** The model to pass in RPC params */
   protected abstract get model(): string;
+  /** Effort level for RPC params */
+  protected abstract get effort(): string;
+  /** Whether thinking is enabled */
+  protected abstract get thinking(): boolean;
   /** Extract CLI path from SessionConfig */
   protected abstract getCliPath(config: SessionConfig): string;
 
@@ -371,6 +375,14 @@ export abstract class BaseAppServerAgent implements AgentProcess {
 
   // ── Turn management ───────────────────────────────────────────────────
 
+  /** Map effort level to Codex-compatible effort string */
+  private mapEffort(): string {
+    const effortMap: Record<string, string> = {
+      high: 'xhigh', medium: 'high', low: 'medium',
+    };
+    return effortMap[this.effort] ?? 'xhigh';
+  }
+
   private startTurn(prompt: string) {
     if (!this.threadId || !this.process?.stdin?.writable) {
       flog.error('AGENT', `${this.logTag}: Cannot start turn — no thread or process`);
@@ -379,15 +391,21 @@ export abstract class BaseAppServerAgent implements AgentProcess {
       return;
     }
 
-    // Fire-and-forget RPC — the turn lifecycle is managed via server notifications
-    this.rpcRequest('turn/start', {
+    const turnParams: Record<string, unknown> = {
       threadId: this.threadId,
       input: [{ type: 'text', text: prompt }],
       model: this.model,
-      effort: 'xhigh',
+      effort: this.mapEffort(),
       approvalPolicy: 'never',
       sandboxPolicy: { type: 'dangerFullAccess' },
-    }).catch((err) => {
+    };
+
+    if (this.thinking) {
+      turnParams.thinking = true;
+    }
+
+    // Fire-and-forget RPC — the turn lifecycle is managed via server notifications
+    this.rpcRequest('turn/start', turnParams).catch((err) => {
       flog.error('AGENT', `${this.logTag}: turn/start failed: ${err}`);
       this.emit({ text: `[TURN_FAILED] ${err}`, timestamp: Date.now(), type: 'info' });
       this.setStatus('error');

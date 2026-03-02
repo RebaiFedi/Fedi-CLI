@@ -25,6 +25,8 @@ import { printWelcomeBanner } from './WelcomeBanner.js';
 import { printSessionResume } from './SessionResumeView.js';
 import { buildResumePrompt } from '../utils/session-manager.js';
 import { printUserBubble } from './UserBubble.js';
+import { loadUserConfig, applyProfile, setAgentEffort, setAgentThinking, PROFILES, type EffortLevel, type ProfileName } from '../config/user-config.js';
+import { SlashMenu } from './SlashMenu.js';
 // trace functions replaced by unified flog
 
 // ── Props ───────────────────────────────────────────────────────────────────
@@ -78,6 +80,7 @@ export function Dashboard({
   const [todos, setTodos] = useState<TodoItem[]>([]);
   const [todosHiddenAt, setTodosHiddenAt] = useState<number>(0);
   const [thinking, setThinking] = useState(false);
+  const [showSlashMenu, setShowSlashMenu] = useState(false);
   const enabledAgentSet = useMemo(() => {
     const set = new Set<AgentId>();
     const source = enabledAgents ?? (AGENT_IDS as readonly AgentId[]);
@@ -703,9 +706,148 @@ export function Dashboard({
     applyDones,
   ]);
 
+  // ── Slash command handler ─────────────────────────────────────────────────
+  const handleSlashCommand = useCallback((cmd: string, args: string[]): boolean => {
+    const cfg = loadUserConfig();
+    const agents = ['opus', 'sonnet', 'codex'] as const;
+    const effortLevels: EffortLevel[] = ['high', 'medium', 'low'];
+
+    // /profile [high|medium|low]
+    if (cmd === 'profile' || cmd === 'profil') {
+      const name = args[0]?.toLowerCase() as ProfileName | undefined;
+      if (!name || !PROFILES[name]) {
+        console.log(chalk.yellow(`\n  Usage: /profile <high|medium|low>`));
+        console.log(chalk.dim(`  Profils disponibles:`));
+        console.log(chalk.dim(`    high   — opus=high/thinking  sonnet=high  codex=high`));
+        console.log(chalk.dim(`    medium — opus=high           sonnet=medium  codex=medium`));
+        console.log(chalk.dim(`    low    — opus=medium         sonnet=low   codex=low\n`));
+        return true;
+      }
+      applyProfile(name);
+      const p = PROFILES[name];
+      console.log(`\n  ${chalk.hex(THEME.text).bold(`Profil "${name}" applique`)}`);
+      for (const a of agents) {
+        const effort = p[`${a}Effort`];
+        const think = p[`${a}Thinking`];
+        const color = agentHex(a as AgentId);
+        console.log(`  ${chalk.hex(color)(agentDisplayName(a as AgentId))}  effort=${chalk.white(effort)}  thinking=${think ? chalk.hex(THEME.codex)('on') : chalk.dim('off')}`);
+      }
+      console.log('');
+      return true;
+    }
+
+    // /effort <agent> <level> or /effort (show all)
+    if (cmd === 'effort') {
+      if (args.length === 0) {
+        console.log(`\n  ${chalk.hex(THEME.text).bold('Effort actuel')}`);
+        for (const a of agents) {
+          const effort = cfg[`${a}Effort`];
+          const color = agentHex(a as AgentId);
+          console.log(`  ${chalk.hex(color)(agentDisplayName(a as AgentId))}  ${chalk.white(effort)}`);
+        }
+        console.log(chalk.dim(`\n  Usage: /effort <opus|sonnet|codex> <high|medium|low>\n`));
+        return true;
+      }
+      const agent = args[0]?.toLowerCase();
+      const level = args[1]?.toLowerCase() as EffortLevel | undefined;
+      if (!agent || !agents.includes(agent as typeof agents[number])) {
+        console.log(chalk.yellow(`\n  Agent inconnu: ${agent}. Agents: opus, sonnet, codex\n`));
+        return true;
+      }
+      if (!level || !effortLevels.includes(level)) {
+        console.log(chalk.yellow(`\n  Niveau invalide. Niveaux: high, medium, low\n`));
+        return true;
+      }
+      setAgentEffort(agent as typeof agents[number], level);
+      const color = agentHex(agent as AgentId);
+      console.log(`\n  ${chalk.hex(color)(agentDisplayName(agent as AgentId))} effort → ${chalk.white.bold(level)}\n`);
+      return true;
+    }
+
+    // /thinking <agent> <on|off> or /thinking (show all)
+    if (cmd === 'thinking' || cmd === 'think') {
+      if (args.length === 0) {
+        console.log(`\n  ${chalk.hex(THEME.text).bold('Thinking actuel')}`);
+        for (const a of agents) {
+          const think = cfg[`${a}Thinking`];
+          const color = agentHex(a as AgentId);
+          console.log(`  ${chalk.hex(color)(agentDisplayName(a as AgentId))}  ${think ? chalk.hex(THEME.codex)('on') : chalk.dim('off')}`);
+        }
+        console.log(chalk.dim(`\n  Usage: /thinking <opus|sonnet|codex> <on|off>\n`));
+        return true;
+      }
+      const agent = args[0]?.toLowerCase();
+      const toggle = args[1]?.toLowerCase();
+      if (!agent || !agents.includes(agent as typeof agents[number])) {
+        console.log(chalk.yellow(`\n  Agent inconnu: ${agent}. Agents: opus, sonnet, codex\n`));
+        return true;
+      }
+      if (!toggle || !['on', 'off'].includes(toggle)) {
+        console.log(chalk.yellow(`\n  Usage: /thinking ${agent} <on|off>\n`));
+        return true;
+      }
+      const enabled = toggle === 'on';
+      setAgentThinking(agent as typeof agents[number], enabled);
+      const color = agentHex(agent as AgentId);
+      console.log(`\n  ${chalk.hex(color)(agentDisplayName(agent as AgentId))} thinking → ${enabled ? chalk.hex(THEME.codex).bold('on') : chalk.dim('off')}\n`);
+      return true;
+    }
+
+    // /config — show current full config
+    if (cmd === 'config' || cmd === 'settings' || cmd === 'status') {
+      console.log(`\n  ${chalk.hex(THEME.text).bold('Configuration agents')}`);
+      console.log(chalk.dim('  ' + '─'.repeat(40)));
+      for (const a of agents) {
+        const effort = cfg[`${a}Effort`];
+        const think = cfg[`${a}Thinking`];
+        const color = agentHex(a as AgentId);
+        const enabled = enabledAgentSet.has(a) ? chalk.hex(THEME.codex)('actif') : chalk.dim('inactif');
+        console.log(`  ${chalk.hex(color).bold(agentDisplayName(a as AgentId))}  ${enabled}  effort=${chalk.white(effort)}  thinking=${think ? chalk.hex(THEME.codex)('on') : chalk.dim('off')}`);
+      }
+      console.log('');
+      return true;
+    }
+
+    // /help — show available slash commands
+    if (cmd === 'help' || cmd === '?') {
+      console.log(`\n  ${chalk.hex(THEME.text).bold('Commandes disponibles')}`);
+      console.log(chalk.dim('  ' + '─'.repeat(40)));
+      console.log(`  ${chalk.white('/profile')} ${chalk.dim('<high|medium|low>')}      Appliquer un profil`);
+      console.log(`  ${chalk.white('/effort')} ${chalk.dim('<agent> <level>')}        Changer l'effort d'un agent`);
+      console.log(`  ${chalk.white('/thinking')} ${chalk.dim('<agent> <on|off>')}     Activer/desactiver thinking`);
+      console.log(`  ${chalk.white('/config')}                          Voir la config actuelle`);
+      console.log(`  ${chalk.white('/help')}                            Cette aide`);
+      console.log('');
+      console.log(chalk.dim('  Exemples:'));
+      console.log(chalk.dim('    /profile high'));
+      console.log(chalk.dim('    /effort opus medium'));
+      console.log(chalk.dim('    /thinking sonnet on'));
+      console.log('');
+      return true;
+    }
+
+    // Unknown slash command — don't consume, let it pass through
+    return false;
+  }, [enabledAgentSet]);
+
   const handleInput = useCallback(
     (text: string) => {
       flog.info('UI', `User input: ${text.slice(0, 100)}`);
+
+      // ── Slash commands — local config, not sent to agents ──────────────
+      if (text.trim().startsWith('/')) {
+        const trimmed = text.trim();
+        // "/" alone → open interactive menu
+        if (trimmed === '/') {
+          setShowSlashMenu(true);
+          return;
+        }
+        const parts = trimmed.slice(1).split(/\s+/);
+        const cmd = parts[0]?.toLowerCase() ?? '';
+        const slashHandled = handleSlashCommand(cmd, parts.slice(1));
+        if (slashHandled) return;
+      }
+
       printUserBubble(text);
       const userMsgId = randomUUID();
       chatMessagesMap.current.set(userMsgId, {
@@ -915,7 +1057,7 @@ export function Dashboard({
             <InputBar
               onSubmit={handleInput}
               projectDir={projectDir}
-              placeholder={stopped ? 'Tapez pour relancer les agents...' : 'Message ou commande @agent'}
+              placeholder={stopped ? 'Tapez pour relancer les agents...' : 'Message, @agent ou /help'}
             />
           </Box>
         </Box>
@@ -927,6 +1069,9 @@ export function Dashboard({
           <Text dimColor>{'  \u00B7  '}</Text>
           <Text dimColor>{'^C '}</Text>
           <Text color={THEME.muted}>{'quit'}</Text>
+          <Text dimColor>{'  \u00B7  '}</Text>
+          <Text dimColor>{'/ '}</Text>
+          <Text color={THEME.muted}>{'commands'}</Text>
         </Text>
       </Box>
     </Box>

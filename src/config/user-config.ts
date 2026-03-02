@@ -4,6 +4,30 @@ import { homedir } from 'node:os';
 import { z } from 'zod';
 import { flog } from '../utils/log.js';
 
+// ── Effort levels & profiles ──────────────────────────────────────────────
+
+export type EffortLevel = 'high' | 'medium' | 'low';
+export type ProfileName = 'high' | 'medium' | 'low';
+
+/** Profile presets — each defines effort + thinking per agent */
+export const PROFILES: Record<ProfileName, {
+  opusEffort: EffortLevel; sonnetEffort: EffortLevel; codexEffort: EffortLevel;
+  opusThinking: boolean; sonnetThinking: boolean; codexThinking: boolean;
+}> = {
+  high: {
+    opusEffort: 'high', sonnetEffort: 'high', codexEffort: 'high',
+    opusThinking: true, sonnetThinking: true, codexThinking: true,
+  },
+  medium: {
+    opusEffort: 'high', sonnetEffort: 'medium', codexEffort: 'medium',
+    opusThinking: true, sonnetThinking: false, codexThinking: false,
+  },
+  low: {
+    opusEffort: 'medium', sonnetEffort: 'low', codexEffort: 'low',
+    opusThinking: false, sonnetThinking: false, codexThinking: false,
+  },
+};
+
 // ── User config schema ────────────────────────────────────────────────────
 
 export interface UserConfig {
@@ -45,6 +69,18 @@ export interface UserConfig {
   circuitBreakerCooldownMs: number;
   /** Checkpoint throttle interval per agent (ms). Default: 5000 */
   checkpointThrottleMs: number;
+  /** Opus effort level. Default: 'high' */
+  opusEffort: EffortLevel;
+  /** Sonnet effort level. Default: 'high' */
+  sonnetEffort: EffortLevel;
+  /** Codex effort level. Default: 'high' */
+  codexEffort: EffortLevel;
+  /** Enable thinking for Opus. Default: true */
+  opusThinking: boolean;
+  /** Enable thinking for Sonnet. Default: true */
+  sonnetThinking: boolean;
+  /** Enable thinking for Codex. Default: true */
+  codexThinking: boolean;
 }
 
 const UserConfigSchema = z.object({
@@ -67,6 +103,12 @@ const UserConfigSchema = z.object({
   circuitBreakerThreshold: z.number().min(1).default(3),
   circuitBreakerCooldownMs: z.number().min(5000).default(60_000),
   checkpointThrottleMs: z.number().min(1000).default(5_000),
+  opusEffort: z.enum(['high', 'medium', 'low']).default('high'),
+  sonnetEffort: z.enum(['high', 'medium', 'low']).default('high'),
+  codexEffort: z.enum(['high', 'medium', 'low']).default('high'),
+  opusThinking: z.boolean().default(true),
+  sonnetThinking: z.boolean().default(true),
+  codexThinking: z.boolean().default(true),
 }).partial();
 
 const DEFAULTS: UserConfig = {
@@ -89,6 +131,12 @@ const DEFAULTS: UserConfig = {
   circuitBreakerThreshold: 3,
   circuitBreakerCooldownMs: 60_000,
   checkpointThrottleMs: 5_000,
+  opusEffort: 'high',
+  sonnetEffort: 'high',
+  codexEffort: 'high',
+  opusThinking: true,
+  sonnetThinking: true,
+  codexThinking: true,
 };
 
 let cachedConfig: UserConfig | null = null;
@@ -136,6 +184,37 @@ export function loadUserConfig(): UserConfig {
     cachedConfig = { ...DEFAULTS };
     return cachedConfig;
   }
+}
+
+/** Apply a profile preset — overrides effort/thinking settings in the cached config */
+export function applyProfile(profile: ProfileName): void {
+  const cfg = loadUserConfig();
+  const preset = PROFILES[profile];
+  cfg.opusEffort = preset.opusEffort;
+  cfg.sonnetEffort = preset.sonnetEffort;
+  cfg.codexEffort = preset.codexEffort;
+  cfg.opusThinking = preset.opusThinking;
+  cfg.sonnetThinking = preset.sonnetThinking;
+  cfg.codexThinking = preset.codexThinking;
+  flog.info('SYSTEM', `Profile "${profile}" applied: opus=${preset.opusEffort}/${preset.opusThinking ? 'thinking' : 'no-think'} sonnet=${preset.sonnetEffort} codex=${preset.codexEffort}`);
+}
+
+/** Override effort for a specific agent */
+export function setAgentEffort(agent: 'opus' | 'sonnet' | 'codex', effort: EffortLevel): void {
+  const cfg = loadUserConfig();
+  if (agent === 'opus') cfg.opusEffort = effort;
+  else if (agent === 'sonnet') cfg.sonnetEffort = effort;
+  else if (agent === 'codex') cfg.codexEffort = effort;
+  flog.info('SYSTEM', `${agent} effort set to "${effort}"`);
+}
+
+/** Override thinking for a specific agent */
+export function setAgentThinking(agent: 'opus' | 'sonnet' | 'codex', enabled: boolean): void {
+  const cfg = loadUserConfig();
+  if (agent === 'opus') cfg.opusThinking = enabled;
+  else if (agent === 'sonnet') cfg.sonnetThinking = enabled;
+  else if (agent === 'codex') cfg.codexThinking = enabled;
+  flog.info('SYSTEM', `${agent} thinking ${enabled ? 'enabled' : 'disabled'}`);
 }
 
 /** Reset cached config (useful for tests) */

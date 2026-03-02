@@ -26,6 +26,10 @@ export abstract class BaseSonnetAgent implements AgentProcess {
   protected abstract get logTag(): string;
   /** The model flag passed to the CLI */
   protected abstract get model(): string;
+  /** Effort level: 'high' | 'medium' | 'low' */
+  protected abstract get effort(): string;
+  /** Whether thinking (extended thinking) is enabled */
+  protected abstract get thinking(): boolean;
   /** Extra spawn args appended after model args. Receives systemPrompt for agents that need --system-prompt flag. */
   protected getExtraArgs(_systemPrompt: string): string[] {
     return [];
@@ -70,8 +74,12 @@ export abstract class BaseSonnetAgent implements AgentProcess {
       '--verbose',
       '--dangerously-skip-permissions',
       '--effort',
-      'high',
+      this.effort,
     ];
+
+    if (this.thinking) {
+      args.push('--thinking');
+    }
 
     // Resume existing session if available (preserves conversation history)
     if (this.sessionId) {
