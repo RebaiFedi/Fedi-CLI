@@ -41,7 +41,7 @@ export function useInputHandler({
 }: UseInputHandlerDeps) {
   return useCallback(
     (text: string) => {
-      flog.info('UI', `User input: ${text.slice(0, 100)}`);
+      flog.debug('UI', `User input: ${text.slice(0, 100)}`);
 
       // ── Slash commands — local config, not sent to agents ──────────────
       if (text.trim().startsWith('/')) {
@@ -194,7 +194,7 @@ export function useInputHandler({
         setTodos(() => []);
         pendingAgentDones.current.clear();
         if (targetAgent && targetAgent !== 'opus') {
-          const agentNames: Record<string, string> = { claude: 'Sonnet', codex: 'Codex' };
+          const agentNames: Record<string, string> = { opus: 'Opus', claude: 'Sonnet', sonnet: 'Sonnet', codex: 'Codex' };
           if (isRestart) console.log('Redemarrage...');
           orchestrator.setDirectMode(targetAgent);
           orchestrator

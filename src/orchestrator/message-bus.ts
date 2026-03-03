@@ -3,16 +3,7 @@ import { randomUUID } from 'node:crypto';
 import type { Message, AgentId } from '../agents/types.js';
 import { MAX_RELAY_DEPTH } from '../agents/types.js';
 import { flog } from '../utils/log.js';
-
-// /** Event types emitted by MessageBus — for documentation only */
-// interface MessageBusEvents {
-//   message: [Message];
-//   'message:sonnet': [Message];
-//   'message:codex': [Message];
-//   'message:opus': [Message];
-//   relay: [Message];
-//   'relay-blocked': [Message];
-// }
+import { BUS_HISTORY_LIMIT } from '../config/constants.js';
 
 export class MessageBus extends EventEmitter {
   private history: Message[] = [];
@@ -35,8 +26,8 @@ export class MessageBus extends EventEmitter {
     };
 
     this.history.push(full);
-    if (this.history.length > 500) {
-      this.history = this.history.slice(-500);
+    if (this.history.length > BUS_HISTORY_LIMIT) {
+      this.history = this.history.slice(-BUS_HISTORY_LIMIT);
     }
     if (full.correlationId) {
       this.correlationCounts.set(
@@ -49,7 +40,7 @@ export class MessageBus extends EventEmitter {
     if (this.correlationCounts.size > 200) {
       this.evictStaleCorrelations();
     }
-    flog.info('BUS', `${full.from}->${full.to}: ${full.content.slice(0, 100)}`);
+    flog.debug('BUS', `${full.from}->${full.to}: ${full.content.slice(0, 100)}`);
 
     this.emit('message', full);
 
@@ -77,10 +68,10 @@ export class MessageBus extends EventEmitter {
       relayCount: 0,
     };
     this.history.push(full);
-    if (this.history.length > 500) {
-      this.history = this.history.slice(-500);
+    if (this.history.length > BUS_HISTORY_LIMIT) {
+      this.history = this.history.slice(-BUS_HISTORY_LIMIT);
     }
-    flog.info('BUS', `Record (LIVE): ${full.from}->${full.to}: ${full.content.slice(0, 100)}`);
+    flog.debug('BUS', `Record (LIVE): ${full.from}->${full.to}: ${full.content.slice(0, 100)}`);
     this.emit('message', full);
     return full;
   }
@@ -98,7 +89,7 @@ export class MessageBus extends EventEmitter {
         relayCount,
         timestamp: Date.now(),
       };
-      flog.warn('BUS', `Relay blocked (depth ${relayCount}): ${content.slice(0, 80)}`);
+      flog.warn('BUS', `Relay blocked (depth ${relayCount}): ${from}->${to}`);
       this.emit('relay-blocked', blocked);
       return false;
     }

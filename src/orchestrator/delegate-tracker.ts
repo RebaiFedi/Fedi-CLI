@@ -6,6 +6,8 @@ import type { CrossTalkManager } from './cross-talk-manager.js';
 import type { BufferManager } from './buffer-manager.js';
 import { flog } from '../utils/log.js';
 import { loadUserConfig } from '../config/user-config.js';
+import { HEARTBEAT_INTERVAL_MS } from '../config/constants.js';
+import { getCombinedReportsPrompt } from './prompts.js';
 
 /** Circuit breaker state per agent */
 interface CircuitState {
@@ -46,7 +48,6 @@ export class DelegateTracker {
   private get IDLE_TIMEOUT_MS(): number {
     return loadUserConfig().delegateTimeoutMs;
   }
-  private readonly HEARTBEAT_INTERVAL_MS = 10_000;
   private get CODEX_TIMEOUT_MS(): number {
     return loadUserConfig().codexTimeoutMs;
   }
@@ -216,6 +217,7 @@ export class DelegateTracker {
       if (timedOut.length === 0) return;
 
       for (const delegate of timedOut) {
+        this.markAgentFailed(delegate);
         const fallback = this.pickFallbackAgent(delegate);
         const originalTask = this._lastDelegationContent.get(delegate);
         const cb = this.deps.getCallbacks();
@@ -266,7 +268,7 @@ export class DelegateTracker {
         this.stopHeartbeat();
         this.deliverCombinedReports();
       }
-    }, this.HEARTBEAT_INTERVAL_MS);
+    }, HEARTBEAT_INTERVAL_MS);
   }
 
   stopHeartbeat(): void {
@@ -316,13 +318,20 @@ export class DelegateTracker {
 
   // ── Fallback ──
 
-  pickFallbackAgent(failedAgent: AgentId): AgentId | null {
+  /** Remove a failed agent from expected delegates and record the failure.
+   *  Call this BEFORE pickFallbackAgent to separate side-effects from query. */
+  markAgentFailed(failedAgent: AgentId): void {
     this.recordFailure(failedAgent);
+    this._expectedDelegates.delete(failedAgent);
+  }
+
+  pickFallbackAgent(failedAgent: AgentId): AgentId | null {
+    // NOTE: Callers should use markAgentFailed() first to record the failure
+    // and remove from expected delegates. This method is a pure query.
     const fallbackMap: Record<string, AgentId[]> = {
       sonnet: ['codex'],
       codex: ['sonnet'],
     };
-    this._expectedDelegates.delete(failedAgent);
     const candidates = fallbackMap[failedAgent] ?? [];
     for (const candidate of candidates) {
       if (!this.deps.isAgentEnabled(candidate)) continue;
@@ -370,7 +379,7 @@ export class DelegateTracker {
       (a) => a.charAt(0).toUpperCase() + a.slice(1),
     );
     const parts: string[] = [];
-    const REPORT_MAX_CHARS = 5000;
+    const REPORT_MAX_CHARS = loadUserConfig().maxRelayContentLength;
     for (const [agent, report] of this._pendingReports) {
       const trimmed =
         report.length > REPORT_MAX_CHARS
@@ -386,16 +395,7 @@ export class DelegateTracker {
       ? `\n\n---\n\n[TA PROPRE ANALYSE (non montrée au user)] Voici ce que tu as écrit pendant que tes agents travaillaient. UTILISE cette analyse pour enrichir ta synthese finale:\n${opusAnalysis}`
       : '';
 
-    const combined = `[RAPPORTS RECUS — ${agentNames.join(' + ')}] Tous les rapports sont arrivés.
-
-INSTRUCTIONS CRITIQUES:
-1. Ecris un rapport final complet et structure pour le user — fusionne les rapports de tes agents
-2. Le user n'a RIEN vu avant — c'est la PREMIERE fois qu'il verra un rapport
-3. NE DIS PAS "le rapport est déjà là" ou "voir ci-dessus" — le user ne voit RIEN avant ce message
-4. Decris en detail: quels fichiers crees/modifies, les fonctionnalites, les choix techniques
-5. MAIS: NE RECOPIE PAS de blocs de code source. Ton rapport est une DESCRIPTION, pas du code
-6. REPONDS RAPIDEMENT — le user attend. Synthetise et envoie
-7. Pour les TABLEAUX: utilise la syntaxe markdown avec pipes |${opusSection}\n\n${reportsBody}`;
+    const combined = getCombinedReportsPrompt(agentNames, opusSection, reportsBody);
 
     flog.info(
       'ORCH',
@@ -520,6 +520,7 @@ INSTRUCTIONS CRITIQUES:
       );
 
       const hadExpected = this._expectedDelegates.has(agent);
+      this.markAgentFailed(agent);
       const fallback = this.pickFallbackAgent(agent);
       const originalTask = this._lastDelegationContent.get(agent);
       const cb = this.deps.getCallbacks();

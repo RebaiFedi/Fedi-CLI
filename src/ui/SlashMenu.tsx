@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useEffect } from 'react';
+import React, { useState, useCallback, useEffect, useRef } from 'react';
 import { Box, Text, useInput } from 'ink';
 import { THEME, agentHex, agentDisplayName } from '../config/theme.js';
 import {
@@ -8,6 +8,7 @@ import {
   setAgentThinking,
   setSandboxMode,
   PROFILES,
+  type UserConfig,
   type EffortLevel,
   type ProfileName,
 } from '../config/user-config.js';
@@ -51,9 +52,23 @@ export function SlashMenu({ onClose, enabledAgents, projectDir, onResumeSession 
   const [flash, setFlash] = useState<string | null>(null);
   const [sessions, setSessions] = useState<SessionEntry[] | null>(null);
 
+  const flashTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const navTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Cleanup all timers on unmount
+  useEffect(() => {
+    const capturedFlashTimer = flashTimerRef;
+    const capturedNavTimer = navTimerRef;
+    return () => {
+      if (capturedFlashTimer.current) clearTimeout(capturedFlashTimer.current);
+      if (capturedNavTimer.current) clearTimeout(capturedNavTimer.current);
+    };
+  }, []);
+
   const showFlash = useCallback((msg: string) => {
+    if (flashTimerRef.current) clearTimeout(flashTimerRef.current);
     setFlash(msg);
-    setTimeout(() => setFlash(null), 1500);
+    flashTimerRef.current = setTimeout(() => setFlash(null), 1500);
   }, []);
 
   // Load sessions when navigating to sessions screen
@@ -61,16 +76,21 @@ export function SlashMenu({ onClose, enabledAgents, projectDir, onResumeSession 
     if (view.screen !== 'sessions') return;
     let cancelled = false;
     const sm = new SessionManager(projectDir);
-    sm.listSessions().then((list) => {
-      if (!cancelled) setSessions(list);
-    });
+    sm.listSessions()
+      .then((list) => {
+        if (!cancelled) setSessions(list);
+      })
+      .catch(() => {
+        if (!cancelled) setSessions([]);
+      });
     return () => {
       cancelled = true;
     };
   }, [view.screen, projectDir]);
 
-  // Build items for current view
-  const items = getItems(view, enabledAgents, sessions ?? []);
+  // Build items for current view — single config load shared across render
+  const cfg = loadUserConfig();
+  const items = getItems(view, enabledAgents, sessions ?? [], cfg);
 
   useInput((_input, key) => {
     if (key.escape) {
@@ -110,12 +130,10 @@ export function SlashMenu({ onClose, enabledAgents, projectDir, onResumeSession 
         return;
       }
 
-      handleSelect(item, view, setView, setCursor, showFlash, onClose);
+      handleSelect(item, view, setView, setCursor, showFlash, onClose, navTimerRef, cfg);
       return;
     }
   });
-
-  const cfg = loadUserConfig();
 
   return (
     <Box flexDirection="column" paddingX={1}>
@@ -229,8 +247,8 @@ function getItems(
   view: MenuView,
   enabledAgents: Set<AgentId>,
   sessions: SessionEntry[],
+  cfg: UserConfig,
 ): MenuItem[] {
-  const cfg = loadUserConfig();
 
   switch (view.screen) {
     case 'main':
@@ -312,6 +330,8 @@ function handleSelect(
   setCursor: (n: number) => void,
   showFlash: (msg: string) => void,
   onClose: () => void,
+  navTimerRef: React.MutableRefObject<ReturnType<typeof setTimeout> | null>,
+  cfg: UserConfig,
 ) {
   switch (view.screen) {
     case 'main':
@@ -325,9 +345,8 @@ function handleSelect(
         setView({ screen: 'thinking-agent' });
         setCursor(0);
       } else if (item.id === 'sandbox') {
-        const current = loadUserConfig().sandboxMode;
-        setSandboxMode(!current);
-        showFlash(`Sandbox ${!current ? 'active' : 'desactive'}`);
+        setSandboxMode(!cfg.sandboxMode);
+        showFlash(`Sandbox ${!cfg.sandboxMode ? 'active' : 'desactive'}`);
       } else if (item.id === 'close') {
         onClose();
       }
@@ -337,7 +356,8 @@ function handleSelect(
       const name = item.id as ProfileName;
       applyProfile(name);
       showFlash(`Profil "${name}" applique`);
-      setTimeout(() => {
+      if (navTimerRef.current) clearTimeout(navTimerRef.current);
+      navTimerRef.current = setTimeout(() => {
         setView({ screen: 'main' });
         setCursor(0);
       }, 800);
@@ -354,7 +374,8 @@ function handleSelect(
       const level = item.id as EffortLevel;
       setAgentEffort(agent, level);
       showFlash(`${agentDisplayName(agent)} effort → ${level}`);
-      setTimeout(() => {
+      if (navTimerRef.current) clearTimeout(navTimerRef.current);
+      navTimerRef.current = setTimeout(() => {
         setView({ screen: 'main' });
         setCursor(0);
       }, 800);
@@ -371,7 +392,8 @@ function handleSelect(
       const enabled = item.id === 'on';
       setAgentThinking(agent, enabled);
       showFlash(`${agentDisplayName(agent)} thinking → ${enabled ? 'on' : 'off'}`);
-      setTimeout(() => {
+      if (navTimerRef.current) clearTimeout(navTimerRef.current);
+      navTimerRef.current = setTimeout(() => {
         setView({ screen: 'main' });
         setCursor(0);
       }, 800);

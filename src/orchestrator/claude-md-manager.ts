@@ -282,14 +282,16 @@ ${CODE_TESTING}
   }
 }
 
-/** Marker to identify Fedi-CLI-managed AGENTS.md */
-const AGENTS_MD_MARKER = '<!-- fedi-cli-managed -->';
+/** Marker to identify Fedi-CLI-managed AGENTS.md (distinct from CLAUDE.md marker) */
+const AGENTS_MD_MARKER = '<!-- fedi-cli-managed:agents -->';
 
 /**
  * Generates and writes the AGENTS.md file that Codex reads at startup.
  * Contains the Codex system prompt so it doesn't need to be sent as a user message.
+ * Returns true if the prompt was written (or already up-to-date), false if skipped
+ * (user-managed file) or failed.
  */
-export function ensureAgentsMd(projectDir: string): void {
+export function ensureAgentsMd(projectDir: string): boolean {
   const agentsPath = join(projectDir, 'AGENTS.md');
   const codexPrompt = getCodexSystemPrompt(projectDir);
   const content = `${AGENTS_MD_MARKER}\n${codexPrompt}\n`;
@@ -298,13 +300,15 @@ export function ensureAgentsMd(projectDir: string): void {
       const existing = readFileSync(agentsPath, 'utf-8');
       if (!existing.includes(AGENTS_MD_MARKER)) {
         flog.debug('ORCH', 'AGENTS.md exists but is user-managed — skipping');
-        return;
+        return false;
       }
-      if (existing === content) return;
+      if (existing === content) return true;
     }
     writeFileSync(agentsPath, content, 'utf-8');
     flog.info('ORCH', `Created/updated AGENTS.md in ${projectDir}`);
+    return true;
   } catch (err) {
     flog.warn('ORCH', `Failed to write AGENTS.md: ${err}`);
+    return false;
   }
 }

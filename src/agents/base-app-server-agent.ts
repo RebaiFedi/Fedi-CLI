@@ -36,7 +36,13 @@ export abstract class BaseAppServerAgent implements AgentProcess {
   protected activeTurnId: string | null = null;
   private outputHandlers: Array<(line: OutputLine) => void> = [];
   private statusHandlers: Array<(status: AgentStatus) => void> = [];
-  private rpc!: RpcClient;
+  private _rpc: RpcClient | null = null;
+
+  /** RPC client accessor — throws if called before start(). */
+  private get rpc(): RpcClient {
+    if (!this._rpc) throw new Error(`${this.logTag}: RPC client not initialized — call start() first`);
+    return this._rpc;
+  }
   private urgentQueue: string[] = [];
   private muted = false;
   private stopped = false;
@@ -63,6 +69,9 @@ export abstract class BaseAppServerAgent implements AgentProcess {
   private pendingFileChangeDiff: string | null = null;
 
   private pendingFileChangePath: string | null = null;
+
+  /** Cached item handler deps — built once on start(), invalidated on stop() */
+  private _cachedItemDeps: ItemHandlerDeps | null = null;
 
   // ── Abstract members ────────────────────────────────────────────────────
 
@@ -146,7 +155,8 @@ export abstract class BaseAppServerAgent implements AgentProcess {
   // ── Item handler deps (bridge to extracted module) ──────────────────────
 
   private get itemDeps(): ItemHandlerDeps {
-    return {
+    if (this._cachedItemDeps) return this._cachedItemDeps;
+    this._cachedItemDeps = {
       logTag: this.logTag,
       emit: (line) => this.emit(line),
       emitCheckpoint: (text) => this.emitCheckpoint(text),
@@ -178,6 +188,7 @@ export abstract class BaseAppServerAgent implements AgentProcess {
         this.pendingFileChangePath = p;
       },
     };
+    return this._cachedItemDeps;
   }
 
   // ── Lifecycle ───────────────────────────────────────────────────────────
@@ -198,7 +209,7 @@ export abstract class BaseAppServerAgent implements AgentProcess {
     }
 
     // Initialize RPC client
-    this.rpc = new RpcClient(() => this.process, this.logTag);
+    this._rpc = new RpcClient(() => this.process, this.logTag);
 
     // Spawn the app-server process
     const args = ['app-server'];
@@ -245,7 +256,7 @@ export abstract class BaseAppServerAgent implements AgentProcess {
       flog.info('AGENT', `${this.logTag}: Process exited (code=${code}, signal=${signal})`);
       this.process = null;
       this.cleanupReadlines();
-      this.rpc.rejectAllNoTimeout(`${this.logTag}: process exited (code=${code})`);
+      this._rpc?.rejectAllNoTimeout(`${this.logTag}: process exited (code=${code})`);
       if (!this.stopped) {
         this.setStatus('error');
       }
@@ -313,13 +324,23 @@ export abstract class BaseAppServerAgent implements AgentProcess {
       this.suppressUserEchoCount++;
       this.startTurn(resumeMsg);
     } else {
-      // System prompt is loaded via AGENTS.md — no need to fuse with first message
-      this.pendingSystemPrompt = null;
+      // System prompt is normally loaded via AGENTS.md.
+      // If AGENTS.md was not written (user-managed), keep the prompt as pending
+      // so it gets fused with the first user message as a fallback.
+      if (systemPrompt && systemPrompt.length > 0) {
+        this.pendingSystemPrompt = systemPrompt;
+        flog.info('AGENT', `${this.logTag}: Ready — system prompt stored as fallback`);
+      } else {
+        this.pendingSystemPrompt = null;
+        flog.info('AGENT', `${this.logTag}: Ready — no system prompt provided`);
+      }
       this.setStatus('idle');
-      flog.info('AGENT', `${this.logTag}: Ready — system prompt via AGENTS.md`);
       this.systemPromptSent = true;
     }
-    this.muted = false;
+    // Only unmute if not explicitly started as muted (standby workers)
+    if (!options?.muted) {
+      this.muted = false;
+    }
   }
 
   send(prompt: string) {
@@ -385,6 +406,7 @@ export abstract class BaseAppServerAgent implements AgentProcess {
   async stop(): Promise<void> {
     this.stopped = true;
     this.urgentQueue = [];
+    this._cachedItemDeps = null;
 
     if (this.activeTurnId && this.threadId && this.process?.stdin?.writable) {
       try {
@@ -423,14 +445,19 @@ export abstract class BaseAppServerAgent implements AgentProcess {
       this.process = null;
     }
 
-    this.rpc.rejectAll(`${this.logTag}: stopped`);
+    this._rpc?.rejectAll(`${this.logTag}: stopped`);
     this.setStatus('stopped');
   }
 
   /** Kill the process and its entire process group. */
   private killProcessGroup(proc: ChildProcess, signal: NodeJS.Signals): void {
     try {
-      if (proc.pid) process.kill(-proc.pid, signal);
+      // Negative PID is only supported on POSIX platforms (Linux, macOS).
+      if (proc.pid && process.platform !== 'win32') {
+        process.kill(-proc.pid, signal);
+      } else if (proc.pid) {
+        proc.kill(signal);
+      }
     } catch {
       try {
         proc.kill(signal);
@@ -489,9 +516,59 @@ export abstract class BaseAppServerAgent implements AgentProcess {
 
   // ── Server message dispatch ─────────────────────────────────────────────
 
+  /** Dispatch map: method name → handler. Built lazily, cached for the instance lifetime. */
+  private _dispatchMap: Map<string, (params: Record<string, unknown>, msg: Record<string, unknown>) => void> | null = null;
+
+  private getDispatchMap(): Map<string, (params: Record<string, unknown>, msg: Record<string, unknown>) => void> {
+    if (this._dispatchMap) return this._dispatchMap;
+    const noop = () => {}; // ignored events
+    const approvalHandler = (_p: Record<string, unknown>, msg: Record<string, unknown>) => this.handleRequestApproval(msg);
+
+    this._dispatchMap = new Map<string, (params: Record<string, unknown>, msg: Record<string, unknown>) => void>([
+      ['turn/started', (p) => this.handleTurnStarted(p)],
+      ['turn/completed', () => this.handleTurnCompleted()],
+      ['item/started', (p) => handleItemStarted(this.itemDeps, p)],
+      ['item/completed', (p) => handleItemCompleted(this.itemDeps, p)],
+      ['item/agentMessage/delta', (p) => handleAgentMessageDelta(this.itemDeps, p)],
+      ['item/commandExecution/outputDelta', (p) => handleCommandOutputDelta(this.logTag, p)],
+      ['item/commandExecution/requestApproval', approvalHandler],
+      ['item/fileChange/requestApproval', approvalHandler],
+      ['execCommandApproval', approvalHandler],
+      ['applyPatchApproval', approvalHandler],
+      ['item/tool/requestUserInput', (_p, msg) => this.handleToolUserInput(msg)],
+      ['item/fileChange/outputDelta', (p) => handleFileChangeOutputDelta(this.itemDeps, p)],
+      ['turn/diff/updated', (p) => handleTurnDiffUpdated(this.logTag, this.itemDeps, p)],
+      ['thread/compacted', () => this.handleCompacted()],
+      ['error', (p) => handleError(
+        this.logTag,
+        (line) => this.emit(line),
+        () => this.setStatus('error'),
+        (e) => { this.lastError = e; },
+        p,
+      )],
+      // Low-value events — ignored
+      ['turn/plan/updated', noop],
+      ['item/plan/delta', noop],
+      ['item/reasoning/textDelta', noop],
+      ['item/reasoning/summaryTextDelta', noop],
+      ['item/reasoning/summaryPartAdded', noop],
+      ['item/mcpToolCall/progress', noop],
+      ['thread/started', noop],
+      ['thread/status/changed', noop],
+      ['thread/name/updated', noop],
+      ['thread/tokenUsage/updated', noop],
+      ['model/rerouted', noop],
+      ['account/updated', noop],
+      ['account/rateLimits/updated', noop],
+      ['configWarning', noop],
+      ['deprecationNotice', noop],
+    ]);
+    return this._dispatchMap;
+  }
+
   private handleServerMessage(msg: Record<string, unknown>) {
     // RPC response
-    if (this.rpc.handleResponse(msg)) return;
+    if (this._rpc?.handleResponse(msg)) return;
 
     // Server request or notification
     const method = typeof msg.method === 'string' ? msg.method : undefined;
@@ -508,77 +585,11 @@ export abstract class BaseAppServerAgent implements AgentProcess {
 
     flog.debug('AGENT', `${this.logTag}: event ${method}`);
 
-    switch (method) {
-      case 'turn/started':
-        this.handleTurnStarted(params);
-        break;
-      case 'turn/completed':
-        this.handleTurnCompleted();
-        break;
-      case 'item/started':
-        handleItemStarted(this.itemDeps, params);
-        break;
-      case 'item/completed':
-        handleItemCompleted(this.itemDeps, params);
-        break;
-      case 'item/agentMessage/delta':
-        handleAgentMessageDelta(this.itemDeps, params);
-        break;
-      case 'item/commandExecution/outputDelta':
-        handleCommandOutputDelta(this.logTag, params);
-        break;
-      case 'item/commandExecution/requestApproval':
-      case 'item/fileChange/requestApproval':
-      case 'execCommandApproval':
-      case 'applyPatchApproval':
-        this.handleRequestApproval(msg);
-        break;
-      case 'item/tool/requestUserInput':
-        this.handleToolUserInput(msg);
-        break;
-      case 'item/fileChange/outputDelta':
-        handleFileChangeOutputDelta(this.itemDeps, params);
-        break;
-      case 'turn/diff/updated':
-        handleTurnDiffUpdated(this.logTag, this.itemDeps, params);
-        break;
-      case 'turn/plan/updated':
-      case 'item/plan/delta':
-      case 'item/reasoning/textDelta':
-      case 'item/reasoning/summaryTextDelta':
-      case 'item/reasoning/summaryPartAdded':
-      case 'item/mcpToolCall/progress':
-      case 'thread/started':
-      case 'thread/status/changed':
-      case 'thread/name/updated':
-        // Low-value events — log only, no UI display
-        flog.debug('AGENT', `${this.logTag}: ${method} (ignored)`);
-        break;
-      case 'thread/compacted':
-        this.handleCompacted();
-        break;
-      case 'thread/tokenUsage/updated':
-      case 'model/rerouted':
-      case 'account/updated':
-      case 'account/rateLimits/updated':
-      case 'configWarning':
-      case 'deprecationNotice':
-        flog.debug('AGENT', `${this.logTag}: ${method} (ignored)`);
-        break;
-      case 'error':
-        handleError(
-          this.logTag,
-          (line) => this.emit(line),
-          () => this.setStatus('error'),
-          (e) => {
-            this.lastError = e;
-          },
-          params,
-        );
-        break;
-      default:
-        flog.debug('AGENT', `${this.logTag}: Unhandled notification: ${method}`);
-        break;
+    const handler = this.getDispatchMap().get(method);
+    if (handler) {
+      handler(params, msg);
+    } else {
+      flog.debug('AGENT', `${this.logTag}: Unhandled notification: ${method}`);
     }
   }
 
@@ -619,11 +630,22 @@ export abstract class BaseAppServerAgent implements AgentProcess {
       return;
     }
 
+    const method = typeof msg.method === 'string' ? msg.method : 'unknown';
+    const params =
+      msg.params && typeof msg.params === 'object' ? (msg.params as Record<string, unknown>) : {};
+    const command = typeof params.command === 'string' ? params.command : undefined;
+    const detail = command ? ` (command: ${command.slice(0, 100)})` : '';
+
+    // TODO: Implement a proper approval UI that lets users review and accept/reject
+    // individual operations. Currently auto-accepting because the Codex app-server
+    // protocol requires a synchronous response and we have no interactive prompt.
     if (loadUserConfig().sandboxMode) {
       flog.warn(
         'AGENT',
-        `${this.logTag}: Auto-accepting approval #${id} (sandbox mode — approval UI not yet implemented)`,
+        `${this.logTag}: Auto-accepting ${method} #${id}${detail} (approval UI not yet implemented)`,
       );
+    } else {
+      flog.debug('AGENT', `${this.logTag}: Auto-accepting ${method} #${id}${detail} (unsafe mode)`);
     }
 
     const response = JSON.stringify({
@@ -633,7 +655,6 @@ export abstract class BaseAppServerAgent implements AgentProcess {
     });
     if (this.process?.stdin?.writable) {
       this.process.stdin.write(response + '\n');
-      flog.debug('AGENT', `${this.logTag}: Auto-accepted approval request #${id}`);
     }
   }
 

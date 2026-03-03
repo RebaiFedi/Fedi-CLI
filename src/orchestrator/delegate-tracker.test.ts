@@ -192,15 +192,24 @@ describe('DelegateTracker', () => {
       assert.equal(fallback, 'opus');
     });
 
-    it('records failure for the failed agent', () => {
+    it('does not record failure (callers use markAgentFailed)', () => {
       const { tracker } = makeTracker();
       tracker.addExpectedDelegate('sonnet');
       tracker.pickFallbackAgent('sonnet');
-      // First failure recorded
       tracker.pickFallbackAgent('sonnet');
-      tracker.addExpectedDelegate('sonnet');
       tracker.pickFallbackAgent('sonnet');
-      // After 3 pickFallbackAgent calls, sonnet circuit should be open
+      // pickFallbackAgent no longer records failures — circuit stays closed
+      assert.equal(tracker.isCircuitOpen('sonnet'), false);
+    });
+
+    it('markAgentFailed + pickFallbackAgent works together', () => {
+      const { tracker } = makeTracker();
+      for (let i = 0; i < 3; i++) {
+        tracker.addExpectedDelegate('sonnet');
+        tracker.markAgentFailed('sonnet');
+        tracker.pickFallbackAgent('sonnet');
+      }
+      // After 3 markAgentFailed calls, sonnet circuit should be open
       assert.equal(tracker.isCircuitOpen('sonnet'), true);
     });
   });

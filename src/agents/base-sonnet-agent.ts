@@ -459,7 +459,16 @@ export abstract class BaseSonnetAgent implements AgentProcess {
     const ok = stdin.write(json + '\n');
     if (!ok) {
       await new Promise<void>((resolve) => {
-        stdin.once('drain', resolve);
+        const timeout = setTimeout(() => {
+          flog.warn('AGENT', `${this.logTag}: stdin drain timeout (5s) — continuing`);
+          stdin.removeListener('drain', onDrain);
+          resolve();
+        }, 5000);
+        const onDrain = () => {
+          clearTimeout(timeout);
+          resolve();
+        };
+        stdin.once('drain', onDrain);
       });
     }
   }
@@ -507,8 +516,13 @@ export abstract class BaseSonnetAgent implements AgentProcess {
   /** Kill the process and its entire process group. */
   private killProcessGroup(proc: ChildProcess, signal: NodeJS.Signals): void {
     try {
-      // Kill the process group (negative PID) — kills the main process + all children
-      if (proc.pid) process.kill(-proc.pid, signal);
+      // Kill the process group (negative PID) — kills the main process + all children.
+      // Negative PID is only supported on POSIX platforms (Linux, macOS).
+      if (proc.pid && process.platform !== 'win32') {
+        process.kill(-proc.pid, signal);
+      } else if (proc.pid) {
+        proc.kill(signal);
+      }
     } catch {
       // Group kill failed — fall back to direct kill
       try {

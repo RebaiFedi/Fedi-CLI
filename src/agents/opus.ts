@@ -2,8 +2,6 @@ import type { AgentId } from './types.js';
 import { BaseSonnetAgent } from './base-sonnet-agent.js';
 import { loadUserConfig } from '../config/user-config.js';
 
-const cfg = loadUserConfig();
-
 export class OpusAgent extends BaseSonnetAgent {
   readonly id: AgentId = 'opus';
 
@@ -11,13 +9,13 @@ export class OpusAgent extends BaseSonnetAgent {
     return 'OPUS';
   }
   protected get model() {
-    return cfg.opusModel;
+    return loadUserConfig().opusModel;
   }
   protected get effort() {
-    return cfg.opusEffort;
+    return loadUserConfig().opusEffort;
   }
   protected get thinking() {
-    return cfg.opusThinking;
+    return loadUserConfig().opusThinking;
   }
 
   protected override getExtraArgs(systemPrompt: string): string[] {

@@ -495,7 +495,10 @@ export function Dashboard({
 
   // ── Slash commands + input handler (extracted hooks) ───────────────────────
 
-  const handleSlashCommand = useSlashCommands(enabledAgentSet);
+  const handleSlashCommand = useSlashCommands({
+    enabledAgentSet,
+    onOpenSessions: () => setShowSlashMenu(true),
+  });
 
   const handleInput = useInputHandler({
     orchestrator,

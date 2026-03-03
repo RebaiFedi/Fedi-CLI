@@ -35,18 +35,18 @@ function TodoPanelComponent({ items }: { items: TodoItem[] }) {
   // Progress bar — sleek gradient feel
   const barWidth = 20;
   const filled = Math.round((doneCount / total) * barWidth);
-  const barColor = allDone ? '#22C55E' : '#F59E0B';
-  const barDimColor = '#1E293B';
+  const barColor = allDone ? THEME.todoSuccess : THEME.todoWarning;
+  const barDimColor = THEME.todoBg;
 
   return (
     <Box flexDirection="column" paddingX={1} marginBottom={0}>
       {/* ── Header line ───────────────────────────────────── */}
       <Box>
-        <Text color="#64748B">{' \u250C\u2500 '}</Text>
+        <Text color={THEME.border}>{' \u250C\u2500 '}</Text>
         <Text color={barColor} bold>
           {'TASKS'}
         </Text>
-        <Text color="#475569">{' \u2500\u2500 '}</Text>
+        <Text color={THEME.todoSubtle}>{' \u2500\u2500 '}</Text>
         <Text color={barColor}>{BAR_FILLED.repeat(filled)}</Text>
         {filled < barWidth && (
           <Text color={barColor} dimColor>
@@ -54,9 +54,9 @@ function TodoPanelComponent({ items }: { items: TodoItem[] }) {
           </Text>
         )}
         <Text color={barDimColor}>{BAR_EMPTY.repeat(Math.max(0, barWidth - filled - 1))}</Text>
-        <Text color="#475569"> </Text>
-        <Text color={allDone ? '#22C55E' : '#94A3B8'} bold>{`${pct}%`}</Text>
-        <Text color="#475569">{` (${doneCount}/${total})`}</Text>
+        <Text color={THEME.todoSubtle}> </Text>
+        <Text color={allDone ? THEME.todoSuccess : THEME.muted} bold>{`${pct}%`}</Text>
+        <Text color={THEME.todoSubtle}>{` (${doneCount}/${total})`}</Text>
       </Box>
 
       {/* ── Task items ────────────────────────────────────── */}
@@ -67,10 +67,10 @@ function TodoPanelComponent({ items }: { items: TodoItem[] }) {
         if (item.done) {
           return (
             <Box key={item.id}>
-              <Text color="#334155">{' \u2502  '}</Text>
-              <Text color="#22C55E">{'\u25C9'}</Text>
+              <Text color={THEME.panelBorder}>{' \u2502  '}</Text>
+              <Text color={THEME.todoSuccess}>{'\u25C9'}</Text>
               <Text> </Text>
-              <Text color="#475569" strikethrough>
+              <Text color={THEME.todoSubtle} strikethrough>
                 {label}
               </Text>
             </Box>
@@ -78,7 +78,7 @@ function TodoPanelComponent({ items }: { items: TodoItem[] }) {
         }
         return (
           <Box key={item.id}>
-            <Text color="#334155">{' \u2502  '}</Text>
+            <Text color={THEME.panelBorder}>{' \u2502  '}</Text>
             <Text color={agentHex(item.agent)}>{'\u25CB'}</Text>
             <Text> </Text>
             <Text color={THEME.text}>{label}</Text>
@@ -89,14 +89,14 @@ function TodoPanelComponent({ items }: { items: TodoItem[] }) {
       {/* ── Hidden count ──────────────────────────────────── */}
       {hidden > 0 && (
         <Box>
-          <Text color="#334155">{' \u2502  '}</Text>
-          <Text color="#64748B" italic>{`+${hidden} more`}</Text>
+          <Text color={THEME.panelBorder}>{' \u2502  '}</Text>
+          <Text color={THEME.border} italic>{`+${hidden} more`}</Text>
         </Box>
       )}
 
       {/* ── Footer line ───────────────────────────────────── */}
       <Box>
-        <Text color="#334155">
+        <Text color={THEME.panelBorder}>
           {
             ' \u2514\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500'
           }

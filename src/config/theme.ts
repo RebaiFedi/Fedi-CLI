@@ -18,6 +18,11 @@ export const THEME = {
   codeBlock: '#1E293B',
   codeBorder: '#475569',
   separator: '#334155',
+  // Todo panel
+  todoSuccess: '#22C55E',
+  todoWarning: '#F59E0B',
+  todoBg: '#1E293B',
+  todoSubtle: '#475569',
   // Agent header accents (dimmer background shade)
   opusDim: '#78350F',
   sonnetDim: '#0C4A6E',

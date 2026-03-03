@@ -157,7 +157,7 @@ ${chalk.white.bold('PROFILS & PERFORMANCE')}
   --thinking                   Activer thinking pour Opus
   --no-thinking                Desactiver thinking pour tous
   --sandbox                    Mode securise (defaut): approbation requise
-  --unsafe                     Mode full-auto: aucune approbation
+  --unsafe                     Mode full-auto: AUCUNE approbation (dangereux)
 
   ${chalk.dim('Profils:')}
     ${chalk.hex(THEME.opus)('high')}     opus=high/think  sonnet=high/think  codex=high/think
@@ -205,18 +205,20 @@ export async function main() {
     return;
   }
 
-  // Resolve log level: CLI flag > env var > config > default
+  // Resolve log level: CLI flag > env var > config > default ('info')
   const logLevelIdx = args.indexOf('--log-level');
   const logLevelArg = logLevelIdx !== -1 ? args[logLevelIdx + 1] : undefined;
   const envLogLevel = process.env.FEDI_LOG_LEVEL;
   const validLogLevels = ['debug', 'info', 'warn', 'error'] as const;
   type LogLevelType = (typeof validLogLevels)[number];
-  const resolvedLogLevel: LogLevelType | undefined =
+  const { loadUserConfig: loadCfg } = await import('./config/user-config.js');
+  const cfgLogLevel = loadCfg().logLevel;
+  const resolvedLogLevel: LogLevelType =
     logLevelArg && validLogLevels.includes(logLevelArg as LogLevelType)
       ? (logLevelArg as LogLevelType)
       : envLogLevel && validLogLevels.includes(envLogLevel as LogLevelType)
         ? (envLogLevel as LogLevelType)
-        : undefined;
+        : cfgLogLevel;
 
   // Initialize unified logging — writes to ~/.fedi-cli/logs/
   initLog({ level: resolvedLogLevel });
@@ -248,7 +250,8 @@ export async function main() {
     resumeSessionId = args[resumeIdx + 1];
     if (!resumeSessionId) {
       console.error(chalk.red('  Usage: fedi --resume <session-id>'));
-      process.exit(1);
+      process.exitCode = 1;
+      return;
     }
   }
 
@@ -259,7 +262,8 @@ export async function main() {
     const agentList = args[agentsIdx + 1];
     if (!agentList) {
       console.error(chalk.red('  Usage: fedi --agents opus,sonnet,codex'));
-      process.exit(1);
+      process.exitCode = 1;
+      return;
     }
     enabledAgents.clear();
     for (const a of agentList.split(',').map((s) => s.trim().toLowerCase())) {
@@ -280,7 +284,8 @@ export async function main() {
     const profileName = args[profileIdx + 1] as ProfileName | undefined;
     if (!profileName || !PROFILES[profileName]) {
       console.error(chalk.red('  Usage: fedi --profile <high|medium|low>'));
-      process.exit(1);
+      process.exitCode = 1;
+      return;
     }
     applyProfile(profileName);
   }
@@ -293,7 +298,8 @@ export async function main() {
       const effort = args[flagIdx + 1] as EffortLevel | undefined;
       if (!effort || !validEfforts.includes(effort)) {
         console.error(chalk.red(`  Usage: fedi --${agent}-effort <high|medium|low>`));
-        process.exit(1);
+        process.exitCode = 1;
+        return;
       }
       setAgentEffort(agent, effort);
     }
@@ -317,16 +323,40 @@ export async function main() {
     setSandboxMode(false);
   }
 
+  // Warn about unknown flags
+  const KNOWN_FLAGS = new Set([
+    '--help', '-h', '--version', '-v', '--log-level', '--sessions',
+    '--view', '--resume', '--agents', '--profile',
+    '--opus-effort', '--sonnet-effort', '--codex-effort',
+    '--thinking', '--no-thinking', '--sandbox', '--unsafe',
+  ]);
+  const FLAGS_WITH_VALUE = new Set([
+    '--log-level', '--view', '--resume', '--agents', '--profile',
+    '--opus-effort', '--sonnet-effort', '--codex-effort',
+  ]);
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i]!;
+    if (arg.startsWith('-')) {
+      if (!KNOWN_FLAGS.has(arg)) {
+        console.warn(chalk.yellow(`  Flag inconnu: ${arg} (ignore)`));
+      } else if (FLAGS_WITH_VALUE.has(arg)) {
+        i++; // skip the value argument
+      }
+    }
+  }
+
   const clis = await detectAll();
 
   if (!clis.claude.available) {
     console.error('Claude Code CLI not found. Install with: npm i -g @anthropic-ai/claude-code');
-    process.exit(1);
+    process.exitCode = 1;
+    return;
   }
 
   if (!clis.codex.available && enabledAgents.has('codex')) {
     console.error('Codex CLI not found. Install with: npm i -g @openai/codex');
-    process.exit(1);
+    process.exitCode = 1;
+    return;
   }
 
   const projectDir = process.cwd();
@@ -368,6 +398,6 @@ const isDirectRun =
 if (isDirectRun) {
   main().catch((err) => {
     console.error('Fatal error:', err);
-    process.exit(1);
+    process.exitCode = 1;
   });
 }

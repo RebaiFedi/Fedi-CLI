@@ -8,6 +8,7 @@ import type { CrossTalkManager } from './cross-talk-manager.js';
 import type { BufferManager } from './buffer-manager.js';
 import { flog } from '../utils/log.js';
 import { loadUserConfig } from '../config/user-config.js';
+import { RELAY_DRAFT_MAX_EMPTY_RETRIES } from '../config/constants.js';
 
 /** Dependencies injected into RelayRouter */
 export interface RelayRouterDeps {
@@ -46,7 +47,7 @@ export class RelayRouter {
   private get RELAY_DRAFT_FLUSH_MS(): number {
     return loadUserConfig().relayDraftFlushMs;
   }
-  private readonly RELAY_DRAFT_MAX_EMPTY_RETRIES = 12;
+  private readonly MAX_EMPTY_RETRIES = RELAY_DRAFT_MAX_EMPTY_RETRIES;
 
   /** Per-agent relay timeouts (live from config) */
   private get RELAY_TIMEOUT_MS(): number {
@@ -162,13 +163,11 @@ export class RelayRouter {
   // ── Rate limiting ──
 
   isRateLimited(now = Date.now()): boolean {
-    while (
-      this.relayTimestamps.length > 0 &&
-      now - this.relayTimestamps[0] >= loadUserConfig().relayWindowMs
-    ) {
+    const cfg = loadUserConfig();
+    while (this.relayTimestamps.length > 0 && now - this.relayTimestamps[0] >= cfg.relayWindowMs) {
       this.relayTimestamps.shift();
     }
-    return this.relayTimestamps.length >= loadUserConfig().maxRelaysPerWindow;
+    return this.relayTimestamps.length >= cfg.maxRelaysPerWindow;
   }
 
   recordRelay(): void {
@@ -209,11 +208,11 @@ export class RelayRouter {
 
     if (!content) {
       const retries = this.relayDraftEmptyRetries.get(from) ?? 0;
-      if (retries < this.RELAY_DRAFT_MAX_EMPTY_RETRIES) {
+      if (retries < this.MAX_EMPTY_RETRIES) {
         this.relayDraftEmptyRetries.set(from, retries + 1);
         flog.debug(
           'RELAY',
-          `Draft for ${from}->${draft.target} still empty (force=${force}), retry ${retries + 1}/${this.RELAY_DRAFT_MAX_EMPTY_RETRIES}`,
+          `Draft for ${from}->${draft.target} still empty (force=${force}), retry ${retries + 1}/${this.MAX_EMPTY_RETRIES}`,
         );
         this.scheduleRelayDraftFlush(from);
         return false;
@@ -331,13 +330,10 @@ export class RelayRouter {
     // Strip control characters (keep newlines and tabs)
     let sanitized = content.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '');
     // Enforce max length
-    if (sanitized.length > loadUserConfig().maxRelayContentLength) {
-      flog.warn(
-        'RELAY',
-        `Content truncated: ${sanitized.length} → ${loadUserConfig().maxRelayContentLength} chars`,
-      );
-      sanitized =
-        sanitized.slice(0, loadUserConfig().maxRelayContentLength) + '\n... [contenu tronqué]';
+    const maxLen = loadUserConfig().maxRelayContentLength;
+    if (sanitized.length > maxLen) {
+      flog.warn('RELAY', `Content truncated: ${sanitized.length} → ${maxLen} chars`);
+      sanitized = sanitized.slice(0, maxLen) + '\n... [contenu tronqué]';
     }
     return sanitized;
   }
@@ -371,7 +367,7 @@ export class RelayRouter {
       return;
     }
 
-    flog.info('RELAY', `${from}->${target}: ${content.slice(0, 80)}`);
+    flog.debug('RELAY', `${from}->${target}: ${content.slice(0, 80)}`);
 
     // ── Cross-talk: peer-to-peer ──
     const isPeerToPeer = from !== 'opus' && target !== 'opus' && from !== target;
@@ -423,7 +419,7 @@ export class RelayRouter {
       if (this._agentsOnRelay.has(target) && this.deps.delegates.isExpectedDelegate(target)) {
         if (this._liveRelayAllowed) {
           this._liveRelayAllowed = false;
-          flog.info('RELAY', `LIVE relay opus->${target}: ${content.slice(0, 80)}`);
+          flog.debug('RELAY', `LIVE relay opus->${target}: ${content.slice(0, 80)}`);
           const targetAgent = this.deps.agents[target];
           if (targetAgent.status === 'running' || targetAgent.status === 'compacting') {
             targetAgent.sendUrgent(`[LIVE MESSAGE DU USER — via Opus] ${content}`);

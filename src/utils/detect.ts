@@ -9,12 +9,19 @@ interface CLIInfo {
   version?: string;
 }
 
+const DETECT_TIMEOUT_MS = 5000;
+
+/** Cross-platform CLI lookup: `where` on Windows, `which` elsewhere. */
+const WHICH_CMD = process.platform === 'win32' ? 'where' : 'which';
+
 async function detectCLI(name: string, versionFlag = '--version'): Promise<CLIInfo> {
   try {
-    const { stdout } = await execFileAsync('which', [name]);
-    const cliPath = stdout.trim();
+    const { stdout } = await execFileAsync(WHICH_CMD, [name], { timeout: DETECT_TIMEOUT_MS });
+    const cliPath = stdout.trim().split('\n')[0];
     try {
-      const { stdout: ver } = await execFileAsync(cliPath, [versionFlag]);
+      const { stdout: ver } = await execFileAsync(cliPath, [versionFlag], {
+        timeout: DETECT_TIMEOUT_MS,
+      });
       return { available: true, path: cliPath, version: ver.trim().split('\n')[0] };
     } catch {
       return { available: true, path: cliPath };

@@ -97,16 +97,12 @@ fedi --resume <id>       # resume by ID
 | `@codex <msg>` | Direct message to Codex |
 | `@tous <msg>` | Broadcast to all agents |
 | `/help` | Show slash commands |
-| `/status` | Agent status |
+| `/config` | Show current agent config |
 | `/profile` | Change performance profile |
 | `/effort` | Per-agent effort |
 | `/thinking` | Toggle thinking mode |
 | `/sandbox` | Toggle sandbox mode |
 | `/sessions` | Browse and resume sessions |
-| `/logs` | View recent logs |
-| `/agents` | Toggle agents |
-| `/reset` | Restart all agents |
-| `/clear` | Clear chat |
 | `Esc` | Stop running agents |
 | `Ctrl+C` | Quit |
 
@@ -137,8 +133,8 @@ Key settings:
 | `opusModel` | claude-opus-4-6 | Opus model ID |
 | `codexModel` | gpt-5.3-codex | Codex model ID |
 | `circuitBreakerThreshold` | 3 | Failures before circuit opens |
-| `sandboxMode` | false | Require approval for destructive ops |
-| `logLevel` | debug | Log verbosity |
+| `sandboxMode` | true | Require approval for destructive ops |
+| `logLevel` | info | Log verbosity |
 
 ## Environment Variables
 
@@ -154,6 +150,13 @@ Key settings:
 
 Log rotation keeps the most recent 20 sessions (configurable via `maxLogFiles`).
 
+**Generated files**: Fedi CLI writes `AGENTS.md` (Codex system prompt) and `CLAUDE.md` (project rules for Claude agents) in the project directory at startup. If you use git, add them to your `.gitignore`:
+```
+AGENTS.md
+CLAUDE.md
+sessions/
+```
+
 **Sessions** are saved to `./sessions/` in the project directory. Each session records:
 - All user messages and agent exchanges
 - Agent session IDs for continuity
@@ -163,8 +166,8 @@ Log rotation keeps the most recent 20 sessions (configurable via `maxLogFiles`).
 
 | Mode | Flag | Behavior |
 |------|------|----------|
-| **Full-auto** (default) | `--unsafe` | Agents run with `--dangerously-skip-permissions` |
-| **Sandbox** | `--sandbox` | Agents require approval for destructive operations |
+| **Sandbox** (default) | `--sandbox` | Agents require approval for destructive operations |
+| **Full-auto** | `--unsafe` | Agents run with `--dangerously-skip-permissions` |
 
 Toggle at runtime via `/sandbox` in the slash menu.
 

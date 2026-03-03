@@ -1,11 +1,12 @@
 import chalk from 'chalk';
 import { THEME } from '../config/theme.js';
+import { VERSION } from '../utils/version.js';
 import stripAnsi from 'strip-ansi';
 
 export function printWelcomeBanner(projectDir: string): void {
   const dir = projectDir.replace(/^\/home\/[^/]+\//, '~/');
 
-  const line1 = `  ${chalk.hex(THEME.text).bold('>_ Fedi Cli')} ${chalk.dim('(v1.0)')}`;
+  const line1 = `  ${chalk.hex(THEME.text).bold('>_ Fedi Cli')} ${chalk.dim(`(v${VERSION})`)}`;
   const line2 = '';
   const line3 = `  ${chalk.dim('agents:')}     ${chalk.hex(THEME.opus)('Opus')} ${chalk.dim('(Director)')}, ${chalk.hex(THEME.sonnet)('Sonnet')} ${chalk.dim('(Code)')}, ${chalk.hex(THEME.codex)('Codex')} ${chalk.dim('(Script)')}`;
   const line4 = `  ${chalk.dim('directory:')}  ${chalk.hex(THEME.text)(dir)}`;

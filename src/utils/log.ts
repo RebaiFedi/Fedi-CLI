@@ -69,9 +69,16 @@ export function initLog(options?: { level?: LogLevel }): void {
     jsonlStream = createWriteStream(jsonlPath, { flags: 'a', encoding: 'utf-8' });
     humanStream = createWriteStream(humanPath, { flags: 'a', encoding: 'utf-8' });
 
-    // Silently handle stream errors to avoid crashing on disk issues
-    jsonlStream.on('error', () => {});
-    humanStream.on('error', () => {});
+    // Handle stream errors — log to stderr to avoid crashing on disk issues
+    let logStreamFailed = false;
+    const handleStreamError = (err: Error) => {
+      if (!logStreamFailed) {
+        logStreamFailed = true;
+        console.error(`[fedi-cli] Log stream error: ${err.message}`);
+      }
+    };
+    jsonlStream.on('error', handleStreamError);
+    humanStream.on('error', handleStreamError);
 
     // Flush and close streams on process exit to prevent data loss
     const closeStreams = () => {

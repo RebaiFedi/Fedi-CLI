@@ -7,6 +7,7 @@ import {
   applyProfile,
   setAgentEffort,
   setAgentThinking,
+  setSandboxMode,
   PROFILES,
   type EffortLevel,
   type ProfileName,
@@ -15,11 +16,16 @@ import {
 const AGENTS = ['opus', 'sonnet', 'codex'] as const;
 const EFFORT_LEVELS: EffortLevel[] = ['high', 'medium', 'low'];
 
+interface SlashCommandsOptions {
+  enabledAgentSet: Set<AgentId>;
+  onOpenSessions?: () => void;
+}
+
 /**
- * Hook that handles /profile, /effort, /thinking, /config, /help slash commands.
+ * Hook that handles /profile, /effort, /thinking, /config, /sandbox, /sessions, /help slash commands.
  * Returns a handler: (cmd, args) => boolean (true = consumed).
  */
-export function useSlashCommands(enabledAgentSet: Set<AgentId>) {
+export function useSlashCommands({ enabledAgentSet, onOpenSessions }: SlashCommandsOptions) {
   return useCallback(
     (cmd: string, args: string[]): boolean => {
       const cfg = loadUserConfig();
@@ -134,6 +140,26 @@ export function useSlashCommands(enabledAgentSet: Set<AgentId>) {
         return true;
       }
 
+      // /sandbox — toggle sandbox mode
+      if (cmd === 'sandbox') {
+        const current = cfg.sandboxMode;
+        setSandboxMode(!current);
+        const label = !current ? 'active (securise)' : 'desactive (full-auto)';
+        const color = !current ? THEME.codex : THEME.opus;
+        console.log(`\n  ${chalk.hex(THEME.text).bold('Sandbox')} → ${chalk.hex(color)(label)}\n`);
+        return true;
+      }
+
+      // /sessions — open interactive session browser
+      if (cmd === 'sessions' || cmd === 'session') {
+        if (onOpenSessions) {
+          onOpenSessions();
+        } else {
+          console.log(chalk.dim(`\n  Tapez / pour ouvrir le menu interactif, puis Sessions.\n`));
+        }
+        return true;
+      }
+
       // /help — show available slash commands
       if (cmd === 'help' || cmd === '?') {
         console.log(`\n  ${chalk.hex(THEME.text).bold('Commandes disponibles')}`);
@@ -148,6 +174,8 @@ export function useSlashCommands(enabledAgentSet: Set<AgentId>) {
           `  ${chalk.white('/thinking')} ${chalk.dim('<agent> <on|off>')}     Activer/desactiver thinking`,
         );
         console.log(`  ${chalk.white('/config')}                          Voir la config actuelle`);
+        console.log(`  ${chalk.white('/sandbox')}                         Activer/desactiver le sandbox`);
+        console.log(`  ${chalk.white('/sessions')}                        Reprendre une session`);
         console.log(`  ${chalk.white('/help')}                            Cette aide`);
         console.log('');
         console.log(chalk.dim('  Exemples:'));
@@ -158,9 +186,12 @@ export function useSlashCommands(enabledAgentSet: Set<AgentId>) {
         return true;
       }
 
-      // Unknown slash command — don't consume
-      return false;
+      // Unknown slash command — show error with available commands
+      console.log(chalk.yellow(`\n  Commande inconnue: /${cmd}`));
+      console.log(chalk.dim('  Commandes: /profile, /effort, /thinking, /config, /sandbox, /sessions, /help'));
+      console.log(chalk.dim('  Tapez / pour ouvrir le menu interactif.\n'));
+      return true;
     },
-    [enabledAgentSet],
+    [enabledAgentSet, onOpenSessions],
   );
 }

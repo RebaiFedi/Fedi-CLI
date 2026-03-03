@@ -2,8 +2,6 @@ import type { SessionConfig } from './types.js';
 import { BaseAppServerAgent } from './base-app-server-agent.js';
 import { loadUserConfig } from '../config/user-config.js';
 
-const cfg = loadUserConfig();
-
 export class CodexAgent extends BaseAppServerAgent {
   readonly id = 'codex' as const;
 
@@ -11,13 +9,13 @@ export class CodexAgent extends BaseAppServerAgent {
     return '[CODEX]';
   }
   protected get model() {
-    return cfg.codexModel;
+    return loadUserConfig().codexModel;
   }
   protected get effort() {
-    return cfg.codexEffort;
+    return loadUserConfig().codexEffort;
   }
   protected get thinking() {
-    return cfg.codexThinking;
+    return loadUserConfig().codexThinking;
   }
 
   protected getCliPath(config: SessionConfig): string {

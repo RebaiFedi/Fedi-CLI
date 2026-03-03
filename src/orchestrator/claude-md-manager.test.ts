@@ -2,7 +2,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync, readFileSync, writeFileSync, mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
-import { ensureClaudeMd } from './claude-md-manager.js';
+import { ensureClaudeMd, ensureAgentsMd } from './claude-md-manager.js';
 
 const TEST_DIR = '/tmp/fedi-claude-md-test';
 
@@ -86,5 +86,59 @@ describe('claude-md-manager', () => {
     ensureClaudeMd(TEST_DIR);
     const content2 = readFileSync(join(TEST_DIR, 'CLAUDE.md'), 'utf-8');
     assert.equal(content1, content2, 'Content should be identical');
+  });
+});
+
+describe('ensureAgentsMd', () => {
+  function setup() {
+    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    mkdirSync(TEST_DIR, { recursive: true });
+  }
+
+  it('creates AGENTS.md and returns true', () => {
+    setup();
+    const result = ensureAgentsMd(TEST_DIR);
+    assert.equal(result, true);
+    assert.ok(existsSync(join(TEST_DIR, 'AGENTS.md')));
+  });
+
+  it('AGENTS.md contains fedi-cli-managed:agents marker', () => {
+    setup();
+    ensureAgentsMd(TEST_DIR);
+    const content = readFileSync(join(TEST_DIR, 'AGENTS.md'), 'utf-8');
+    assert.ok(content.includes('<!-- fedi-cli-managed:agents -->'));
+  });
+
+  it('AGENTS.md contains Codex system prompt', () => {
+    setup();
+    ensureAgentsMd(TEST_DIR);
+    const content = readFileSync(join(TEST_DIR, 'AGENTS.md'), 'utf-8');
+    assert.ok(content.includes('Codex'), 'Should contain Codex prompt');
+    assert.ok(content.includes('backend'), 'Should mention backend role');
+  });
+
+  it('returns false for user-managed AGENTS.md', () => {
+    setup();
+    writeFileSync(join(TEST_DIR, 'AGENTS.md'), '# My custom agents', 'utf-8');
+    const result = ensureAgentsMd(TEST_DIR);
+    assert.equal(result, false);
+    const content = readFileSync(join(TEST_DIR, 'AGENTS.md'), 'utf-8');
+    assert.equal(content, '# My custom agents', 'Should not be overwritten');
+  });
+
+  it('returns true and updates fedi-managed AGENTS.md', () => {
+    setup();
+    writeFileSync(join(TEST_DIR, 'AGENTS.md'), '<!-- fedi-cli-managed:agents -->\nOld', 'utf-8');
+    const result = ensureAgentsMd(TEST_DIR);
+    assert.equal(result, true);
+    const content = readFileSync(join(TEST_DIR, 'AGENTS.md'), 'utf-8');
+    assert.ok(content.includes('Codex'), 'Should contain updated Codex prompt');
+  });
+
+  it('returns true when content is already up-to-date', () => {
+    setup();
+    ensureAgentsMd(TEST_DIR);
+    const result = ensureAgentsMd(TEST_DIR);
+    assert.equal(result, true);
   });
 });

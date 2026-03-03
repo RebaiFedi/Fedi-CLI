@@ -2,21 +2,19 @@ import type { AgentId, SessionConfig } from './types.js';
 import { BaseSonnetAgent } from './base-sonnet-agent.js';
 import { loadUserConfig } from '../config/user-config.js';
 
-const cfg = loadUserConfig();
-
 export class SonnetAgent extends BaseSonnetAgent {
   readonly id: AgentId = 'sonnet';
   protected get logTag() {
     return 'SONNET';
   }
   protected get model() {
-    return cfg.claudeModel;
+    return loadUserConfig().claudeModel;
   }
   protected get effort() {
-    return cfg.sonnetEffort;
+    return loadUserConfig().sonnetEffort;
   }
   protected get thinking() {
-    return cfg.sonnetThinking;
+    return loadUserConfig().sonnetThinking;
   }
 
   protected override getExtraArgs(systemPrompt: string): string[] {

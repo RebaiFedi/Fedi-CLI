@@ -100,13 +100,13 @@ export interface UserConfig {
   sonnetThinking: boolean;
   /** Enable thinking for Codex. Default: true */
   codexThinking: boolean;
-  /** Sandbox mode: agents require approval for destructive operations. Default: false */
+  /** Sandbox mode: agents require approval for destructive operations. Default: true */
   sandboxMode: boolean;
   /** Relay draft flush delay (ms). Default: 150 */
   relayDraftFlushMs: number;
   /** Safety-net debounce delay (ms). Default: 500 */
   safetyNetDebounceMs: number;
-  /** Log level: debug, info, warn, error. Default: 'debug' */
+  /** Log level: debug, info, warn, error. Default: 'info' */
   logLevel: 'debug' | 'info' | 'warn' | 'error';
 }
 
@@ -137,10 +137,10 @@ const UserConfigSchema = z
     opusThinking: z.boolean().default(true),
     sonnetThinking: z.boolean().default(true),
     codexThinking: z.boolean().default(true),
-    sandboxMode: z.boolean().default(false),
+    sandboxMode: z.boolean().default(true),
     relayDraftFlushMs: z.number().min(10).default(150),
     safetyNetDebounceMs: z.number().min(10).default(500),
-    logLevel: z.enum(['debug', 'info', 'warn', 'error']).default('debug'),
+    logLevel: z.enum(['debug', 'info', 'warn', 'error']).default('info'),
   })
   .partial();
 
@@ -170,10 +170,10 @@ const DEFAULTS: UserConfig = {
   opusThinking: true,
   sonnetThinking: true,
   codexThinking: true,
-  sandboxMode: false,
+  sandboxMode: true,
   relayDraftFlushMs: 150,
   safetyNetDebounceMs: 500,
-  logLevel: 'debug',
+  logLevel: 'info',
 };
 
 let cachedConfig: UserConfig | null = null;

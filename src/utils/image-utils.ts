@@ -14,6 +14,11 @@ const MIME_MAP: Record<string, string> = {
   '.bmp': 'image/bmp',
 };
 
+/** Minimum file size (bytes) to consider as a valid image */
+const MIN_IMAGE_SIZE = 100;
+/** Maximum file size (bytes) — reject images larger than 20MB */
+const MAX_IMAGE_SIZE = 20 * 1024 * 1024;
+
 // Match absolute paths (/...) or ~/... paths to image files
 const IMAGE_PATH_RE = /(?:~\/|\/(?!\/))[\w.\-àâäéèêëïîôùûüÿçœæ' /]+\.(?:png|jpe?g|gif|webp|bmp)/gi;
 
@@ -65,8 +70,7 @@ export async function parseMessageWithImages(text: string): Promise<ContentBlock
 
     try {
       const buf = await fs.readFile(filePath);
-      // Sanity check: file should be at least a few bytes and not too big (20MB)
-      if (buf.length < 100 || buf.length > 20 * 1024 * 1024) {
+      if (buf.length < MIN_IMAGE_SIZE || buf.length > MAX_IMAGE_SIZE) {
         flog.warn('SYSTEM', `Image file size invalid (${buf.length} bytes): ${filePath}`);
         continue;
       }

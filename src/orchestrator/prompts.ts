@@ -500,3 +500,24 @@ DECIDE:
 MESSAGE DU USER:
 ${userText}`;
 }
+
+/**
+ * Build the combined reports prompt delivered to Opus when all delegates
+ * have finished and their reports are ready.
+ */
+export function getCombinedReportsPrompt(
+  agentNames: string[],
+  opusSection: string,
+  reportsBody: string,
+): string {
+  return `[RAPPORTS RECUS — ${agentNames.join(' + ')}] Tous les rapports sont arrivés.
+
+INSTRUCTIONS CRITIQUES:
+1. Ecris un rapport final complet et structure pour le user — fusionne les rapports de tes agents
+2. Le user n'a RIEN vu avant — c'est la PREMIERE fois qu'il verra un rapport
+3. NE DIS PAS "le rapport est déjà là" ou "voir ci-dessus" — le user ne voit RIEN avant ce message
+4. Decris en detail: quels fichiers crees/modifies, les fonctionnalites, les choix techniques
+5. MAIS: NE RECOPIE PAS de blocs de code source. Ton rapport est une DESCRIPTION, pas du code
+6. REPONDS RAPIDEMENT — le user attend. Synthetise et envoie
+7. Pour les TABLEAUX: utilise la syntaxe markdown avec pipes |${opusSection}\n\n${reportsBody}`;
+}

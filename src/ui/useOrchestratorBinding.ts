@@ -11,7 +11,7 @@ import type {
 import type { TodoItem } from './TodoPanel.js';
 import type { Orchestrator } from '../orchestrator/orchestrator.js';
 import { THEME, agentHex, agentDisplayName, agentChalkColor } from '../config/theme.js';
-import { INDENT } from '../config/constants.js';
+import { INDENT, MSG_CLOSE_GRACE_MS } from '../config/constants.js';
 import { outputToEntries } from '../rendering/output-transform.js';
 import { entriesToAnsiOutputLines } from '../rendering/ansi-renderer.js';
 import { compactOutputLines } from '../rendering/compact.js';
@@ -65,37 +65,37 @@ interface UseOrchestratorBindingDeps {
  * Hook that binds the orchestrator callbacks (onAgentOutput, onAgentStatus,
  * onRelay), handles session resume, and registers SIGINT/SIGTERM handlers.
  */
-export function useOrchestratorBinding({
-  orchestrator,
-  exit,
-  projectDir,
-  claudePath,
-  codexPath,
-  resumeSessionId,
-  enabledAgentSet,
-  dispatchStatus,
-  agentStatusesRef,
-  setAgentErrors,
-  stoppedRef,
-  setThinking,
-  setTodos,
-  setTodosHiddenAt,
-  currentMsgRef,
-  lastEntryKind,
-  chatMessagesMap,
-  msgCloseTimers,
-  pendingActions,
-  lastActionTime,
-  lastHeartbeatTime,
-  pendingAgentDones,
-  thinkingClearTimer,
-  exitInProgress,
-  flushTimer,
-  processTaskTags,
-  enqueueOutput,
-  flushBuffer,
-  applyDones,
-}: UseOrchestratorBindingDeps) {
+export function useOrchestratorBinding(deps: UseOrchestratorBindingDeps) {
+  const {
+    orchestrator,
+    exit,
+    projectDir,
+    claudePath,
+    codexPath,
+    resumeSessionId,
+    enabledAgentSet,
+    dispatchStatus,
+    agentStatusesRef,
+    setAgentErrors,
+    stoppedRef,
+    setThinking,
+    currentMsgRef,
+    lastEntryKind,
+    chatMessagesMap,
+    msgCloseTimers,
+    pendingActions,
+    lastActionTime,
+    lastHeartbeatTime,
+    pendingAgentDones,
+    thinkingClearTimer,
+    exitInProgress,
+    flushTimer,
+    processTaskTags,
+    enqueueOutput,
+    flushBuffer,
+    applyDones,
+  } = deps;
+
   useEffect(() => {
     orchestrator.setConfig({ projectDir, claudePath, codexPath });
     orchestrator.setEnabledAgents(enabledAgentSet);
@@ -205,7 +205,7 @@ export function useOrchestratorBinding({
                   lastEntryKind.current.delete(agent);
                   console.log('');
                 }
-              }, 3000);
+              }, MSG_CLOSE_GRACE_MS);
               msgCloseTimers.current.set(agent, timer);
             } else {
               const prevTimer = msgCloseTimers.current.get(agent);
@@ -294,7 +294,15 @@ export function useOrchestratorBinding({
     const handleExit = () => {
       if (exitInProgress.current) {
         flog.warn('UI', 'Force exit requested');
-        process.exit(1);
+        // Force shutdown — still go through orchestrator.stop() for cleanup
+        orchestrator
+          .stop()
+          .catch(() => {})
+          .finally(() => {
+            process.exitCode = 1;
+            exit();
+          });
+        return;
       }
       const activeAgents = Object.entries(agentStatusesRef.current)
         .filter(([, s]) => s === 'running')
@@ -327,11 +335,17 @@ export function useOrchestratorBinding({
     // Capture current ref values for cleanup (React hooks lint rule)
     const capturedFlushTimer = flushTimer;
     const capturedThinkingTimer = thinkingClearTimer;
+    const capturedMsgCloseTimers = msgCloseTimers;
     return () => {
       process.off('SIGINT', handleExit);
       process.off('SIGTERM', handleExit);
       if (capturedFlushTimer.current) clearTimeout(capturedFlushTimer.current);
       if (capturedThinkingTimer.current) clearTimeout(capturedThinkingTimer.current);
+      // Clear all message-close timers to prevent leaks
+      for (const timer of capturedMsgCloseTimers.current.values()) {
+        clearTimeout(timer);
+      }
+      capturedMsgCloseTimers.current.clear();
     };
   }, [
     orchestrator,
@@ -350,8 +364,6 @@ export function useOrchestratorBinding({
     setAgentErrors,
     stoppedRef,
     setThinking,
-    setTodos,
-    setTodosHiddenAt,
     currentMsgRef,
     lastEntryKind,
     chatMessagesMap,

@@ -890,8 +890,12 @@ describe('Orchestrator', () => {
       const opusStdout = h.log.outputs.filter(
         (o) => o.agent === 'opus' && o.line.type === 'stdout',
       );
-      // Pre-tag text "OK ! Je lance Sonnet." must be emitted at least once
-      assert.ok(opusStdout.length >= 1, 'Pre-tag text should be emitted');
+      // Pre-tag text "OK ! Je lance Sonnet." must be emitted exactly once (no duplicate)
+      assert.equal(
+        opusStdout.length,
+        1,
+        `Expected exactly 1 pre-tag emission, got ${opusStdout.length}: ${opusStdout.map((o) => o.line.text.slice(0, 60)).join(' | ')}`,
+      );
       assert.match(opusStdout[0].line.text, /OK/);
       assert.ok(
         !opusStdout[0].line.text.includes('[TO:SONNET]'),

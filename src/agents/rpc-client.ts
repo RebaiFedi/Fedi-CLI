@@ -51,10 +51,7 @@ export class RpcClient {
       });
 
       flog.debug('AGENT', `${this.logTag}: RPC request #${id} ${method}`);
-      const ok = proc.stdin.write(msg + '\n');
-      if (!ok) {
-        proc.stdin.once('drain', () => {});
-      }
+      this.writeToStdin(proc, msg);
     });
   }
 
@@ -73,10 +70,7 @@ export class RpcClient {
     });
 
     flog.debug('AGENT', `${this.logTag}: RPC notify ${method}`);
-    const ok = proc.stdin.write(msg + '\n');
-    if (!ok) {
-      proc.stdin.once('drain', () => {});
-    }
+    this.writeToStdin(proc, msg);
   }
 
   /** Handle an incoming server message. Returns true if it was a pending RPC response. */
@@ -108,15 +102,27 @@ export class RpcClient {
     }
   }
 
-  /** Reject all pending RPCs without clearing timeouts (used on process exit). */
+  /** Reject all pending RPCs and clear timeouts (used on process exit). */
   rejectAllNoTimeout(reason: string): void {
-    for (const [id, { reject }] of this.pendingRpc) {
+    const entries = [...this.pendingRpc.values()];
+    this.pendingRpc.clear();
+    for (const { reject, timer } of entries) {
+      clearTimeout(timer);
       reject(new Error(reason));
-      this.pendingRpc.delete(id);
     }
   }
 
   get hasPending(): boolean {
     return this.pendingRpc.size > 0;
+  }
+
+  /** Write a JSON-RPC message to stdin, handling backpressure correctly. */
+  private writeToStdin(proc: ChildProcess, msg: string): void {
+    const ok = proc.stdin!.write(msg + '\n');
+    if (!ok) {
+      proc.stdin!.once('drain', () => {
+        flog.debug('AGENT', `${this.logTag}: stdin drain resolved`);
+      });
+    }
   }
 }
