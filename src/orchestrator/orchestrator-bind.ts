@@ -506,7 +506,7 @@ export function bindOrchestrator(ctx: OrchestratorBindContext, cb: OrchestratorC
       text: line.text.slice(0, 150),
     });
     const delegatesBefore = ctx.delegates.expectedDelegateCount;
-    const { foundRelayTag, preTagLines } = ctx.relay.detectRelayPatterns('opus', line.text);
+    const { preTagLines } = ctx.relay.detectRelayPatterns('opus', line.text);
 
     if (preTagLines.length > 0 && delegatesBefore === 0 && line.type === 'stdout') {
       const preTagText = preTagLines.join('\n');

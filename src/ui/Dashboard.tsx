@@ -158,6 +158,8 @@ export function Dashboard({
     const mergeMarkerHeaders = (lines: string[]): string[] => {
       const merged: string[] = [];
       const isAgentHeader = (value: string) => /^(Opus|Sonnet|Codex):$/.test(value);
+      const isToolLead = (value: string) =>
+        /^(Exec|Read|Write|Edit|Create|Delete|Search|Grep|List|Fetch|Agent|Todo)\b/i.test(value);
       for (let i = 0; i < lines.length; i++) {
         const current = lines[i] ?? '';
         const currentTrimmed = stripAnsi(current).trim();
@@ -183,6 +185,12 @@ export function Dashboard({
             continue;
           }
           const firstContent = lines[firstContentIdx] ?? '';
+          const firstContentTrimmed = stripAnsi(firstContent).trim();
+          // Keep agent header on its own line for tool/action streams.
+          if (isToolLead(firstContentTrimmed)) {
+            merged.push(current);
+            continue;
+          }
           merged.push(`${prefixWithIndent} ${firstContent.replace(/^\s+/, '')}`);
           let j = firstContentIdx + 1;
           while (j < lines.length) {
