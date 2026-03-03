@@ -239,6 +239,16 @@ export class RelayRouter {
     this.relayDraftTimers.set(from, timer);
   }
 
+  /**
+   * Defer relay dispatch to preserve UI ordering when parsing a chunk that
+   * contains pre-tag text and multiple relay tags.
+   */
+  private routeRelayMessageDeferred(from: AgentId, target: AgentId, content: string): void {
+    setTimeout(() => {
+      this.routeRelayMessage(from, target, content);
+    }, 0);
+  }
+
   // ── Pattern detection (streamed output) ──
 
   detectRelayPatterns(
@@ -286,7 +296,7 @@ export class RelayRouter {
           if (prevContent) {
             this.relayDrafts.delete(from);
             this.relayDraftEmptyRetries.delete(from);
-            this.routeRelayMessage(from, prevDraft.target, prevContent);
+            this.routeRelayMessageDeferred(from, prevDraft.target, prevContent);
           } else {
             const prevTimer = this.relayDraftTimers.get(from);
             if (prevTimer) {

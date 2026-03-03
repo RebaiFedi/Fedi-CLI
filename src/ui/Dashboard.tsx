@@ -155,6 +155,55 @@ export function Dashboard({
     if (items.length === 0) return;
 
     const outputLines: string[] = [];
+    const mergeMarkerHeaders = (lines: string[]): string[] => {
+      const merged: string[] = [];
+      const isAgentHeader = (value: string) => /^(Opus|Sonnet|Codex):$/.test(value);
+      for (let i = 0; i < lines.length; i++) {
+        const current = lines[i] ?? '';
+        const currentTrimmed = stripAnsi(current).trim();
+        const next = lines[i + 1];
+        if (
+          isAgentHeader(currentTrimmed) &&
+          typeof next === 'string'
+        ) {
+          const prefixWithIndent = current;
+          const continuationIndent = ' '.repeat(stripAnsi(prefixWithIndent).length + 1);
+          let firstContentIdx = i + 1;
+          while (
+            firstContentIdx < lines.length &&
+            stripAnsi(lines[firstContentIdx] ?? '').trim() === ''
+          ) {
+            firstContentIdx++;
+          }
+          if (
+            firstContentIdx >= lines.length ||
+            isAgentHeader(stripAnsi(lines[firstContentIdx] ?? '').trim())
+          ) {
+            merged.push(current);
+            continue;
+          }
+          const firstContent = lines[firstContentIdx] ?? '';
+          merged.push(`${prefixWithIndent} ${firstContent.replace(/^\s+/, '')}`);
+          let j = firstContentIdx + 1;
+          while (j < lines.length) {
+            const follow = lines[j] ?? '';
+            const followTrimmed = stripAnsi(follow).trim();
+            if (followTrimmed === '' || isAgentHeader(followTrimmed)) break;
+            merged.push(`${continuationIndent}${follow.replace(/^\s+/, '')}`);
+            j++;
+          }
+          i = j - 1;
+          continue;
+        }
+        merged.push(current);
+      }
+      return merged;
+    };
+    const pushGap = () => {
+      if (outputLines.length === 0) return;
+      const last = stripAnsi(outputLines[outputLines.length - 1]).trim();
+      if (last !== '') outputLines.push('');
+    };
 
     const flushPendingActions = (
       agent: AgentId,
@@ -167,14 +216,21 @@ export function Dashboard({
       pendingActions.current.set(agent, []);
     };
 
-    const emitAgentHeader = (agent: AgentId) => {
-      const agName = chalk.hex(agentHex(agent)).bold(agentDisplayName(agent));
-      if (lastPrintedAgent.current && lastPrintedAgent.current !== agent) {
-        outputLines.push('');
-      }
-      outputLines.push(`${INDENT}${agName}`);
-      lastPrintedAgent.current = agent;
-    };
+      const emitAgentHeader = (agent: AgentId, opts?: { separate?: boolean }) => {
+        const prefix = chalk.hex(agentHex(agent)).bold(`${agentDisplayName(agent)}:`);
+        const headerIndent = `${INDENT} `;
+        if (lastPrintedAgent.current && (opts?.separate || lastPrintedAgent.current !== agent)) {
+          // Preserve one visual blank line before a new agent/message header,
+          // including when this flush starts right after a previous flush.
+          if (outputLines.length === 0) {
+            outputLines.push('');
+          } else {
+            pushGap();
+          }
+        }
+        outputLines.push(`${headerIndent}${prefix}`);
+        lastPrintedAgent.current = agent;
+      };
 
     for (const { agent, entries } of items) {
       if (entries.length === 0) continue;
@@ -260,7 +316,7 @@ export function Dashboard({
       }
 
       // Create new message block with header
-      emitAgentHeader(agent);
+      emitAgentHeader(agent, { separate: true });
 
       const id = randomUUID();
       currentMsgRef.current.set(agent, id);
@@ -293,17 +349,17 @@ export function Dashboard({
       const lastHb = lastHeartbeatTime.current.get(agent) ?? 0;
       if (sinceLastAction >= 5000 && now - lastHb >= 5000) {
         lastHeartbeatTime.current.set(agent, now);
-        const hbLabel = chalk.hex(agentHex(agent)).bold(agentDisplayName(agent));
+        const hbLabel = chalk.hex(agentHex(agent)).bold(`${agentDisplayName(agent)}:`);
         const elapsed = Math.floor(sinceLastAction / 1000);
         if (lastPrintedAgent.current && lastPrintedAgent.current !== agent) {
-          outputLines.push('');
+          pushGap();
         }
-        outputLines.push(`${INDENT}${hbLabel} ${chalk.dim(`thinking… ${elapsed}s`)}`);
+        outputLines.push(`${INDENT} ${hbLabel} ${chalk.dim(`thinking… ${elapsed}s`)}`);
         lastPrintedAgent.current = agent as AgentId;
       }
     }
 
-    const compacted = compactOutputLines(outputLines);
+    const compacted = compactOutputLines(mergeMarkerHeaders(outputLines));
     while (
       compacted.length > 1 &&
       stripAnsi(compacted[0]).trim() === '' &&
@@ -351,7 +407,7 @@ export function Dashboard({
       } else if (isTextContent) {
         // Flush text content rapidly for streaming effect
         if (!flushTimer.current) {
-          flushTimer.current = setTimeout(flushBuffer, 30);
+          flushTimer.current = setTimeout(flushBuffer, 16);
         }
       } else if (isActionLike) {
         if (!flushTimer.current) {

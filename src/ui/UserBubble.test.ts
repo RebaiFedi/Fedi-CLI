@@ -29,11 +29,10 @@ describe('UserBubble', () => {
     assert.ok(text.includes('Hello world'), 'should contain the user text');
   });
 
-  it('displays the user prefix marker', () => {
+  it('displays the user header', () => {
     printUserBubble('Test message');
     const text = stripAnsi(output.join('\n'));
-    // The prefix is the ❯ character
-    assert.ok(text.includes('\u276F'), 'should show the user prefix marker');
+    assert.ok(text.includes('You'), 'should show the user header');
   });
 
   it('handles empty text without crashing', () => {

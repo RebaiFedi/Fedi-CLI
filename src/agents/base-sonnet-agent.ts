@@ -226,6 +226,12 @@ export abstract class BaseSonnetAgent implements AgentProcess {
     const subtype = typeof msg.subtype === 'string' ? msg.subtype : undefined;
     flog.debug('AGENT', `${this.logTag} event: ${type} ${subtype ?? ''}`);
 
+    const emitAssistantText = (text: string) => {
+      if (!text) return;
+      if (this.status !== 'running') this.setStatus('running');
+      this.emit({ text, timestamp: Date.now(), type: 'stdout' });
+    };
+
     if (type === 'system' && typeof msg.session_id === 'string') {
       this.sessionId = msg.session_id;
       flog.info('AGENT', `${this.logTag}: Session ID: ${this.sessionId}`);
@@ -259,16 +265,19 @@ export abstract class BaseSonnetAgent implements AgentProcess {
         this.sessionId = null;
       }
 
-      // Detect quota/usage limit errors and show user-friendly message
-      if (errorMsg.includes('out of extra usage') || errorMsg.includes('rate limit')) {
-        const resetMatch = errorMsg.match(/resets?\s+(.+)/i);
+      // Detect quota/usage limit errors and show user-friendly message.
+      const isQuotaError =
+        /(out of extra usage|rate limit|hit your limit|usage limit|quota)/i.test(errorMsg);
+      if (isQuotaError) {
+        const resetMatch = errorMsg.match(
+          /resets?\s*[:\-]?\s*(\d{1,2}(?::\d{2})?\s*(?:am|pm)(?:\s*\([^)]+\))?)/i,
+        );
         const resetInfo = resetMatch ? ` (reset: ${resetMatch[1]})` : '';
         this.emit({
-          text: `${this.logTag}: quota epuise${resetInfo}. Attendez le reset ou changez de plan.`,
+          text: `${this.logTag}: quota epuise${resetInfo}. ${errorMsg}`,
           timestamp: Date.now(),
           type: 'info',
         });
-        this.setStatus('error');
       } else {
         this.emit({
           text: `${this.logTag} error: ${errorMsg}`,
@@ -276,16 +285,26 @@ export abstract class BaseSonnetAgent implements AgentProcess {
           type: 'info',
         });
       }
+
+      // Keep status coherent for all result errors.
+      this.setStatus('error');
+    }
+
+    // Compatibility: some stream-json variants emit text deltas directly.
+    if (
+      (type === 'assistant_delta' || type === 'message_delta' || type === 'content_block_delta') &&
+      typeof msg.delta === 'string'
+    ) {
+      emitAssistantText(msg.delta);
     }
 
     if (type === 'assistant' && msg.message && typeof msg.message === 'object') {
-      if (this.status !== 'running') this.setStatus('running');
       const message = msg.message as Record<string, unknown>;
       if (Array.isArray(message.content)) {
         for (const block of message.content) {
           if (block && typeof block === 'object') {
             if (block.type === 'text' && typeof block.text === 'string') {
-              this.emit({ text: block.text, timestamp: Date.now(), type: 'stdout' });
+              emitAssistantText(block.text);
             }
             if (block.type === 'tool_use') {
               const toolName = typeof block.name === 'string' ? block.name : 'tool';
@@ -295,6 +314,17 @@ export abstract class BaseSonnetAgent implements AgentProcess {
                   : undefined;
               this.emitToolAction(toolName, input);
             }
+          }
+        }
+      }
+    }
+
+    if ((type === 'message' || type === 'output_message') && msg.message && typeof msg.message === 'object') {
+      const message = msg.message as Record<string, unknown>;
+      if (Array.isArray(message.content)) {
+        for (const block of message.content) {
+          if (block && typeof block === 'object' && block.type === 'text' && typeof block.text === 'string') {
+            emitAssistantText(block.text);
           }
         }
       }

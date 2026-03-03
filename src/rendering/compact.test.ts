@@ -40,11 +40,10 @@ describe('compact', () => {
 // ── addActionSpacing() ──────────────────────────────────────────────────────
 
 describe('addActionSpacing', () => {
-  it('adds spacing after action block before text', () => {
+  it('does not add spacing after action block before text', () => {
     const input = [e('action', 'Read foo'), e('text', 'content')];
     const result = addActionSpacing(input);
-    assert.ok(result.some((r) => r.kind === 'empty'));
-    assert.ok(result.length > input.length);
+    assert.equal(result.filter((r) => r.kind === 'empty').length, 0);
   });
 
   it('adds spacing before action block after text', () => {
@@ -65,7 +64,7 @@ describe('addActionSpacing', () => {
     assert.ok(!result.some((r, i) => r.kind === 'empty' && i > 0 && i < result.length - 1));
   });
 
-  it('adds spacing between tool-header blocks', () => {
+  it('adds spacing between adjacent tool-header blocks', () => {
     const input = [
       e('tool-header', 'Edit foo'),
       e('diff-old', 'old'),

@@ -17,6 +17,10 @@ export interface ItemHandlerDeps {
   resetMessageBuffer(): void;
   /** Append to agent message buffer. */
   appendToMessageBuffer(delta: string): void;
+  /** How many chars of the buffer have already been streamed to the UI. */
+  getStreamedLength(): number;
+  /** Update the streamed position (after emitting text). */
+  setStreamedLength(n: number): void;
   /** Get/set pending file change diff. */
   getPendingFileChangeDiff(): string | null;
   setPendingFileChangeDiff(diff: string | null): void;
@@ -162,10 +166,20 @@ export function handleItemCompleted(deps: ItemHandlerDeps, params: Record<string
       return;
     }
     const { buffer, hadDeltas } = deps.getMessageBuffer();
-    const text = hadDeltas ? buffer.trim() : extractText(item);
+    const streamed = deps.getStreamedLength();
     deps.resetMessageBuffer();
-    if (text) {
-      deps.emit({ text, timestamp: Date.now(), type: 'stdout' });
+    if (hadDeltas) {
+      // Emit any remaining un-streamed text (last partial line)
+      const remaining = buffer.slice(streamed);
+      if (remaining.trim()) {
+        deps.emit({ text: remaining, timestamp: Date.now(), type: 'stdout' });
+      }
+    } else {
+      // No deltas were streamed — emit the full text as fallback
+      const text = extractText(item);
+      if (text) {
+        deps.emit({ text, timestamp: Date.now(), type: 'stdout' });
+      }
     }
     return;
   }
@@ -178,10 +192,20 @@ export function handleItemCompleted(deps: ItemHandlerDeps, params: Record<string
       return;
     }
     const { buffer, hadDeltas } = deps.getMessageBuffer();
-    const text = hadDeltas ? buffer.trim() : extractText(item);
+    const streamed = deps.getStreamedLength();
     deps.resetMessageBuffer();
-    if (text) {
-      deps.emit({ text, timestamp: Date.now(), type: 'stdout' });
+    if (hadDeltas) {
+      // Emit any remaining un-streamed text (last partial line)
+      const remaining = buffer.slice(streamed);
+      if (remaining.trim()) {
+        deps.emit({ text: remaining, timestamp: Date.now(), type: 'stdout' });
+      }
+    } else {
+      // No deltas were streamed — emit the full text as fallback
+      const text = extractText(item);
+      if (text) {
+        deps.emit({ text, timestamp: Date.now(), type: 'stdout' });
+      }
     }
     return;
   }
@@ -429,9 +453,94 @@ export function handleAgentMessageDelta(
   deps: ItemHandlerDeps,
   params: Record<string, unknown>,
 ): void {
+  const SOFT_STREAM_THRESHOLD = 80;
+  const findSoftSplitPoint = (text: string, maxLen: number): number => {
+    const window = text.slice(0, maxLen);
+    const minAcceptable = Math.floor(maxLen * 0.4);
+
+    let best = -1;
+    const punct = ['\n', '. ', '! ', '? ', '; ', ': ', ', '];
+    for (const token of punct) {
+      const idx = window.lastIndexOf(token);
+      if (idx < 0) continue;
+      const end = idx + token.length;
+      if (end > best) best = end;
+    }
+    if (best >= minAcceptable) return best;
+
+    const ws = window.lastIndexOf(' ');
+    if (ws >= minAcceptable) return ws + 1;
+    return -1;
+  };
+
   const delta = typeof params.delta === 'string' ? params.delta : undefined;
   if (delta) {
     deps.appendToMessageBuffer(delta);
+    const { buffer } = deps.getMessageBuffer();
+    const streamed = deps.getStreamedLength();
+    const unstreamed = buffer.slice(streamed);
+
+    let searchFrom = 0;
+    let lastEmitEnd = 0;
+
+    // 1) Stream at paragraph breaks (\n\n) — emit paragraph + separator
+    while (true) {
+      const paraBreak = unstreamed.indexOf('\n\n', searchFrom);
+      if (paraBreak < 0) break;
+      const paragraph = unstreamed.slice(lastEmitEnd, paraBreak);
+      if (paragraph.trim()) {
+        deps.emit({ text: paragraph, timestamp: Date.now(), type: 'stdout' });
+        deps.emit({ text: '\n', timestamp: Date.now(), type: 'stdout' });
+      }
+      lastEmitEnd = paraBreak + 2;
+      searchFrom = lastEmitEnd;
+    }
+
+    // 2) Stream at single line breaks (\n) — emit each complete line
+    const afterParagraphs = unstreamed.slice(lastEmitEnd);
+    let lineSearchFrom = 0;
+    let lineEmitEnd = 0;
+    while (true) {
+      const lineBreak = afterParagraphs.indexOf('\n', lineSearchFrom);
+      if (lineBreak < 0) break;
+      // Skip if this is part of a \n\n (already handled above)
+      if (lineBreak + 1 < afterParagraphs.length && afterParagraphs[lineBreak + 1] === '\n') {
+        lineSearchFrom = lineBreak + 1;
+        continue;
+      }
+      const line = afterParagraphs.slice(lineEmitEnd, lineBreak);
+      if (line.trim()) {
+        deps.emit({ text: line, timestamp: Date.now(), type: 'stdout' });
+      }
+      lineEmitEnd = lineBreak + 1;
+      lineSearchFrom = lineEmitEnd;
+    }
+    lastEmitEnd += lineEmitEnd;
+
+    let consumed = lastEmitEnd;
+
+    // 3) Soft-stream remaining text at sentence/word boundaries
+    const tail = unstreamed.slice(consumed);
+    if (tail.length >= SOFT_STREAM_THRESHOLD) {
+      const splitAt = findSoftSplitPoint(tail, SOFT_STREAM_THRESHOLD);
+      if (splitAt > 0) {
+        const chunk = tail.slice(0, splitAt);
+        if (chunk.trim()) {
+          deps.emit({ text: chunk, timestamp: Date.now(), type: 'stdout' });
+          consumed += splitAt;
+        }
+      } else if (tail.length >= SOFT_STREAM_THRESHOLD * 2) {
+        const hardChunk = tail.slice(0, SOFT_STREAM_THRESHOLD);
+        if (hardChunk.trim()) {
+          deps.emit({ text: hardChunk, timestamp: Date.now(), type: 'stdout' });
+          consumed += SOFT_STREAM_THRESHOLD;
+        }
+      }
+    }
+
+    if (consumed > 0) {
+      deps.setStreamedLength(streamed + consumed);
+    }
   }
 }
 

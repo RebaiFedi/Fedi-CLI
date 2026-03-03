@@ -6,7 +6,7 @@ export function getMaxMessages() {
 export function getFlushInterval() {
   return loadUserConfig().flushIntervalMs;
 }
-export const INDENT = '  ';
+export const INDENT = ' ';
 export const BUBBLE_SIDE_MARGIN = 2;
 /** Max text width — no hard cap, let terminal width decide (with small right margin) */
 export const MAX_READABLE_WIDTH = 9999;
@@ -14,7 +14,7 @@ export const DOT_ACTIVE = '\u2022';
 export const MAX_VISIBLE_TODOS = 4;
 
 /** Grace period (ms) before closing a message bubble after agent goes idle/waiting */
-export const MSG_CLOSE_GRACE_MS = 3000;
+export const MSG_CLOSE_GRACE_MS = 320;
 /** Maximum number of messages kept in the bus history ring buffer */
 export const BUS_HISTORY_LIMIT = 500;
 /** Number of recent messages to include in conversation summary for session restart */

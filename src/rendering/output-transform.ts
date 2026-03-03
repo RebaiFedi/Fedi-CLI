@@ -7,6 +7,8 @@ export const TOOL_RE =
   /^\s*(EnterPlanMode|AskUserQuestion|ExitPlanMode|TodoWrite|TaskCreate|TaskUpdate|TaskList|TaskGet|NotebookEdit|EnterWorktree|WebSearch|WebFetch)\s*$/;
 export const RELAY_PREFIX_RE = /\[(TO|FROM):(SONNET|CODEX|OPUS)\]\s*/i;
 export const RELAY_LINE_RE = /^\s*\[TO:(SONNET|CODEX|OPUS)\]\s*/i;
+export const PLAIN_RELAY_LINE_RE =
+  /^\s*relay\s+(opus|sonnet|codex|user)\s*->\s*(opus|sonnet|codex)\s*:?/i;
 export const TASK_DONE_RE = /\[TASK:done\]\s*(.+)/i;
 export const TASK_TAG_LINE_RE = /^\s*\[TASK:(add|done)\]\s*/i;
 export const CMD_OUTPUT_HEADER_RE = /^={3,}\s*.+\s*={3,}$/;
@@ -122,9 +124,16 @@ export function outputToEntries(line: OutputLine): DisplayEntry[] {
   if (line.type === 'info') return [{ text: line.text, kind: 'info' }];
   if (line.type === 'relay') return [];
 
+  // Streaming path emits explicit newline-only chunks to separate paragraphs.
+  // Preserve them as empty entries so UI keeps a blank line between paragraphs.
+  if (/^(?:\r?\n)+$/.test(line.text)) {
+    return [{ text: '', kind: 'empty' }];
+  }
+
   const filteredText = line.text
     .split('\n')
     .filter((l) => !RELAY_LINE_RE.test(l))
+    .filter((l) => !PLAIN_RELAY_LINE_RE.test(l))
     .filter((l) => !TASK_TAG_LINE_RE.test(l))
     .filter((l) => !CMD_OUTPUT_HEADER_RE.test(l.trim()))
     .map((l) => l.replace(RELAY_PREFIX_RE, ''))

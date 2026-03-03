@@ -351,6 +351,24 @@ describe('Orchestrator', () => {
       assert.equal(sonnetUrgent.length, 0, 'Sonnet should NOT receive urgent message immediately');
       assert.equal(codexUrgent.length, 0, 'Codex should NOT receive urgent message immediately');
     });
+
+    it('mutes Opus stdout while user is in direct worker mode', async () => {
+      h.log.outputs = [];
+      h.orchestrator.sendToAgent('codex', 'Message direct pour Codex');
+      await h.flush();
+
+      h.opus.emitText("Je réponds alors que l'user parle à Codex");
+      await h.flush();
+
+      const opusTextOutputs = h.log.outputs.filter(
+        (o) => o.agent === 'opus' && o.line.type === 'stdout',
+      );
+      assert.equal(
+        opusTextOutputs.length,
+        0,
+        'Opus stdout should be muted in direct worker mode',
+      );
+    });
   });
 
   // ── Agent crash ─────────────────────────────────────────────────────────
@@ -953,6 +971,66 @@ describe('Orchestrator', () => {
         (o) => o.agent === 'opus' && o.line.type === 'stdout',
       );
       assert.equal(opusStdout.length, 0, 'Should buffer all Opus stdout while delegates pending');
+    });
+  });
+
+  // ── Opus rate-limit fallback ──────────────────────────────────────────────
+
+  describe('Opus rate-limit fallback', () => {
+    it('replays the first pending user message to codex when limit is detected', async () => {
+      h.orchestrator.sendUserMessage('premier message');
+      await h.flush();
+
+      h.opus.emitInfo("You've hit your limit · resets 12pm (Africa/Tunis)");
+      await h.flush();
+
+      const codexGot = h.codex.getSentMessages().find((m) => m.includes('premier message'));
+      assert.ok(codexGot, 'First pending message should be replayed to Codex immediately');
+    });
+
+    it('routes default user messages to codex while Opus is limited', async () => {
+      h.opus.emitInfo("You've hit your limit · resets 12pm (Africa/Tunis)");
+      await h.flush();
+
+      h.orchestrator.sendUserMessage('message sans @codex');
+      await h.flush();
+
+      const codexGot = h.codex
+        .getSentMessages()
+        .find((m) => m.includes('message sans @codex'));
+      assert.ok(codexGot, 'Codex should receive default user message');
+
+      const opusGot = h.opus
+        .getSentMessages()
+        .find((m) => m.includes('message sans @codex'));
+      assert.equal(opusGot, undefined, 'Opus should not receive redirected message');
+    });
+
+    it('redirects explicit sendToAgent(opus, ...) to codex while limited', async () => {
+      h.opus.emitInfo("OPUS error: You've hit your limit · resets 12pm (Africa/Tunis)");
+      await h.flush();
+
+      h.orchestrator.sendToAgent('opus', 'direct opus request');
+      await h.flush();
+
+      const codexGot = h.codex
+        .getSentMessages()
+        .find((m) => m.includes('direct opus request'));
+      assert.ok(codexGot, 'Codex should receive redirected direct-opus message');
+    });
+
+    it('does not auto-restart Opus while rate-limit window is active', async () => {
+      h.log.outputs.length = 0;
+      h.opus.emitInfo("You've hit your limit · resets 12pm (Africa/Tunis)");
+      await h.flush();
+
+      h.opus.setStatus('error');
+      await h.flush();
+
+      const restartNotice = h.log.outputs.find(
+        (o) => o.agent === 'opus' && /redemarrage en cours/i.test(o.line.text),
+      );
+      assert.equal(restartNotice, undefined, 'Opus should not auto-restart during rate-limit window');
     });
   });
 

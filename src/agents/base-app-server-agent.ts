@@ -65,6 +65,8 @@ export abstract class BaseAppServerAgent implements AgentProcess {
   // Whether any agentMessage/delta events were received for the current item.
   // If false, item/completed falls back to extractText() from the completed item.
   private hadAgentMessageDeltas = false;
+  // How many chars of the agentMessageBuffer have already been streamed to the UI.
+  private streamedLength = 0;
 
   private pendingFileChangeDiff: string | null = null;
 
@@ -175,10 +177,15 @@ export abstract class BaseAppServerAgent implements AgentProcess {
       resetMessageBuffer: () => {
         this.agentMessageBuffer = '';
         this.hadAgentMessageDeltas = false;
+        this.streamedLength = 0;
       },
       appendToMessageBuffer: (delta) => {
         this.agentMessageBuffer += delta;
         this.hadAgentMessageDeltas = true;
+      },
+      getStreamedLength: () => this.streamedLength,
+      setStreamedLength: (n) => {
+        this.streamedLength = n;
       },
       getPendingFileChangeDiff: () => this.pendingFileChangeDiff,
       setPendingFileChangeDiff: (d) => {

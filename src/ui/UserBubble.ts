@@ -1,35 +1,32 @@
 import chalk from 'chalk';
 import stripAnsi from 'strip-ansi';
 import { THEME } from '../config/theme.js';
-import { BUBBLE_SIDE_MARGIN, MAX_READABLE_WIDTH } from '../config/constants.js';
+import { INDENT, MAX_READABLE_WIDTH } from '../config/constants.js';
 import { wordWrap } from '../rendering/ansi-renderer.js';
 
 export function printUserBubble(text: string): void {
   const termW = process.stdout.columns || 80;
-  const margin = Math.max(BUBBLE_SIDE_MARGIN, 1);
-  const bubbleWidth = Math.max(20, termW - margin * 2);
-  const wrapWidth = Math.max(10, Math.min(bubbleWidth - 4, MAX_READABLE_WIDTH));
+  const bodyIndent = `${INDENT} `;
+  const wrapWidth = Math.max(10, Math.min(termW - bodyIndent.length - 2, MAX_READABLE_WIDTH));
   const wrapped = wordWrap(text, wrapWidth, '');
 
-  const formatBg = (line: string): string => {
-    const visible = stripAnsi(line).length;
-    const pad = Math.max(0, bubbleWidth - visible);
-    const side = ' '.repeat(margin);
-    return `${side}${chalk.bgHex(THEME.userBubbleBg)(line + ' '.repeat(pad))}`;
+  const formatLine = (line: string): string => {
+    const vis = stripAnsi(line).length;
+    const clipped = vis > wrapWidth ? line.slice(0, Math.max(0, wrapWidth - 1)) + '…' : line;
+    return `${bodyIndent}${chalk.whiteBright(clipped)}`;
   };
 
-  const userPrefix = chalk.hex(THEME.userPrefix)(' \u276F ');
-  const side = ' '.repeat(margin);
-  const emptyBg = `${side}${chalk.bgHex(THEME.userBubbleBg)(' '.repeat(bubbleWidth))}`;
+  const userLabel = chalk.hex(THEME.userPrefix).bold('You');
+  const header = `${bodyIndent}${userLabel}`;
 
   // Single console.log to avoid Ink ghost lines
-  const outputLines: string[] = [''];
-  outputLines.push(emptyBg);
-  outputLines.push(formatBg(`${userPrefix}${chalk.hex(THEME.text)(wrapped[0] || '')}`));
-  for (let i = 1; i < wrapped.length; i++) {
-    outputLines.push(formatBg(`    ${chalk.hex(THEME.text)(wrapped[i] ?? '')}`));
+  const outputLines: string[] = [];
+  outputLines.push('');
+  outputLines.push(header);
+  for (let i = 0; i < wrapped.length; i++) {
+    outputLines.push(formatLine(wrapped[i] ?? ''));
   }
-  outputLines.push(emptyBg);
+  // Keep one stable visual gap between user and next agent block.
   outputLines.push('');
   console.log(outputLines.join('\n'));
 }

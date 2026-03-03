@@ -27,6 +27,17 @@ function isTableSeparatorRow(line: string): boolean {
   return cells.length > 0 && cells.every((cell) => /^:?-{3,}:?$/.test(cell));
 }
 
+function isPlainParagraphLine(trimmed: string): boolean {
+  if (!trimmed) return false;
+  if (/^#{1,6}\s+/.test(trimmed)) return false;
+  if (/^```/.test(trimmed)) return false;
+  if (/^[-*]\s+/.test(trimmed)) return false;
+  if (/^\d+\.\s+/.test(trimmed)) return false;
+  if (/^>\s*/.test(trimmed)) return false;
+  if (isTableRow(trimmed)) return false;
+  return true;
+}
+
 /** Pad a string that may contain ANSI codes to a visible width */
 function padEndVisible(text: string, width: number): string {
   const visible = stripAnsi(text).length;
@@ -53,23 +64,23 @@ function formatTableBlock(block: string[]): StyledLine[] {
     Math.max(3, ...rows.map((row) => stripAnsi(row[i]).length)),
   );
 
-  const makeBorder = (left: string, mid: string, right: string) =>
-    left + widths.map((w) => '─'.repeat(w + 2)).join(mid) + right;
   const makeRow = (row: string[]) =>
     '│ ' + row.map((cell, i) => padEndVisible(cell, widths[i])).join(' │ ') + ' │';
-
-  const topBorder = makeBorder('┌', '┬', '┐');
-  const midBorder = makeBorder('├', '┼', '┤');
-  const botBorder = makeBorder('└', '┴', '┘');
+  const makeTopBorder = () =>
+    '┌' + widths.map((w) => '─'.repeat(w + 2)).join('┬') + '┐';
+  const makeMidBorder = () =>
+    '├' + widths.map((w) => '─'.repeat(w + 2)).join('┼') + '┤';
+  const makeBottomBorder = () =>
+    '└' + widths.map((w) => '─'.repeat(w + 2)).join('┴') + '┘';
 
   const result: StyledLine[] = [];
-  result.push({ text: topBorder, dim: true });
+  result.push({ text: makeTopBorder(), dim: true });
   result.push({ text: makeRow(rows[0]), bold: true });
+  result.push({ text: makeMidBorder(), dim: true });
   for (let i = 1; i < rows.length; i++) {
-    result.push({ text: midBorder, dim: true });
     result.push({ text: makeRow(rows[i]) });
   }
-  result.push({ text: botBorder, dim: true });
+  result.push({ text: makeBottomBorder(), dim: true });
   return result;
 }
 
@@ -77,6 +88,7 @@ export function renderMarkdown(raw: string): StyledLine[] {
   const lines: StyledLine[] = [];
   const rawLines = raw.split('\n');
   let inCodeBlock = false;
+  let previousPlainLine = '';
 
   for (let idx = 0; idx < rawLines.length; idx++) {
     const line = rawLines[idx];
@@ -85,6 +97,7 @@ export function renderMarkdown(raw: string): StyledLine[] {
     // Empty line → spacer
     if (!trimmed) {
       lines.push({ text: '' });
+      previousPlainLine = '';
       continue;
     }
 
@@ -92,32 +105,30 @@ export function renderMarkdown(raw: string): StyledLine[] {
     if (/^```/.test(trimmed)) {
       inCodeBlock = !inCodeBlock;
       if (inCodeBlock) {
-        // Opening — show language tag if present, add blank line before
+        // Opening — add optional language hint without decorative lines.
         const lang = trimmed.slice(3).trim();
         lines.push({ text: '' });
-        lines.push({
-          text: lang
-            ? `── ${lang} ${'─'.repeat(Math.max(4, 30 - lang.length))}`
-            : '──────────────────────────────────',
-          dim: true,
-        });
+        if (lang) lines.push({ text: `code: ${lang}`, dim: true });
       } else {
-        // Closing — add blank line after
-        lines.push({ text: '──────────────────────────────────', dim: true });
+        // Closing — keep only spacing.
         lines.push({ text: '' });
       }
+      previousPlainLine = '';
       continue;
     }
 
     // Inside code block — preserve as-is with code flag
     if (inCodeBlock) {
       lines.push({ text: line, code: true });
+      previousPlainLine = '';
       continue;
     }
 
     // Horizontal rule ---
     if (/^[-]{3,}$/.test(trimmed) || /^[*]{3,}$/.test(trimmed)) {
-      lines.push({ text: '─────────────────────────────────────', dim: true });
+      // In chat flow this line often creates visual noise; keep only spacing.
+      lines.push({ text: '' });
+      previousPlainLine = '';
       continue;
     }
 
@@ -125,6 +136,7 @@ export function renderMarkdown(raw: string): StyledLine[] {
     const h1 = trimmed.match(/^#\s+(.+)/);
     if (h1) {
       lines.push({ text: clean(h1[1]).toUpperCase(), bold: true, color: 'cyan' });
+      previousPlainLine = '';
       continue;
     }
 
@@ -132,6 +144,7 @@ export function renderMarkdown(raw: string): StyledLine[] {
     const h2 = trimmed.match(/^##\s+(.+)/);
     if (h2) {
       lines.push({ text: clean(h2[1]), bold: true, color: 'white' });
+      previousPlainLine = '';
       continue;
     }
 
@@ -139,6 +152,7 @@ export function renderMarkdown(raw: string): StyledLine[] {
     const h3 = trimmed.match(/^###\s+(.+)/);
     if (h3) {
       lines.push({ text: clean(h3[1]), bold: true, color: 'gray' });
+      previousPlainLine = '';
       continue;
     }
 
@@ -156,27 +170,33 @@ export function renderMarkdown(raw: string): StyledLine[] {
       }
       lines.push(...formatTableBlock(block));
       idx = j - 1;
+      previousPlainLine = '';
       continue;
     }
 
     // Blockquote > text
     const blockquote = trimmed.match(/^>\s*(.*)/);
     if (blockquote) {
-      lines.push({ text: `  │ ${clean(blockquote[1])}`, dim: false });
+      lines.push({ text: `> ${clean(blockquote[1])}`, dim: false });
+      previousPlainLine = '';
       continue;
     }
 
     // Bullet list - or *
     const bullet = trimmed.match(/^[-*]\s+(.+)/);
     if (bullet) {
-      lines.push({ text: `  › ${clean(bullet[1])}` });
+      const item = clean(bullet[1]).replace(/^[\s\u00A0\u2000-\u200B]+/, '');
+      lines.push({ text: `- ${item}` });
+      previousPlainLine = '';
       continue;
     }
 
     // Numbered list
     const numbered = trimmed.match(/^(\d+)\.\s+(.+)/);
     if (numbered) {
-      lines.push({ text: `  ${numbered[1]}. ${clean(numbered[2])}` });
+      const item = clean(numbered[2]).replace(/^[\s\u00A0\u2000-\u200B]+/, '');
+      lines.push({ text: `${numbered[1]}. ${item}` });
+      previousPlainLine = '';
       continue;
     }
 
@@ -187,17 +207,30 @@ export function renderMarkdown(raw: string): StyledLine[] {
       } else {
         lines.push({ text: clean(trimmed) });
       }
+      previousPlainLine = '';
       continue;
     }
 
     // Bold line (like "**Section title:**")
     if (/^\*\*.+\*\*/.test(trimmed) && !trimmed.startsWith('-')) {
       lines.push({ text: clean(trimmed), bold: true, color: 'white' });
+      previousPlainLine = '';
       continue;
     }
 
     // Regular text
+    if (
+      previousPlainLine &&
+      isPlainParagraphLine(previousPlainLine) &&
+      isPlainParagraphLine(trimmed) &&
+      /[.!?:;]$/.test(previousPlainLine) &&
+      previousPlainLine.length >= 40 &&
+      trimmed.length >= 40
+    ) {
+      lines.push({ text: '' });
+    }
     lines.push({ text: clean(trimmed) });
+    previousPlainLine = trimmed;
   }
 
   return dedup(lines);

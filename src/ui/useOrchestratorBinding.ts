@@ -1,5 +1,6 @@
-import { useEffect, type MutableRefObject, type Dispatch } from 'react';
+import { useEffect, useRef, type MutableRefObject, type Dispatch } from 'react';
 import chalk from 'chalk';
+import stripAnsi from 'strip-ansi';
 import type {
   AgentId,
   AgentStatus,
@@ -20,6 +21,67 @@ import { buildResumePrompt } from '../utils/session-manager.js';
 import { flog } from '../utils/log.js';
 
 const VALID_AGENT_IDS = new Set<string>(['opus', 'sonnet', 'codex']);
+const LIVE_STREAM_MIN_TEXT_LEN = 60;
+const LIVE_STREAM_STEP_MS = 12;
+
+function getLiveChunkLen(): number {
+  const termW = process.stdout.columns || 80;
+  return Math.max(100, termW - 6);
+}
+
+function splitLongText(text: string, maxLen: number): string[] {
+  if (stripAnsi(text).length <= maxLen) return [text];
+  const lines = text.split('\n');
+  const out: string[] = [];
+
+  for (const rawLine of lines) {
+    if (!rawLine.trim()) {
+      out.push('');
+      continue;
+    }
+    const words = rawLine.split(/\s+/);
+    let current = '';
+    for (const w of words) {
+      if (!current) {
+        current = w;
+        continue;
+      }
+      const candidate = `${current} ${w}`;
+      if (stripAnsi(candidate).length > maxLen) {
+        out.push(current);
+        current = w;
+      } else {
+        current = candidate;
+      }
+    }
+    if (current) out.push(current);
+  }
+
+  return out.length > 0 ? out : [text];
+}
+
+function splitEntriesForLive(entries: DisplayEntry[], maxLen: number): DisplayEntry[] {
+  const out: DisplayEntry[] = [];
+  for (const e of entries) {
+    if (e.kind !== 'text') {
+      out.push(e);
+      continue;
+    }
+    const chunks = splitLongText(e.text, maxLen);
+    if (chunks.length === 1) {
+      out.push(e);
+      continue;
+    }
+    for (const c of chunks) {
+      if (!c) {
+        out.push({ text: '', kind: 'empty' });
+      } else {
+        out.push({ ...e, text: c });
+      }
+    }
+  }
+  return out;
+}
 
 interface UseOrchestratorBindingDeps {
   orchestrator: Orchestrator;
@@ -95,6 +157,9 @@ export function useOrchestratorBinding(deps: UseOrchestratorBindingDeps) {
     flushBuffer,
     applyDones,
   } = deps;
+  const liveOutputTimers = useRef<
+    Map<ReturnType<typeof setTimeout>, { agent: AgentId; entry: DisplayEntry }>
+  >(new Map());
 
   useEffect(() => {
     orchestrator.setConfig({ projectDir, claudePath, codexPath });
@@ -103,8 +168,41 @@ export function useOrchestratorBinding(deps: UseOrchestratorBindingDeps) {
       onAgentOutput: (agent: AgentId, line: OutputLine) => {
         if (stoppedRef.current) return;
         if (line.type === 'stdout') processTaskTags(agent, line.text);
-        const entries = outputToEntries(line);
+        const rawEntries = outputToEntries(line);
+        const liveChunkLen = getLiveChunkLen();
+        const entries =
+          line.type === 'stdout' ? splitEntriesForLive(rawEntries, liveChunkLen) : rawEntries;
         if (entries.length === 0) return;
+
+        const hasLiveSplit =
+          line.type === 'stdout' &&
+          entries.length > 1 &&
+          entries.some((e) => e.kind === 'text') &&
+          (line.text.includes('\n') ||
+            stripAnsi(line.text).length >= Math.max(LIVE_STREAM_MIN_TEXT_LEN, liveChunkLen + 20));
+        if (hasLiveSplit) {
+          const firstTextIdx = entries.findIndex((e) => e.kind === 'text');
+          const immediateCount = firstTextIdx >= 0 ? firstTextIdx + 1 : 1;
+          const immediateEntries = entries.slice(0, immediateCount);
+          const delayedEntries = entries.slice(immediateCount);
+
+          if (immediateEntries.length > 0) {
+            enqueueOutput(agent, immediateEntries);
+          }
+
+          delayedEntries.forEach((entry, idx) => {
+            const delay = (idx + 1) * LIVE_STREAM_STEP_MS;
+            const timer = setTimeout(() => {
+              const pending = liveOutputTimers.current.get(timer);
+              if (!pending) return;
+              liveOutputTimers.current.delete(timer);
+              if (stoppedRef.current) return;
+              enqueueOutput(pending.agent, [pending.entry]);
+            }, delay);
+            liveOutputTimers.current.set(timer, { agent, entry });
+          });
+          return;
+        }
         enqueueOutput(agent, entries);
       },
       onAgentStatus: (agent: AgentId, status: AgentStatus) => {
@@ -195,6 +293,13 @@ export function useOrchestratorBinding(deps: UseOrchestratorBindingDeps) {
             if (status === 'waiting') {
               const prevTimer = msgCloseTimers.current.get(agent);
               if (prevTimer) clearTimeout(prevTimer);
+              let pendingLiveCount = 0;
+              for (const item of liveOutputTimers.current.values()) {
+                if (item.agent === agent) pendingLiveCount++;
+              }
+              const liveTailMs =
+                pendingLiveCount > 0 ? pendingLiveCount * LIVE_STREAM_STEP_MS + 80 : 0;
+              const closeDelay = Math.max(MSG_CLOSE_GRACE_MS, liveTailMs);
               const timer = setTimeout(() => {
                 msgCloseTimers.current.delete(agent);
                 const stillId = currentMsgRef.current.get(agent);
@@ -203,9 +308,8 @@ export function useOrchestratorBinding(deps: UseOrchestratorBindingDeps) {
                   if (msg) msg.status = 'done';
                   currentMsgRef.current.delete(agent);
                   lastEntryKind.current.delete(agent);
-                  console.log('');
                 }
-              }, MSG_CLOSE_GRACE_MS);
+              }, closeDelay);
               msgCloseTimers.current.set(agent, timer);
             } else {
               const prevTimer = msgCloseTimers.current.get(agent);
@@ -217,7 +321,6 @@ export function useOrchestratorBinding(deps: UseOrchestratorBindingDeps) {
               if (msg) msg.status = 'done';
               currentMsgRef.current.delete(agent);
               lastEntryKind.current.delete(agent);
-              console.log('');
             }
           }
         }
@@ -230,18 +333,41 @@ export function useOrchestratorBinding(deps: UseOrchestratorBindingDeps) {
           flog.debug('UI', `Relay display skipped (empty/fragment): ${msg.from}->${msg.to}`);
           return;
         }
+        // Keep visual ordering deterministic:
+        // 1) force pending live chunks from relay sender
+        // 2) flush buffered output
+        const relayFrom = msg.from as string;
+        const sender =
+          VALID_AGENT_IDS.has(relayFrom) ? (relayFrom as AgentId) : null;
+        if (sender) {
+          const pending: Array<{ agent: AgentId; entry: DisplayEntry }> = [];
+          for (const [timer, item] of liveOutputTimers.current.entries()) {
+            if (item.agent !== sender) continue;
+            clearTimeout(timer);
+            liveOutputTimers.current.delete(timer);
+            pending.push(item);
+          }
+          for (const item of pending) {
+            enqueueOutput(item.agent, [item.entry]);
+          }
+        }
+
+        // 3) flush pending buffered output (e.g. Opus pre-tag text)
+        if (flushTimer.current) {
+          clearTimeout(flushTimer.current);
+          flushTimer.current = null;
+          flushBuffer();
+        }
         const fromId = msg.from as string;
         const toId = msg.to as string;
         const isFromUser = fromId === 'user';
         const fromAgent: AgentId = VALID_AGENT_IDS.has(fromId) ? (fromId as AgentId) : 'opus';
         const toAgent: AgentId = VALID_AGENT_IDS.has(toId) ? (toId as AgentId) : 'opus';
-        const fromName = isFromUser ? 'User' : agentDisplayName(fromAgent);
-        const toName = agentDisplayName(toAgent);
         const fromColor = isFromUser ? THEME.userPrefix : agentHex(fromAgent);
         const toColor = agentHex(toAgent);
-        // Visual separator before delegation header
-        const separator = chalk.dim(`${INDENT}${'─'.repeat(30)}`);
-        const relayHeader = `${INDENT}${chalk.hex(fromColor).bold(fromName)} ${chalk.dim('to')} ${chalk.hex(toColor).bold(toName)}`;
+        const fromName = isFromUser ? 'You' : agentDisplayName(fromAgent);
+        const toName = agentDisplayName(toAgent);
+        const relayHeader = `${INDENT} ${chalk.hex(fromColor).bold(fromName)} ${chalk.dim('->')} ${chalk.hex(toColor).bold(toName)}`;
         const fakeOutputLine: OutputLine = {
           text: msg.content,
           timestamp: Date.now(),
@@ -250,7 +376,8 @@ export function useOrchestratorBinding(deps: UseOrchestratorBindingDeps) {
         const entries = outputToEntries(fakeOutputLine);
         const relayChalkColor = isFromUser ? ('cyan' as const) : agentChalkColor(fromAgent);
         const relayOut = entriesToAnsiOutputLines(entries, relayChalkColor);
-        console.log(`\n${separator}\n${relayHeader}\n${relayOut.join('\n')}\n`);
+        const block = ['', relayHeader, '', ...relayOut].join('\n');
+        console.log(block);
       },
       onRelayBlocked: (msg: Message) => {
         flog.info('UI', `Relay blocked: ${msg.from}->${msg.to}`);
@@ -338,6 +465,7 @@ export function useOrchestratorBinding(deps: UseOrchestratorBindingDeps) {
     const capturedFlushTimer = flushTimer;
     const capturedThinkingTimer = thinkingClearTimer;
     const capturedMsgCloseTimers = msgCloseTimers;
+    const capturedLiveOutputTimers = liveOutputTimers;
     return () => {
       process.off('SIGINT', handleExit);
       process.off('SIGTERM', handleExit);
@@ -348,6 +476,10 @@ export function useOrchestratorBinding(deps: UseOrchestratorBindingDeps) {
         clearTimeout(timer);
       }
       capturedMsgCloseTimers.current.clear();
+      for (const t of capturedLiveOutputTimers.current.keys()) {
+        clearTimeout(t);
+      }
+      capturedLiveOutputTimers.current.clear();
     };
   }, [
     orchestrator,

@@ -15,8 +15,8 @@ describe('constants', () => {
     assert.ok(val > 0);
   });
 
-  it('exports INDENT as 2-space string', () => {
-    assert.strictEqual(INDENT, '  ');
+  it('exports INDENT as 1-space string', () => {
+    assert.strictEqual(INDENT, ' ');
   });
 
   it('exports BUBBLE_SIDE_MARGIN as number', () => {

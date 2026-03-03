@@ -27,6 +27,11 @@ import { BufferManager } from './buffer-manager.js';
 import { DelegateTracker } from './delegate-tracker.js';
 import { RelayRouter } from './relay-router.js';
 import {
+  parseRateLimitWindow,
+  isRateLimitActive,
+  type RateLimitWindow,
+} from '../utils/rate-limit.js';
+import {
   CONVERSATION_SUMMARY_LIMIT,
   CONVERSATION_SUMMARY_TRUNCATE,
 } from '../config/constants.js';
@@ -122,6 +127,9 @@ export class Orchestrator {
   private opusAllModeResponded = false;
   private opusAllModeWorkerTimer: ReturnType<typeof setTimeout> | null = null;
   private opusAllModePendingText: string | null = null;
+  private opusRateLimitWindow: RateLimitWindow | null = null;
+  private lastOpusRedirectNoticeAt = 0;
+  private rateLimitReplayedMsgIds: Set<string> = new Set();
 
   constructor(deps?: OrchestratorDeps) {
     this.opus = deps?.opus ?? new OpusAgent();
@@ -244,6 +252,8 @@ export class Orchestrator {
       ensureWorkerStarted: (id) => this.ensureWorkerStarted(id),
       getWorkerReady: (id) => this.workerReady.get(id) ?? Promise.resolve(),
       sendToWorkersDirectly: (text) => this.sendToWorkersDirectly(text),
+      noteOpusRateLimitFromText: (text) => this.noteOpusRateLimitFromText(text),
+      isOpusRateLimited: () => this.isOpusRateLimited(),
     };
   }
 
@@ -370,8 +380,11 @@ export class Orchestrator {
     this.started = true;
 
     if (this.opus.getSessionId()) {
+      const contextBlock = previousContext
+        ? `\n\n--- HISTORIQUE AVANT INTERRUPTION ---\n${previousContext}\n--- FIN HISTORIQUE ---`
+        : '';
       const resumeMsg = previousContext
-        ? `[NOUVELLE TACHE DU USER] ${task}\n\n[RESET] La session precedente a ete INTERROMPUE par le user (Echap). TOUS les agents (Sonnet, Codex) ont ete STOPPES. Tes delegations precedentes sont ANNULEES — aucun agent ne travaille. Si le user demande une action sur le code/projet, tu DOIS re-deleguer. Ne dis PAS "c'est en cours" ou "j'ai deja lance" — c'est FAUX, les agents sont morts.`
+        ? `[NOUVELLE TACHE DU USER] ${task}\n\n[RESET] La session precedente a ete INTERROMPUE par le user (Echap). TOUS les agents (Sonnet, Codex) ont ete STOPPES. Tes delegations precedentes sont ANNULEES — aucun agent ne travaille. Si le user demande une action sur le code/projet, tu DOIS re-deleguer A TOUS LES AGENTS QUI ETAIENT IMPLIQUES (pas seulement un). Relis l'historique ci-dessous pour savoir qui faisait quoi. Ne dis PAS "c'est en cours" ou "j'ai deja lance" — c'est FAUX, les agents sont morts.${contextBlock}`
         : `[NOUVELLE TACHE DU USER] ${task}`;
       if (!options?.skipFirstMessage) {
         this.opus.send(resumeMsg);
@@ -426,6 +439,82 @@ export class Orchestrator {
     return lines.join('\n');
   }
 
+  private noteOpusRateLimitFromText(text: string): void {
+    const parsed = parseRateLimitWindow(text);
+    if (!parsed) return;
+
+    const prev = this.opusRateLimitWindow;
+    this.opusRateLimitWindow = parsed;
+    if (prev && prev.resetAtMs === parsed.resetAtMs && prev.timezone === parsed.timezone) return;
+
+    flog.warn('ORCH', `Opus rate-limited until ${new Date(parsed.resetAtMs).toISOString()} (${parsed.resetLabel})`);
+    this.callbacks?.onAgentOutput('opus', {
+      text: `Opus limite atteint. Redirection auto vers Codex jusqu'a ${parsed.resetLabel}.`,
+      timestamp: Date.now(),
+      type: 'info',
+    });
+
+    this.replayLatestUserMessageToCodexAfterRateLimit();
+
+    // Suspend Opus while the limit window is active to avoid useless retries/noise.
+    if (this.started && this.opus.status !== 'stopped') {
+      this.opus
+        .stop()
+        .catch((err) => flog.warn('ORCH', `Opus stop after rate-limit failed: ${String(err).slice(0, 120)}`));
+    }
+  }
+
+  private isOpusRateLimited(nowMs = Date.now()): boolean {
+    if (!this.opusRateLimitWindow) return false;
+    if (isRateLimitActive(this.opusRateLimitWindow, nowMs)) return true;
+    flog.info('ORCH', 'Opus rate-limit window expired');
+    this.opusRateLimitWindow = null;
+    this.lastOpusRedirectNoticeAt = 0;
+    this.rateLimitReplayedMsgIds.clear();
+    return false;
+  }
+
+  private replayLatestUserMessageToCodexAfterRateLimit(): void {
+    if (!this.isAgentEnabled('codex')) return;
+    const now = Date.now();
+    const history = this.bus.getHistory();
+    for (let i = history.length - 1; i >= 0; i--) {
+      const m = history[i];
+      if (m.from !== 'user' || m.to !== 'opus') continue;
+      // Only replay very recent messages to avoid forwarding stale history.
+      if (now - m.timestamp > 60_000) return;
+      if (this.rateLimitReplayedMsgIds.has(m.id)) return;
+
+      this.rateLimitReplayedMsgIds.add(m.id);
+      this.callbacks?.onAgentOutput('opus', {
+        text: 'Premier message en attente reroute vers Codex.',
+        timestamp: now,
+        type: 'info',
+      });
+      this.sendToAgent('codex', m.content);
+      return;
+    }
+  }
+
+  private maybeRedirectFromOpusToCodex(text: string): boolean {
+    if (!this.isOpusRateLimited()) return false;
+    if (!this.isAgentEnabled('codex')) return false;
+
+    const now = Date.now();
+    if (now - this.lastOpusRedirectNoticeAt >= 5000) {
+      this.lastOpusRedirectNoticeAt = now;
+      const label = this.opusRateLimitWindow?.resetLabel ?? 'le reset';
+      this.callbacks?.onAgentOutput('opus', {
+        text: `Message route automatiquement vers Codex (Opus limite) jusqu'a ${label}.`,
+        timestamp: now,
+        type: 'info',
+      });
+    }
+
+    this.sendToAgent('codex', text);
+    return true;
+  }
+
   // ── User messaging ──
 
   sendUserMessage(text: string): void {
@@ -433,6 +522,8 @@ export class Orchestrator {
     this.opusPreTagEmitted = false;
     this.relay.clearDirectMode();
     if (this.callbacks) this.buffers.flushOpusBuffer(this.callbacks);
+
+    if (this.maybeRedirectFromOpusToCodex(text)) return;
 
     if (this.relay.hasAnyOnRelay()) {
       this.relay.liveRelayAllowed = true;
@@ -450,6 +541,8 @@ export class Orchestrator {
   }
 
   sendUserMessageLive(text: string, target: AgentId): void {
+    if (target === 'opus' && this.maybeRedirectFromOpusToCodex(text)) return;
+
     const agent = this.agents[target];
     if (agent.status === 'running' || agent.status === 'compacting') {
       const reminder = target === 'opus' ? getOpusContextReminder(this.getBindContext()) : '';
@@ -466,6 +559,8 @@ export class Orchestrator {
   }
 
   sendToAgent(agent: AgentId, text: string): void {
+    if (agent === 'opus' && this.maybeRedirectFromOpusToCodex(text)) return;
+
     if (!this.isAgentEnabled(agent)) {
       this.callbacks?.onAgentOutput(agent, {
         text: `Agent desactive: ${agent}`,
@@ -525,13 +620,29 @@ export class Orchestrator {
     this.opusAllMode = true;
     this.opusAllModeResponded = false;
 
-    const opusAllModeMessage = buildOpusAllModeUserMessage(text);
-    const opus = this.opus;
-    if (opus.status === 'running' || opus.status === 'compacting') {
-      opus.sendUrgent(`[FROM:USER] ${opusAllModeMessage}`);
-      this.bus.record({ from: 'user', to: 'opus', content: opusAllModeMessage });
+    const opusAvailable = !this.isOpusRateLimited();
+    if (opusAvailable) {
+      const opusAllModeMessage = buildOpusAllModeUserMessage(text);
+      const opus = this.opus;
+      if (opus.status === 'running' || opus.status === 'compacting') {
+        opus.sendUrgent(`[FROM:USER] ${opusAllModeMessage}`);
+        this.bus.record({ from: 'user', to: 'opus', content: opusAllModeMessage });
+      } else {
+        this.bus.send({ from: 'user', to: 'opus', content: opusAllModeMessage });
+      }
     } else {
-      this.bus.send({ from: 'user', to: 'opus', content: opusAllModeMessage });
+      this.callbacks?.onAgentOutput('opus', {
+        text: 'Opus limite atteint: @tous route directement vers Sonnet/Codex.',
+        timestamp: Date.now(),
+        type: 'info',
+      });
+      this.sendToWorkersDirectly(text);
+      this.opusAllModePendingText = null;
+      if (this.opusAllModeWorkerTimer) {
+        clearTimeout(this.opusAllModeWorkerTimer);
+        this.opusAllModeWorkerTimer = null;
+      }
+      return;
     }
 
     this.opusAllModePendingText = text;
@@ -598,6 +709,9 @@ export class Orchestrator {
     this.opusAllModeResponded = false;
     this.opusPreTagEmitted = false;
     this.relay.liveRelayAllowed = false;
+    this.opusRateLimitWindow = null;
+    this.lastOpusRedirectNoticeAt = 0;
+    this.rateLimitReplayedMsgIds.clear();
     if (this.opusAllModeWorkerTimer) {
       clearTimeout(this.opusAllModeWorkerTimer);
       this.opusAllModeWorkerTimer = null;

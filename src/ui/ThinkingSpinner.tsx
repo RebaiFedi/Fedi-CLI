@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Text } from 'ink';
 import { THEME } from '../config/theme.js';
+import { INDENT } from '../config/constants.js';
 
 const THINKING_VERBS = [
   'Thinking',
@@ -85,7 +86,7 @@ function ThinkingSpinnerComponent({ compacting }: ThinkingSpinnerProps) {
 
   return (
     <Text>
-      <Text color={color}>{`  ${SPINNER_FRAMES[state.frame]} `}</Text>
+      <Text color={color}>{`${INDENT}${SPINNER_FRAMES[state.frame]} `}</Text>
       <Text color={color} italic>
         {label}
       </Text>

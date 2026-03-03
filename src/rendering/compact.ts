@@ -14,41 +14,35 @@ export function compact(entries: DisplayEntry[]): DisplayEntry[] {
 export function addActionSpacing(raw: DisplayEntry[]): DisplayEntry[] {
   const isToolBlock = (k: string) =>
     k === 'action' || k === 'info' || k === 'tool-header' || k === 'diff-old' || k === 'diff-new';
-  const isDiffLine = (k: string) => k === 'diff-old' || k === 'diff-new';
   const out: DisplayEntry[] = [];
   for (let i = 0; i < raw.length; i++) {
     out.push(raw[i]);
-    // Add spacing after a tool block ends (last diff line or standalone action)
-    if (isToolBlock(raw[i].kind) && i + 1 < raw.length) {
-      const next = raw[i + 1];
-      if (!isToolBlock(next.kind) && next.kind !== 'empty') {
-        out.push({ text: '', kind: 'empty' });
-      }
+    if (i + 1 >= raw.length) continue;
+
+    const current = raw[i];
+    const next = raw[i + 1];
+
+    // Keep headings readable without over-spacing the stream.
+    if (next.kind === 'heading' && current.kind !== 'empty' && current.kind !== 'heading') {
+      out.push({ text: '', kind: 'empty' });
+      continue;
     }
-    // Add spacing between distinct tool operations: when a diff/action block
-    // is followed by a new tool-header (= new file operation starting)
+
+    // Add one gap before entering a tool/action block from plain text.
     if (
-      i + 1 < raw.length &&
-      raw[i + 1].kind === 'tool-header' &&
-      (isDiffLine(raw[i].kind) || raw[i].kind === 'action' || raw[i].kind === 'tool-header')
+      !isToolBlock(current.kind) &&
+      isToolBlock(next.kind) &&
+      current.kind !== 'empty'
     ) {
       out.push({ text: '', kind: 'empty' });
+      continue;
     }
-    // Add spacing before a tool block starts
+
+    // Separate consecutive tool invocations to keep blocks readable
+    // (e.g. Edit ... then Edit ...).
     if (
-      i + 1 < raw.length &&
-      (raw[i + 1].kind === 'action' || raw[i + 1].kind === 'tool-header') &&
-      !isToolBlock(raw[i].kind) &&
-      raw[i].kind !== 'empty'
-    ) {
-      out.push({ text: '', kind: 'empty' });
-    }
-    // Add spacing before headings (paragraph break) — but not if prev is empty/heading
-    if (
-      i + 1 < raw.length &&
-      raw[i + 1].kind === 'heading' &&
-      raw[i].kind !== 'empty' &&
-      raw[i].kind !== 'heading'
+      current.kind !== 'empty' &&
+      next.kind === 'tool-header'
     ) {
       out.push({ text: '', kind: 'empty' });
     }

@@ -58,6 +58,8 @@ export interface OrchestratorBindContext {
   ensureWorkerStarted(agentId: WorkerAgentId): Promise<void>;
   getWorkerReady(agentId: WorkerAgentId): Promise<void>;
   sendToWorkersDirectly(text: string): void;
+  noteOpusRateLimitFromText(text: string): void;
+  isOpusRateLimited(): boolean;
 }
 
 // ── Context helpers ──
@@ -489,6 +491,15 @@ export function bindOrchestrator(ctx: OrchestratorBindContext, cb: OrchestratorC
   ctx.opus.onOutput((line: OutputLine) => {
     if (line.type === 'checkpoint') return;
     if (ctx.stopping) return;
+    if (line.type === 'info') ctx.noteOpusRateLimitFromText(line.text);
+    // Mute Opus stdout while user is talking directly to a worker
+    if (
+      line.type === 'stdout' &&
+      (ctx.relay.isDirectMode('sonnet') || ctx.relay.isDirectMode('codex'))
+    ) {
+      flog.debug('ORCH', 'Opus stdout muted (user in direct worker mode)');
+      return;
+    }
     flog.debug('AGENT', 'Output', {
       agent: 'opus',
       type: line.type,

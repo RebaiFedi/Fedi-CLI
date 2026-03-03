@@ -5,6 +5,7 @@ import type { AgentId, ChatMessage } from '../agents/types.js';
 import type { TodoItem } from './TodoPanel.js';
 import type { Orchestrator } from '../orchestrator/orchestrator.js';
 import { THEME } from '../config/theme.js';
+import { INDENT } from '../config/constants.js';
 import { printUserBubble } from './UserBubble.js';
 import { flog } from '../utils/log.js';
 
@@ -42,6 +43,7 @@ export function useInputHandler({
   return useCallback(
     (text: string) => {
       flog.debug('UI', `User input: ${text.slice(0, 100)}`);
+      const printRestart = () => console.log(chalk.dim(`${INDENT}Redemarrage...`));
 
       // ── Slash commands — local config, not sent to agents ──────────────
       if (text.trim().startsWith('/')) {
@@ -125,7 +127,7 @@ export function useInputHandler({
           stoppedRef.current = false;
           setTodos(() => []);
           pendingAgentDones.current.clear();
-          if (isRestart) console.log('Redemarrage...');
+          if (isRestart) printRestart();
           orchestrator
             .restart(`@tous ${allMessage}`, { skipFirstMessage: true })
             .then(() => {
@@ -194,19 +196,16 @@ export function useInputHandler({
         setTodos(() => []);
         pendingAgentDones.current.clear();
         if (targetAgent && targetAgent !== 'opus') {
-          const agentNames: Record<string, string> = { opus: 'Opus', claude: 'Sonnet', sonnet: 'Sonnet', codex: 'Codex' };
-          if (isRestart) console.log('Redemarrage...');
+          if (isRestart) printRestart();
           orchestrator.setDirectMode(targetAgent);
           orchestrator
-            .restart(
-              `Le user parle directement a ${agentNames[targetAgent] ?? targetAgent} via @${targetAgent}. NE FAIS RIEN. N'execute AUCUNE tache. Attends en silence.`,
-            )
+            .restart(agentMessage, { skipFirstMessage: true })
             .then(() => {
               orchestrator.sendToAgent(targetAgent!, agentMessage);
             })
             .catch((err) => flog.error('UI', `[DASHBOARD] Start error: ${err}`));
         } else {
-          if (isRestart) console.log('Redemarrage...');
+          if (isRestart) printRestart();
           orchestrator
             .restart(targetAgent === 'opus' ? agentMessage : text)
             .catch((err) => flog.error('UI', `[DASHBOARD] Start error: ${err}`));

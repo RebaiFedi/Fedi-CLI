@@ -76,7 +76,7 @@ export const TOOL_STYLES: Record<ToolAction, { icon: string; label: string; colo
   edit: { icon: '~', label: 'Edit', color: '#FBBF24' },
   delete: { icon: 'x', label: 'Delete', color: '#F87171' },
   bash: { icon: '$', label: 'Exec', color: '#6EE7B7' },
-  glob: { icon: '?', label: 'Search', color: '#93C5FD' },
+  glob: { icon: '?', label: 'Explore', color: '#93C5FD' },
   grep: { icon: '/', label: 'Grep', color: '#93C5FD' },
   fetch: { icon: '@', label: 'Fetch', color: '#67E8F9' },
   agent: { icon: '*', label: 'Agent', color: '#C4B5FD' },
@@ -116,22 +116,24 @@ function formatActionLine(text: string, maxW: number): string {
   // Status snippets (✦ prefix) — handled by entryToAnsiLines with word-wrap
   if (trimmed.startsWith('✦ ')) {
     const snippet = trimmed.slice(2);
-    return `  ${chalk.hex(THEME.muted)('│')} ${chalk.hex('#CBD5E1')(snippet)}`;
+    return chalk.whiteBright(snippet);
   }
 
   for (const { re, tool } of ACTION_PATTERNS) {
     if (re.test(trimmed)) {
       const value = trimmed.replace(re, '').trim();
+      if (tool === 'agent' && !value) return '';
       const style = TOOL_STYLES[tool];
       const labelStr = chalk.hex(style.color).bold(style.label);
-      const short = value.length > maxW - 20 ? value.slice(0, maxW - 23) + '…' : value;
-      return `  ${chalk.hex(style.color)(style.icon)} ${labelStr} ${chalk.hex(THEME.actionValue)(short)}`;
+      const short = value.length > maxW - 22 ? value.slice(0, maxW - 25) + '…' : value;
+      if (!short) return '';
+      return `${labelStr} ${chalk.whiteBright(short)}`;
     }
   }
 
   // Generic action — dim with left marker
-  const short = trimmed.length > maxW - 6 ? trimmed.slice(0, maxW - 9) + '…' : trimmed;
-  return `  ${chalk.dim('↳')} ${chalk.hex(THEME.actionText)(short)}`;
+  const short = trimmed.length > maxW - 8 ? trimmed.slice(0, maxW - 11) + '…' : trimmed;
+  return chalk.whiteBright(short);
 }
 
 // ── Tool header formatter (rich metadata) ────────────────────────────────────
@@ -140,29 +142,27 @@ function formatToolHeader(text: string, tool: ToolAction, maxW: number): string[
   const style = TOOL_STYLES[tool];
   // Extract the file/command from the raw text (format: "▸ verb path/to/file")
   const detail = text.replace(/^▸\s*\S+\s*/, '').trim();
-  const short = detail.length > maxW - 20 ? detail.slice(0, maxW - 23) + '…' : detail;
+  if (tool === 'agent' && !detail) return [];
+  const short = detail.length > maxW - 22 ? detail.slice(0, maxW - 25) + '…' : detail;
 
-  const icon = chalk.hex(style.color)(style.icon);
   const label = chalk.hex(style.color).bold(style.label);
-  const value = chalk.hex('#E2E8F0')(short);
+  const value = chalk.whiteBright(short);
 
-  return [`${INDENT}  ${icon} ${label} ${value}`];
+  return [`${label} ${value}`];
 }
 
 // ── Diff line formatters ─────────────────────────────────────────────────────
 
 function formatDiffOld(text: string, maxW: number, lineNum?: number): string {
-  const clipped = text.length > maxW - 12 ? text.slice(0, maxW - 15) + '…' : text;
-  const border = chalk.hex('#7F1D1D')('│');
+  const clipped = text.length > maxW - 14 ? text.slice(0, maxW - 17) + '…' : text;
   const numStr = lineNum != null ? chalk.hex('#7F1D1D')(String(lineNum).padStart(4)) + ' ' : '';
-  return `${INDENT}    ${numStr}${border} ${chalk.hex('#EF4444')(`- ${clipped}`)}`;
+  return `${numStr}${chalk.hex('#EF4444')(`- ${clipped}`)}`;
 }
 
 function formatDiffNew(text: string, maxW: number, lineNum?: number): string {
-  const clipped = text.length > maxW - 12 ? text.slice(0, maxW - 15) + '…' : text;
-  const border = chalk.hex('#14532D')('│');
+  const clipped = text.length > maxW - 14 ? text.slice(0, maxW - 17) + '…' : text;
   const numStr = lineNum != null ? chalk.hex('#14532D')(String(lineNum).padStart(4)) + ' ' : '';
-  return `${INDENT}    ${numStr}${border} ${chalk.hex('#22C55E')(`+ ${clipped}`)}`;
+  return `${numStr}${chalk.hex('#22C55E')(`+ ${clipped}`)}`;
 }
 
 // ── Entry renderer ───────────────────────────────────────────────────────────
@@ -171,40 +171,46 @@ export function entryToAnsiLines(
   e: DisplayEntry,
   _agentColor: 'green' | 'yellow' | 'magenta' | 'cyan',
 ): string[] {
+  const visibleText = stripAnsi(e.text).trim();
+  if (!visibleText && e.kind !== 'empty' && e.kind !== 'code' && e.kind !== 'separator') {
+    return [];
+  }
   const termW = process.stdout.columns || 80;
-  const rightMargin = 2; // small right margin so text doesn't touch terminal edge
-  const maxW = Math.max(20, Math.min(termW - INDENT.length - rightMargin, MAX_READABLE_WIDTH));
-  const wrapW = INDENT.length + maxW;
-  const contIndent = INDENT + '  ';
+  const rightMargin = 1;
+  const leftPad = `${INDENT} `;
+  const maxW = Math.max(20, Math.min(termW - rightMargin - leftPad.length, MAX_READABLE_WIDTH));
+  const wrapW = maxW;
+  const contIndent = '';
+  const withPad = (lines: string[]) => lines.map((l) => `${leftPad}${l}`);
 
   if (e.kind === 'empty') return [''];
 
   if (isTableLine(e.text)) {
     const clipped =
       e.text.length > maxW ? `${e.text.slice(0, Math.max(0, maxW - 1))}\u2026` : e.text;
-    if (e.kind === 'separator') return [`${INDENT}${chalk.dim(clipped)}`];
-    if (e.kind === 'heading') return [`${INDENT}${chalk.hex(THEME.text).bold(clipped)}`];
-    return [`${INDENT}${clipped}`];
+    if (e.kind === 'separator') return withPad([chalk.dim(clipped)]);
+    if (e.kind === 'heading') return withPad([chalk.whiteBright.bold(clipped)]);
+    return withPad([chalk.whiteBright(clipped)]);
   }
 
   if (e.kind === 'info') {
-    const icon = chalk.hex(THEME.info)('▸');
-    const raw = `${INDENT}${icon} ${chalk.hex(THEME.info)(e.text)}`;
-    return wordWrap(raw, wrapW, contIndent);
+    const styled = chalk.hex(THEME.info)(e.text);
+    const lines = wordWrap(styled, wrapW, contIndent);
+    return withPad(lines);
   }
 
   // Rich tool header (from toolMeta)
   if (e.kind === 'tool-header') {
     const tool = e.tool ?? 'read';
-    return formatToolHeader(e.text, tool, maxW);
+    return withPad(formatToolHeader(e.text, tool, maxW));
   }
 
   // Diff lines (with optional line numbers)
   if (e.kind === 'diff-old') {
-    return [formatDiffOld(e.text, maxW, e.lineNum)];
+    return withPad([formatDiffOld(e.text, maxW, e.lineNum)]);
   }
   if (e.kind === 'diff-new') {
-    return [formatDiffNew(e.text, maxW, e.lineNum)];
+    return withPad([formatDiffNew(e.text, maxW, e.lineNum)]);
   }
 
   // Legacy action (without rich metadata)
@@ -212,47 +218,39 @@ export function entryToAnsiLines(
     // Status snippets (✦) get word-wrapped instead of truncated
     if (e.text.trim().startsWith('✦ ')) {
       const snippet = e.text.trim().slice(2);
-      const border = chalk.hex(THEME.muted)('│');
-      const styled = chalk.hex('#CBD5E1')(snippet);
-      const prefix = `${INDENT}  ${border} `;
-      const raw = `${prefix}${styled}`;
-      return wordWrap(raw, wrapW, `${INDENT}  ${border} `);
+      const styled = chalk.whiteBright(snippet);
+      const wrapped = wordWrap(styled, wrapW, '');
+      return withPad(wrapped);
     }
     const formatted = formatActionLine(e.text, maxW);
-    return [`${INDENT}${formatted}`];
+    if (!stripAnsi(formatted).trim()) return [];
+    return withPad([formatted]);
   }
 
   if (e.kind === 'code') {
-    // Code block: left border + monospace color
-    const border = chalk.hex(THEME.codeBorder)('│');
+    // Code block: plain aligned text without decorative borders.
     const lines = e.text.split('\n');
-    return lines.map((l) => {
+    return withPad(lines.map((l) => {
       const visLen = stripAnsi(l).length;
       const clipped = visLen > maxW - 6 ? l.slice(0, maxW - 9) + '…' : l;
-      return `${INDENT} ${border} ${chalk.hex(THEME.info)(clipped)}`;
-    });
+      return chalk.hex(THEME.info)(clipped);
+    }));
   }
 
   if (e.kind === 'separator') {
-    // Thin horizontal rule — code block delimiters or markdown hr
-    const width = Math.min(maxW, 48);
-    const rule = chalk.hex(THEME.separator)('─'.repeat(width));
-    return [`${INDENT} ${rule}`];
+    // No decorative horizontal rules in chat flow.
+    return [''];
   }
 
   if (e.kind === 'heading') {
-    const col = e.color === 'cyan' ? chalk.hex(THEME.sonnet) : chalk.hex(THEME.text);
-    const marker = chalk.hex(THEME.muted)('▌ ');
-    const raw = `${marker}${col.bold(e.text)}`;
-    const headingLines = wordWrap(raw, maxW, contIndent).map((l, i) =>
-      i === 0 ? `${INDENT}${l}` : l,
-    );
-    return headingLines;
+    const col = e.color === 'cyan' ? chalk.hex(THEME.sonnet) : chalk.whiteBright;
+    const headingLines = wordWrap(col.bold(e.text), wrapW, contIndent);
+    return withPad(headingLines);
   }
 
   // Regular text
-  const styled = chalk.hex('#CBD5E1')(e.text);
-  return wordWrap(styled, maxW, contIndent).map((l, i) => (i === 0 ? `${INDENT}${l}` : l));
+  const styled = chalk.whiteBright(e.text);
+  return withPad(wordWrap(styled, wrapW, contIndent));
 }
 
 /** Convert entries to ANSI lines with proper spacing around action groups */

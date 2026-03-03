@@ -205,6 +205,20 @@ describe('RelayRouter', () => {
       assert.equal(foundRelayTag, true);
     });
 
+    it('defers superseded draft relay dispatch to keep UI ordering stable', async () => {
+      const { router, relays } = makeRouter();
+      router.detectRelayPatterns(
+        'opus',
+        'Intro pre-tag\n[TO:SONNET] frontend work\n[TO:CODEX] backend work',
+      );
+
+      // Deferred dispatch should not fire in the same tick.
+      assert.equal(relays.length, 0);
+
+      await new Promise((r) => setTimeout(r, 20));
+      assert.ok(relays.some((m) => m.to === 'sonnet'), 'first relay should be dispatched');
+    });
+
     it('returns pre-tag lines before relay tags', () => {
       const { router } = makeRouter();
       const { foundRelayTag, preTagLines } = router.detectRelayPatterns(

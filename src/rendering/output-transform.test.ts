@@ -4,6 +4,7 @@ import {
   outputToEntries,
   extractTasks,
   RELAY_LINE_RE,
+  PLAIN_RELAY_LINE_RE,
   TASK_TAG_LINE_RE,
 } from './output-transform.js';
 import type { OutputLine } from '../agents/types.js';
@@ -46,6 +47,11 @@ describe('outputToEntries', () => {
     assert.equal(entries.length, 0);
   });
 
+  it('filters out plain relay control lines from stdout', () => {
+    const entries = outputToEntries(mkLine('relay Opus -> Sonnet'));
+    assert.equal(entries.length, 0);
+  });
+
   it('filters out TASK tag lines from stdout', () => {
     const entries = outputToEntries(mkLine('[TASK:add] build the page'));
     assert.equal(entries.length, 0);
@@ -54,6 +60,12 @@ describe('outputToEntries', () => {
   it('returns empty for whitespace-only text', () => {
     const entries = outputToEntries(mkLine('   \n  \n  '));
     assert.equal(entries.length, 0);
+  });
+
+  it('preserves explicit paragraph separators', () => {
+    const entries = outputToEntries(mkLine('\n'));
+    assert.equal(entries.length, 1);
+    assert.equal(entries[0].kind, 'empty');
   });
 
   it('converts Codex checkpoint to action', () => {
@@ -102,6 +114,12 @@ describe('regex patterns', () => {
     assert.ok(RELAY_LINE_RE.test('[TO:SONNET] do this'));
     assert.ok(RELAY_LINE_RE.test('  [TO:CODEX] do that'));
     assert.ok(!RELAY_LINE_RE.test('I told [TO:SONNET] to do this'));
+  });
+
+  it('PLAIN_RELAY_LINE_RE matches relay control markers', () => {
+    assert.ok(PLAIN_RELAY_LINE_RE.test('relay Opus -> Sonnet'));
+    assert.ok(PLAIN_RELAY_LINE_RE.test(' relay codex->opus:'));
+    assert.ok(!PLAIN_RELAY_LINE_RE.test('relay strategy for agents'));
   });
 
   it('TASK_TAG_LINE_RE matches task tags', () => {
