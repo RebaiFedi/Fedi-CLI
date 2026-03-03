@@ -60,11 +60,11 @@ export interface UserConfig {
   maxRelaysPerWindow: number;
   /** Relay rate-limit window (ms). Default: 60000 */
   relayWindowMs: number;
-  /** Output flush interval (ms). Default: 400 */
+  /** Output flush interval (ms). Default: 50 */
   flushIntervalMs: number;
   /** Max messages in chat buffer. Default: 200 */
   maxMessages: number;
-  /** Max cross-talk messages per round. Default: 20 */
+  /** Max cross-talk messages per round. Default: 5 */
   maxCrossTalkPerRound: number;
   /** Cross-talk mute hard ceiling (ms). Default: 15000 */
   crossTalkMuteTimeoutMs: number;
@@ -117,9 +117,9 @@ const UserConfigSchema = z
     delegateTimeoutMs: z.number().min(0).default(120_000),
     maxRelaysPerWindow: z.number().min(1).default(50),
     relayWindowMs: z.number().min(1000).default(60_000),
-    flushIntervalMs: z.number().min(50).default(400),
+    flushIntervalMs: z.number().min(10).default(50),
     maxMessages: z.number().min(10).default(200),
-    maxCrossTalkPerRound: z.number().min(1).default(20),
+    maxCrossTalkPerRound: z.number().min(1).default(5),
     crossTalkMuteTimeoutMs: z.number().min(1000).default(15_000),
     crossTalkClearThresholdMs: z.number().min(500).default(2_000),
     maxLogFiles: z.number().min(1).default(20),
@@ -150,9 +150,9 @@ const DEFAULTS: UserConfig = {
   delegateTimeoutMs: 120_000,
   maxRelaysPerWindow: 50,
   relayWindowMs: 60_000,
-  flushIntervalMs: 400,
+  flushIntervalMs: 50,
   maxMessages: 200,
-  maxCrossTalkPerRound: 20,
+  maxCrossTalkPerRound: 5,
   crossTalkMuteTimeoutMs: 15_000,
   crossTalkClearThresholdMs: 2_000,
   maxLogFiles: 20,

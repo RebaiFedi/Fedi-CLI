@@ -15,6 +15,8 @@ export class RpcClient {
   private rpcId = 0;
   private pendingRpc = new Map<number, PendingRpc>();
   private logTag: string;
+  private writeQueue: string[] = [];
+  private writing = false;
 
   constructor(
     private getProcess: () => ChildProcess | null,
@@ -95,6 +97,8 @@ export class RpcClient {
 
   /** Reject all pending RPCs (used on process exit or stop). */
   rejectAll(reason: string): void {
+    this.writeQueue = [];
+    this.writing = false;
     for (const [id, { reject, timer }] of this.pendingRpc) {
       clearTimeout(timer);
       reject(new Error(reason));
@@ -104,6 +108,8 @@ export class RpcClient {
 
   /** Reject all pending RPCs and clear timeouts (used on process exit). */
   rejectAllNoTimeout(reason: string): void {
+    this.writeQueue = [];
+    this.writing = false;
     const entries = [...this.pendingRpc.values()];
     this.pendingRpc.clear();
     for (const { reject, timer } of entries) {
@@ -116,13 +122,33 @@ export class RpcClient {
     return this.pendingRpc.size > 0;
   }
 
-  /** Write a JSON-RPC message to stdin, handling backpressure correctly. */
+  /** Write a JSON-RPC message to stdin via a serialized queue with backpressure. */
   private writeToStdin(proc: ChildProcess, msg: string): void {
-    const ok = proc.stdin!.write(msg + '\n');
-    if (!ok) {
-      proc.stdin!.once('drain', () => {
-        flog.debug('AGENT', `${this.logTag}: stdin drain resolved`);
-      });
+    if (!proc.stdin?.writable) {
+      flog.warn('AGENT', `${this.logTag}: stdin not writable — message dropped`);
+      return;
     }
+    this.writeQueue.push(msg + '\n');
+    if (!this.writing) {
+      this.drainQueue(proc);
+    }
+  }
+
+  /** Drain the write queue, pausing on backpressure until stdin drains. */
+  private drainQueue(proc: ChildProcess): void {
+    this.writing = true;
+    while (this.writeQueue.length > 0) {
+      const next = this.writeQueue.shift()!;
+      const ok = proc.stdin!.write(next);
+      if (!ok) {
+        // Buffer full — wait for drain then continue
+        proc.stdin!.once('drain', () => {
+          flog.debug('AGENT', `${this.logTag}: stdin drain resolved, resuming queue`);
+          this.drainQueue(proc);
+        });
+        return;
+      }
+    }
+    this.writing = false;
   }
 }

@@ -338,10 +338,21 @@ export function Dashboard({
             e.kind === 'diff-old' ||
             e.kind === 'diff-new',
         );
+      // Text content → fast flush for streaming effect
+      const isTextContent =
+        entries.length > 0 &&
+        entries.some(
+          (e) => e.kind === 'text' || e.kind === 'heading' || e.kind === 'code',
+        );
       outputBuffer.current.push({ agent, entries });
       if (isFirstChunk) {
         if (flushTimer.current) clearTimeout(flushTimer.current);
         flushTimer.current = setTimeout(flushBuffer, 0);
+      } else if (isTextContent) {
+        // Flush text content rapidly for streaming effect
+        if (!flushTimer.current) {
+          flushTimer.current = setTimeout(flushBuffer, 30);
+        }
       } else if (isActionLike) {
         if (!flushTimer.current) {
           flushTimer.current = setTimeout(flushBuffer, 80);

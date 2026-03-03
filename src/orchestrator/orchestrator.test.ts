@@ -1,6 +1,7 @@
 import { describe, it, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { createTestOrchestrator, type TestHarness } from '../test-utils/test-harness.js';
+import { loadUserConfig } from '../config/user-config.js';
 
 describe('Orchestrator', () => {
   let h: TestHarness;
@@ -115,9 +116,10 @@ describe('Orchestrator', () => {
       assert.equal(codexTextOutputs.length, 0, 'codex stdout should be muted during cross-talk');
     });
 
-    it('blocks 21st cross-talk when limit is 20 per round', async () => {
-      // Send 20 cross-talk messages (the max)
-      for (let i = 0; i < 20; i++) {
+    it('blocks cross-talk beyond maxCrossTalkPerRound limit', async () => {
+      const max = loadUserConfig().maxCrossTalkPerRound;
+      // Send max cross-talk messages
+      for (let i = 0; i < max; i++) {
         h.sonnet.emitText(`[TO:CODEX] Cross-talk message ${i + 1}`);
       }
       h.sonnet.setStatus('waiting');
@@ -125,12 +127,12 @@ describe('Orchestrator', () => {
 
       const relaysBefore = h.log.relays.length;
 
-      // 21st should be blocked
-      h.sonnet.emitText('[TO:CODEX] Cross-talk message 21 should be blocked');
+      // (max+1)th should be blocked
+      h.sonnet.emitText(`[TO:CODEX] Cross-talk message ${max + 1} should be blocked`);
       h.sonnet.setStatus('waiting');
       await h.flush();
 
-      assert.equal(h.log.relays.length, relaysBefore, '21st cross-talk should not produce a relay');
+      assert.equal(h.log.relays.length, relaysBefore, `${max + 1}th cross-talk should not produce a relay`);
     });
   });
 
@@ -905,6 +907,35 @@ describe('Orchestrator', () => {
       assert.ok(
         h.log.relays.length >= 1 || h.orchestrator.hasPendingDelegates,
         'Relay tag should create a delegate',
+      );
+    });
+
+    it('pre-tag text is not re-buffered after delegation starts', async () => {
+      // Opus emits intro text + delegation in one chunk
+      h.log.outputs.length = 0;
+      h.opus.emitText('Je delegue a Sonnet.\n[TO:SONNET] Analyse le code');
+      await h.flush();
+
+      // The pre-tag text should appear exactly once
+      const opusStdout = h.log.outputs.filter(
+        (o) => o.agent === 'opus' && o.line.type === 'stdout',
+      );
+      assert.equal(opusStdout.length, 1, 'Pre-tag text should appear exactly once');
+      assert.match(opusStdout[0].line.text, /delegue/);
+
+      // Now simulate Opus emitting a follow-up line immediately after (same streaming chunk)
+      // This line should be swallowed by the opusPreTagEmitted guard
+      h.log.outputs.length = 0;
+      h.opus.emitText('Je delegue a Sonnet.');
+      await h.flush();
+
+      const postGuardOutputs = h.log.outputs.filter(
+        (o) => o.agent === 'opus' && o.line.type === 'stdout',
+      );
+      assert.equal(
+        postGuardOutputs.length,
+        0,
+        'Text after pre-tag emission should be swallowed by the guard (not re-buffered)',
       );
     });
 

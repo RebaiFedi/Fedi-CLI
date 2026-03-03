@@ -338,6 +338,17 @@ export class RelayRouter {
     return sanitized;
   }
 
+  // ── Anti-politeness filter ──
+
+  /** Returns true if the message is purely polite with no technical substance */
+  isPolitenesOnly(content: string): boolean {
+    const stripped = content.replace(/[!?.,:;\-–—\s]/g, '').toLowerCase();
+    // If the cleaned text is long enough, it likely has substance
+    if (stripped.length > 60) return false;
+    const politePatterns = /^(merci|super|nickel|ok|bravo|genial|parfait|cool|top|bonne?\s*continuation|a\s*bientot|bien\s*recu|compris|entendu|recu|cest?\s*bon|daccord|no\s*souci|pas\s*de\s*souci|formidable|excellent|magnifique|chapeau|good|great|thanks|thank\s*you|awesome|nice|perfect|got\s*it)+$/;
+    return politePatterns.test(stripped);
+  }
+
   // ── Core routing with guard rails ──
 
   routeRelayMessage(from: AgentId, target: AgentId, rawContent: string): void {
@@ -390,15 +401,40 @@ export class RelayRouter {
         );
         return;
       }
+      // Anti-politeness filter: block messages that are purely polite with no technical content
+      if (this.isPolitenesOnly(content)) {
+        flog.info('ORCH', `Cross-talk BLOCKED ${from}->${target} (politeness only, no technical content)`);
+        return;
+      }
       if (this.deps.crossTalk.isAtLimit()) {
         flog.warn('ORCH', `Cross-talk limit reached — blocking ${from}->${target}`);
       } else {
-        this.deps.crossTalk.increment();
-        flog.info('ORCH', `Cross-talk ${this.deps.crossTalk.crossTalkCount}: ${from}->${target}`);
-        this.deps.crossTalk.setAwaitingReply(from);
-        this.deps.crossTalk.setOnCrossTalk(target);
-        flog.info('ORCH', `Cross-talk MUTE SET for ${target}, ${from} awaiting reply`);
-        this.deps.bus.relay(from, target, content);
+        // Turn-based: determine if this is a reply or a new initiation
+        const currentSpeaker = this.deps.crossTalk.getCurrentSpeaker();
+        const isReply = currentSpeaker === target && this.deps.crossTalk.isAwaitingReply(target);
+
+        if (isReply) {
+          // This is a reply to the current speaker — allow and release turn
+          this.deps.crossTalk.releaseTurn();
+          this.deps.crossTalk.clearAwaitingReply(target);
+          this.deps.crossTalk.increment();
+          flog.info('ORCH', `Cross-talk reply ${this.deps.crossTalk.crossTalkCount}: ${from}->${target}`);
+          this.deps.crossTalk.setOnCrossTalk(target);
+          this.deps.bus.relay(from, target, content);
+        } else if (!this.deps.crossTalk.canSpeak(from)) {
+          // Another agent holds the turn and this is not a reply — queue it
+          flog.info('ORCH', `Cross-talk QUEUED ${from}->${target} (${currentSpeaker} is speaking)`);
+          this.deps.crossTalk.queueMessage(from, target, content);
+        } else {
+          // No one speaking or it's the same speaker — claim turn and route
+          this.deps.crossTalk.claimTurn(from);
+          this.deps.crossTalk.increment();
+          flog.info('ORCH', `Cross-talk ${this.deps.crossTalk.crossTalkCount}: ${from}->${target}`);
+          this.deps.crossTalk.setAwaitingReply(from);
+          this.deps.crossTalk.setOnCrossTalk(target);
+          flog.info('ORCH', `Cross-talk MUTE SET for ${target}, ${from} awaiting reply`);
+          this.deps.bus.relay(from, target, content);
+        }
       }
       return;
     }

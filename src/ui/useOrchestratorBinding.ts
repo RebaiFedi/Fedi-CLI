@@ -239,6 +239,8 @@ export function useOrchestratorBinding(deps: UseOrchestratorBindingDeps) {
         const toName = agentDisplayName(toAgent);
         const fromColor = isFromUser ? THEME.userPrefix : agentHex(fromAgent);
         const toColor = agentHex(toAgent);
+        // Visual separator before delegation header
+        const separator = chalk.dim(`${INDENT}${'─'.repeat(30)}`);
         const relayHeader = `${INDENT}${chalk.hex(fromColor).bold(fromName)} ${chalk.dim('to')} ${chalk.hex(toColor).bold(toName)}`;
         const fakeOutputLine: OutputLine = {
           text: msg.content,
@@ -248,7 +250,7 @@ export function useOrchestratorBinding(deps: UseOrchestratorBindingDeps) {
         const entries = outputToEntries(fakeOutputLine);
         const relayChalkColor = isFromUser ? ('cyan' as const) : agentChalkColor(fromAgent);
         const relayOut = entriesToAnsiOutputLines(entries, relayChalkColor);
-        console.log(`\n${relayHeader}\n${relayOut.join('\n')}\n`);
+        console.log(`\n${separator}\n${relayHeader}\n${relayOut.join('\n')}\n`);
       },
       onRelayBlocked: (msg: Message) => {
         flog.info('UI', `Relay blocked: ${msg.from}->${msg.to}`);

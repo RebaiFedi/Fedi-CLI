@@ -336,4 +336,94 @@ describe('RelayRouter', () => {
       assert.equal(router.isOpusWaitingForRelays(), false);
     });
   });
+
+  // ── Anti-politeness filter ──
+
+  describe('isPolitenesOnly', () => {
+    it('blocks "Merci!" as politeness only', () => {
+      const { router } = makeRouter();
+      assert.equal(router.isPolitenesOnly('Merci!'), true);
+    });
+
+    it('blocks "Super, nickel!" as politeness only', () => {
+      const { router } = makeRouter();
+      assert.equal(router.isPolitenesOnly('Super, nickel!'), true);
+    });
+
+    it('blocks "Bravo, bonne continuation!" as politeness only', () => {
+      const { router } = makeRouter();
+      assert.equal(router.isPolitenesOnly('Bravo, bonne continuation!'), true);
+    });
+
+    it('lets through a technical message', () => {
+      const { router } = makeRouter();
+      assert.equal(
+        router.isPolitenesOnly('J\'ai change le schema de /api/stock — le champ quantity est maintenant qty (number).'),
+        false,
+      );
+    });
+
+    it('lets through a long message even with polite words', () => {
+      const { router } = makeRouter();
+      assert.equal(
+        router.isPolitenesOnly('Merci Sonnet! Voici les endpoints: GET /api/products retourne Product[], POST /api/products cree un nouveau produit.'),
+        false,
+      );
+    });
+  });
+
+  // ── Turn-based cross-talk ──
+
+  describe('turn-based cross-talk', () => {
+    it('blocks pure politeness in cross-talk routing', () => {
+      const { router, crossTalk, delegates } = makeRouter();
+      delegates.addExpectedDelegate('sonnet');
+      delegates.addExpectedDelegate('codex');
+
+      router.routeRelayMessage('sonnet', 'codex', 'Merci!');
+      // Should not increment cross-talk count because politeness is blocked
+      assert.equal(crossTalk.crossTalkCount, 0);
+    });
+
+    it('routes technical cross-talk normally', () => {
+      const { router, crossTalk, delegates, relays } = makeRouter();
+      delegates.addExpectedDelegate('sonnet');
+      delegates.addExpectedDelegate('codex');
+
+      router.routeRelayMessage('sonnet', 'codex', 'Quels endpoints REST tu exposes pour le module stock?');
+      assert.equal(crossTalk.crossTalkCount, 1);
+      assert.ok(relays.length >= 1);
+    });
+
+    it('treats codex→sonnet as a reply when sonnet is awaiting', () => {
+      const { router, crossTalk, delegates } = makeRouter();
+      delegates.addExpectedDelegate('sonnet');
+      delegates.addExpectedDelegate('codex');
+
+      // Sonnet speaks first — claims the turn
+      router.routeRelayMessage('sonnet', 'codex', 'Quels endpoints pour /api/products?');
+      assert.equal(crossTalk.getCurrentSpeaker(), 'sonnet');
+      assert.equal(crossTalk.crossTalkCount, 1);
+
+      // Codex responds to sonnet — recognized as reply, turn released
+      router.routeRelayMessage('codex', 'sonnet', 'GET /api/products → Product[], POST /api/products → Product');
+      assert.equal(crossTalk.getCurrentSpeaker(), null, 'turn should be released after reply');
+      assert.equal(crossTalk.crossTalkCount, 2, 'reply should increment count');
+    });
+
+    it('queues message when another agent holds the turn with no awaiting reply', () => {
+      const { router, crossTalk, delegates } = makeRouter();
+      delegates.addExpectedDelegate('sonnet');
+      delegates.addExpectedDelegate('codex');
+
+      // Manually set up: sonnet holds the turn but is NOT awaiting reply
+      // (simulates sonnet sending a second message before reply)
+      crossTalk.claimTurn('sonnet');
+
+      // Codex tries to initiate — should be queued since sonnet holds the turn
+      // and is NOT awaiting reply from codex (so it's not treated as a reply)
+      router.routeRelayMessage('codex', 'sonnet', 'J\'ai change le schema products');
+      assert.equal(crossTalk.hasPendingMessage(), true);
+    });
+  });
 });

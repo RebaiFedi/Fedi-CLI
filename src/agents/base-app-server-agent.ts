@@ -69,6 +69,7 @@ export abstract class BaseAppServerAgent implements AgentProcess {
   private pendingFileChangeDiff: string | null = null;
 
   private pendingFileChangePath: string | null = null;
+  private transientErrorCount = 0;
 
   /** Cached item handler deps — built once on start(), invalidated on stop() */
   private _cachedItemDeps: ItemHandlerDeps | null = null;
@@ -246,7 +247,15 @@ export abstract class BaseAppServerAgent implements AgentProcess {
         /stream disconnect/i.test(line) ||
         /connection closed/i.test(line)
       ) {
-        flog.warn('AGENT', `${this.logTag} stderr (transient): ${line.slice(0, 200)}`);
+        this.transientErrorCount++;
+        flog.warn('AGENT', `${this.logTag} stderr (transient #${this.transientErrorCount}): ${line.slice(0, 200)}`);
+        if (this.transientErrorCount >= 3) {
+          this.emit({
+            text: `${this.logTag}: connexion instable (${this.transientErrorCount} erreurs) — retry en cours`,
+            timestamp: Date.now(),
+            type: 'info',
+          });
+        }
         return;
       }
       flog.debug('AGENT', `${this.logTag} stderr: ${line}`);
@@ -297,8 +306,8 @@ export abstract class BaseAppServerAgent implements AgentProcess {
         const result = (await this.rpc.request('thread/start', {
           model: this.model,
           cwd: this.projectDir,
-          approvalPolicy: sandbox ? 'unless-allow-listed' : 'never',
-          sandbox: sandbox ? 'container' : 'danger-full-access',
+          approvalPolicy: sandbox ? 'on-request' : 'never',
+          sandbox: sandbox ? 'workspaceWrite' : 'dangerFullAccess',
         })) as { thread?: { id?: string } };
         if (result?.thread?.id) {
           this.threadId = result.thread.id;
@@ -499,8 +508,8 @@ export abstract class BaseAppServerAgent implements AgentProcess {
       input: [{ type: 'text', text: prompt }],
       model: this.model,
       effort: this.mapEffort(),
-      approvalPolicy: sandboxOn ? 'unless-allow-listed' : 'never',
-      sandboxPolicy: sandboxOn ? { type: 'container' } : { type: 'dangerFullAccess' },
+      approvalPolicy: sandboxOn ? 'on-request' : 'never',
+      sandboxPolicy: sandboxOn ? { type: 'workspaceWrite' } : { type: 'dangerFullAccess' },
     };
 
     if (this.thinking) {
@@ -602,6 +611,7 @@ export abstract class BaseAppServerAgent implements AgentProcess {
       if (typeof turn.id === 'string') turnId = turn.id;
     }
     this.activeTurnId = turnId ?? null;
+    this.transientErrorCount = 0;
     if (this.status !== 'running') this.setStatus('running');
     flog.info('AGENT', `${this.logTag}: Turn started: ${turnId ?? 'unknown'}`);
   }

@@ -114,6 +114,9 @@ export class Orchestrator {
   // ── Shutdown ──
   private stopping = false;
 
+  // ── Opus pre-tag dedup ──
+  private opusPreTagEmitted = false;
+
   // ── @tous mode ──
   private opusAllMode = false;
   private opusAllModeResponded = false;
@@ -215,6 +218,8 @@ export class Orchestrator {
       set stopping(v) { self.stopping = v; },
       get started() { return self.started; },
       set started(v) { self.started = v; },
+      get opusPreTagEmitted() { return self.opusPreTagEmitted; },
+      set opusPreTagEmitted(v) { self.opusPreTagEmitted = v; },
       get config() { return self.config; },
       set config(v) { self.config = v; },
       get opusAllMode() { return self.opusAllMode; },
@@ -425,6 +430,7 @@ export class Orchestrator {
 
   sendUserMessage(text: string): void {
     this.opusAllMode = false;
+    this.opusPreTagEmitted = false;
     this.relay.clearDirectMode();
     if (this.callbacks) this.buffers.flushOpusBuffer(this.callbacks);
 
@@ -590,6 +596,7 @@ export class Orchestrator {
 
     this.opusAllMode = false;
     this.opusAllModeResponded = false;
+    this.opusPreTagEmitted = false;
     this.relay.liveRelayAllowed = false;
     if (this.opusAllModeWorkerTimer) {
       clearTimeout(this.opusAllModeWorkerTimer);

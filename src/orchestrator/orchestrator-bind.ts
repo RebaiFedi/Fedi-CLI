@@ -41,6 +41,7 @@ export interface OrchestratorBindContext {
   // Mutable state
   stopping: boolean;
   started: boolean;
+  opusPreTagEmitted: boolean;
   config: { projectDir: string; claudePath: string; codexPath: string } | null;
   opusAllMode: boolean;
   opusAllModeResponded: boolean;
@@ -125,16 +126,16 @@ function getWorkerContextReminder(
   const hasReported = ctx.delegates.hasPendingReport(agentId as AgentId);
 
   if (hasReported) {
-    return `[RAPPEL] Tu es ${name}, ${role}. Tu as DEJA envoye ton rapport [TO:OPUS]. Ta tache est TERMINEE. NE REPONDS PLUS a aucun message. NE parle PAS a ${peer}. SILENCE TOTAL. Chaque message supplementaire BLOQUE le systeme.`;
+    return `[RAPPEL] Tu es ${name}, ${role}. Tu as DEJA envoye ton rapport [TO:OPUS]. Ta tache est terminee. Ne renvoie plus de messages — le systeme les ignorera.`;
   }
   if (from === 'OPUS') {
-    return `[RAPPEL] Tu es ${name}, ${role}. Dis BRIEVEMENT ce que tu vas faire (1-2 phrases), puis FAIS LE TRAVAIL (Write, Edit, Bash...), puis QUAND TU AS FINI envoie [TO:OPUS] avec le resume. [TO:OPUS] = DERNIERE action, JAMAIS la premiere. Ne parle PAS au user. APRES [TO:OPUS]: SILENCE TOTAL, ne parle plus a ${peer}.`;
+    return `[RAPPEL] Tu es ${name}, ${role}. Dis BRIEVEMENT ce que tu vas faire (1-2 phrases), puis FAIS LE TRAVAIL (Write, Edit, Bash...), puis QUAND TU AS FINI envoie [TO:OPUS] avec le resume. [TO:OPUS] = DERNIERE action, JAMAIS la premiere. Ne parle PAS au user.`;
   }
   if (from === 'USER') {
     return `[RAPPEL] Tu es ${name}, ${role}. Le user te parle directement. Reponds au user. PAS de [TO:OPUS].`;
   }
   if (from === peer.toUpperCase()) {
-    return `[RAPPEL] Tu es ${name}, ${role}. ${peer} te parle — reponds avec des INFOS TECHNIQUES utiles. Quand la coordination est finie, envoie [TO:OPUS] avec ton rapport. APRES [TO:OPUS]: SILENCE TOTAL, plus de messages a ${peer}. PAS de politesses, PAS de "merci", PAS de "bonne continuation".`;
+    return `[RAPPEL] Tu es ${name}, ${role}. ${peer} te parle — reponds avec des INFOS TECHNIQUES utiles. Quand la coordination est finie, envoie [TO:OPUS] avec ton rapport. Apres [TO:OPUS], ne renvoie plus de messages.`;
   }
   return '';
 }
@@ -156,6 +157,16 @@ function bindWorkerRoute(
         `${agentId} received cross-talk reply from ${msg.from} — no longer awaiting`,
       );
       ctx.crossTalk.clearAwaitingReply(agentId);
+      // Release the turn so the other agent (or a queued message) can proceed
+      ctx.crossTalk.releaseTurn();
+      // Deliver any queued cross-talk message that was waiting for the turn
+      const pending = ctx.crossTalk.dequeuePending();
+      if (pending) {
+        flog.info('ORCH', `Delivering queued cross-talk: ${pending.from}->${pending.target}`);
+        setTimeout(() => {
+          ctx.relay.routeRelayMessage(pending.from, pending.target, pending.content);
+        }, 0);
+      }
     }
     queue.add(async () => {
       if (!ctx.started) return;
@@ -320,6 +331,21 @@ function bindWorkerAgent(
 
     // Cross-talk mute clearing
     if (s === 'waiting' || s === 'stopped' || s === 'error') {
+      // Release turn if this agent was the speaker and is no longer awaiting a reply
+      if (
+        ctx.crossTalk.getCurrentSpeaker() === agentId &&
+        !ctx.crossTalk.isAwaitingReply(agentId)
+      ) {
+        ctx.crossTalk.releaseTurn();
+        const pending = ctx.crossTalk.dequeuePending();
+        if (pending) {
+          flog.info('ORCH', `Delivering queued cross-talk (status change): ${pending.from}->${pending.target}`);
+          setTimeout(() => {
+            ctx.relay.routeRelayMessage(pending.from, pending.target, pending.content);
+          }, 0);
+        }
+      }
+
       const muteTime = ctx.crossTalk.getCrossTalkTime(agentId);
       if (muteTime !== undefined) {
         const elapsed = Date.now() - muteTime;
@@ -479,6 +505,8 @@ export function bindOrchestrator(ctx: OrchestratorBindContext, cb: OrchestratorC
         timestamp: line.timestamp,
         type: 'stdout',
       });
+      // Mark that pre-tag text was just emitted — prevents re-buffering
+      ctx.opusPreTagEmitted = true;
       // Pre-tag text already emitted — always return to prevent duplication.
       // If a relay tag was found, detectRelayPatterns already created the draft.
       // If no relay tag, the line was just conversational text (already emitted above).
@@ -487,6 +515,12 @@ export function bindOrchestrator(ctx: OrchestratorBindContext, cb: OrchestratorC
 
     if (ctx.delegates.expectedDelegateCount > 0) {
       if (line.type === 'stdout') {
+        // Skip buffering if this line immediately follows pre-tag emission
+        // (the text was already shown to the user)
+        if (ctx.opusPreTagEmitted) {
+          ctx.opusPreTagEmitted = false;
+          return;
+        }
         const stripped = line.text.replace(/\[TASK:(add|done)\][^\n]*/gi, '').trim();
         if (stripped.length > 0) {
           flog.debug(
