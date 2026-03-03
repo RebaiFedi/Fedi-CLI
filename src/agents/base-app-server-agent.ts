@@ -307,7 +307,7 @@ export abstract class BaseAppServerAgent implements AgentProcess {
           model: this.model,
           cwd: this.projectDir,
           approvalPolicy: sandbox ? 'on-request' : 'never',
-          sandbox: sandbox ? 'workspaceWrite' : 'dangerFullAccess',
+          sandbox: sandbox ? 'workspace-write' : 'danger-full-access',
         })) as { thread?: { id?: string } };
         if (result?.thread?.id) {
           this.threadId = result.thread.id;
@@ -530,7 +530,7 @@ export abstract class BaseAppServerAgent implements AgentProcess {
 
   private getDispatchMap(): Map<string, (params: Record<string, unknown>, msg: Record<string, unknown>) => void> {
     if (this._dispatchMap) return this._dispatchMap;
-    const noop = () => {}; // ignored events
+    const noop = () => { }; // ignored events
     const approvalHandler = (_p: Record<string, unknown>, msg: Record<string, unknown>) => this.handleRequestApproval(msg);
 
     this._dispatchMap = new Map<string, (params: Record<string, unknown>, msg: Record<string, unknown>) => void>([
